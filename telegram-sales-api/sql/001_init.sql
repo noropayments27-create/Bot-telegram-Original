@@ -1,0 +1,220 @@
+-- 001_init.sql
+-- PostgreSQL initial schema for Proyecto Bot Telegram
+
+-- UUID generation (choose one extension; pgcrypto is common)
+CREATE EXTENSION IF NOT EXISTS "pgcrypto";
+
+-- =========================
+-- ENUMS
+-- =========================
+DO $$ BEGIN
+  CREATE TYPE affiliate_status AS ENUM ('PENDING','APPROVED','REJECTED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE order_status AS ENUM ('CREATED','WAITING_PAYMENT','PAID','DELIVERED','CANCELLED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE payment_review_status AS ENUM ('PENDING','APPROVED','REJECTED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE commission_status AS ENUM ('EARNED','PAID_OUT');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ticket_status AS ENUM ('OPEN','CLOSED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE ticket_sender AS ENUM ('USER','ADMIN');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE delivery_type AS ENUM ('FILE','TEXT','IMAGE','VIDEO','LINK','EXPIRING_LINK');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE payout_method AS ENUM ('USDT_BSC','BINANCE_ID');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE payout_status AS ENUM ('REQUESTED','SENT','CANCELLED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE broadcast_segment AS ENUM ('ALL','CLIENTS','AFFILIATES','LEADS','BY_PRODUCT');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE broadcast_destination AS ENUM ('DM','CHANNEL','GROUP');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+DO $$ BEGIN
+  CREATE TYPE broadcast_status AS ENUM ('DRAFT','SENT','FAILED');
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- =========================
+-- TABLES
+-- =========================
+
+-- USERS
+CREATE TABLE IF NOT EXISTS users (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  telegram_id bigint NOT NULL UNIQUE,
+  telegram_username text,
+  referred_by_affiliate_id uuid NULL,
+  referred_at timestamptz NULL,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- AFFILIATES (1:1 with users)
+CREATE TABLE IF NOT EXISTS affiliates (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
+  status affiliate_status NOT NULL DEFAULT 'PENDING',
+  wallet_usdt_bsc text,
+  binance_id text,
+  commission_rate numeric(6,4) NOT NULL DEFAULT 0.2000,
+  approved_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- Add FK now that affiliates exists
+DO $$ BEGIN
+  ALTER TABLE users
+    ADD CONSTRAINT users_referred_by_affiliate_id_fk
+    FOREIGN KEY (referred_by_affiliate_id) REFERENCES affiliates(id) ON DELETE SET NULL;
+EXCEPTION WHEN duplicate_object THEN NULL; END $$;
+
+-- PRODUCTS
+CREATE TABLE IF NOT EXISTS products (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  name text NOT NULL,
+  description text,
+  price numeric(12,2) NOT NULL CHECK (price >= 0),
+  is_active boolean NOT NULL DEFAULT true,
+  delivery_type delivery_type NOT NULL,
+  delivery_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  updated_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- ORDERS
+CREATE TABLE IF NOT EXISTS orders (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  product_id uuid NOT NULL REFERENCES products(id) ON DELETE RESTRICT,
+  affiliate_id uuid NULL REFERENCES affiliates(id) ON DELETE SET NULL,
+  status order_status NOT NULL DEFAULT 'CREATED',
+  unit_price_at_purchase numeric(12,2) NOT NULL CHECK (unit_price_at_purchase >= 0),
+  created_at timestamptz NOT NULL DEFAULT now(),
+  paid_at timestamptz,
+  delivered_at timestamptz
+);
+
+-- ORDER PAYMENTS (Payments A: 1 payment per order)
+CREATE TABLE IF NOT EXISTS order_payments (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+  screenshot_file_id text NOT NULL,
+  submitted_at timestamptz NOT NULL DEFAULT now(),
+  review_status payment_review_status NOT NULL DEFAULT 'PENDING',
+  reviewed_by_admin_at timestamptz
+);
+
+-- COMMISSIONS (Commissions A: 1 commission per order)
+CREATE TABLE IF NOT EXISTS commissions (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL UNIQUE REFERENCES orders(id) ON DELETE CASCADE,
+  affiliate_id uuid NOT NULL REFERENCES affiliates(id) ON DELETE RESTRICT,
+  rate numeric(6,4) NOT NULL CHECK (rate >= 0),
+  amount numeric(12,2) NOT NULL CHECK (amount >= 0),
+  status commission_status NOT NULL DEFAULT 'EARNED',
+  earned_at timestamptz NOT NULL DEFAULT now(),
+  paid_out_at timestamptz
+);
+
+-- PAYOUTS
+CREATE TABLE IF NOT EXISTS payouts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  affiliate_id uuid NOT NULL REFERENCES affiliates(id) ON DELETE RESTRICT,
+  amount numeric(12,2) NOT NULL CHECK (amount >= 0),
+  method payout_method NOT NULL,
+  destination text NOT NULL,
+  status payout_status NOT NULL DEFAULT 'REQUESTED',
+  created_at timestamptz NOT NULL DEFAULT now(),
+  sent_at timestamptz
+);
+
+-- TICKETS
+CREATE TABLE IF NOT EXISTS tickets (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
+  status ticket_status NOT NULL DEFAULT 'OPEN',
+  subject text NOT NULL,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  closed_at timestamptz
+);
+
+-- TICKET MESSAGES
+CREATE TABLE IF NOT EXISTS ticket_messages (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  ticket_id uuid NOT NULL REFERENCES tickets(id) ON DELETE CASCADE,
+  sender ticket_sender NOT NULL,
+  message_text text,
+  telegram_file_id text,
+  created_at timestamptz NOT NULL DEFAULT now(),
+  CHECK (
+    message_text IS NOT NULL OR telegram_file_id IS NOT NULL
+  )
+);
+
+-- BROADCASTS
+CREATE TABLE IF NOT EXISTS broadcasts (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  segment broadcast_segment NOT NULL,
+  product_id uuid NULL REFERENCES products(id) ON DELETE SET NULL,
+  destination broadcast_destination NOT NULL,
+  message_text text NOT NULL,
+  status broadcast_status NOT NULL DEFAULT 'DRAFT',
+  sent_at timestamptz,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- USER BANS
+CREATE TABLE IF NOT EXISTS user_bans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  telegram_id bigint NOT NULL UNIQUE,
+  reason text,
+  banned_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- AUDIT LOGS
+CREATE TABLE IF NOT EXISTS audit_logs (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  admin_action text NOT NULL,
+  entity_type text NOT NULL,
+  entity_id uuid,
+  meta jsonb NOT NULL DEFAULT '{}'::jsonb,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- =========================
+-- INDEXES
+-- =========================
+CREATE INDEX IF NOT EXISTS idx_users_referred_by ON users(referred_by_affiliate_id);
+
+CREATE INDEX IF NOT EXISTS idx_orders_user_created ON orders(user_id, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_status_created ON orders(status, created_at DESC);
+CREATE INDEX IF NOT EXISTS idx_orders_affiliate_created ON orders(affiliate_id, created_at DESC);
+
+CREATE INDEX IF NOT EXISTS idx_commissions_affiliate_status ON commissions(affiliate_id, status);
+
+CREATE INDEX IF NOT EXISTS idx_tickets_user_status ON tickets(user_id, status);
+CREATE INDEX IF NOT EXISTS idx_ticket_messages_ticket_created ON ticket_messages(ticket_id, created_at);
+
+CREATE INDEX IF NOT EXISTS idx_broadcasts_status_created ON broadcasts(status, created_at DESC);
+
+-- Done
