@@ -1,6 +1,6 @@
-from aiogram import Router
+from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import Message
+from aiogram.types import CallbackQuery, Message
 
 from ..config import (
     API_BASE_URL,
@@ -10,7 +10,8 @@ from ..config import (
     BOT_RATE_LIMIT_SECONDS,
 )
 from ..services.api_client import ApiClient
-from .menu import build_main_menu, build_main_keyboard
+from .menu import build_home_text, build_main_keyboard
+from ..utils.main_view import render_main_view, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
@@ -30,7 +31,6 @@ async def handle_start(message: Message) -> None:
     if wait_seconds > 0:
         await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
         return
-    status_line = "API no disponible"
     start_payload = None
 
     if message.text:
@@ -50,16 +50,64 @@ async def handle_start(message: Message) -> None:
         }
         result = await api_client.upsert_telegram_user(payload)
         if result["status_code"] == 403:
-            await message.answer("Acceso restringido.")
+            await render_main_view(message, message.from_user.id, "Acceso restringido.")
             return
-        status_line = "API disponible"
     except Exception:
-        status_line = "API no disponible"
+        pass
 
-    text = (
-        "Bienvenido al bot de ventas.\n"
-        f"{status_line}\n\n"
-        f"{build_main_menu()}"
+    await render_main_view(
+        message,
+        message.from_user.id,
+        build_home_text(),
+        reply_markup=build_main_keyboard(),
     )
 
-    await message.answer(text, reply_markup=build_main_keyboard())
+
+@router.callback_query(F.data == "home:show")
+async def handle_home_show(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        build_home_text(),
+        reply_markup=build_main_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("home:soon:"))
+async def handle_home_soon(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Próximamente",
+        reply_markup=build_main_keyboard(),
+    )
+    await callback.answer()
