@@ -28,74 +28,129 @@ router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 
+_NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
+_SHOP_PAGES = [
+    [
+        "💳 Venta de Tarjetas",
+        "🔗 Links de CCS Shop",
+        "🕵️ Foros de Carding",
+        "📊 Paneles SMM",
+        "📲 Paneles SMS",
+        "🎁 Paneles Gift Card",
+        "🎬 Paneles Streaming",
+        "🎮 Paneles de Juegos",
+        "📧 Emails Temporales",
+    ],
+    [
+        "🌐 Hosting y Dominios",
+        "🧾 Logs y Bases de Datos",
+        "🛡️ VPN Premium",
+        "🧰 Herramientas Digitales",
+        "📥 Descargas Premium",
+        "🤖 Bots Automatizados",
+        "💼 Servicios Freelance",
+        "🧑‍💻 Cursos y Tutoriales",
+        "🔐 Cuentas Verificadas",
+    ],
+]
+
 
 class PaymentStates(StatesGroup):
     waiting_photo = State()
 
 
-def build_shop_keyboard(items: List[Dict[str, Any]], page: int, total_pages: int) -> InlineKeyboardMarkup:
+def build_shop_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
 
-    number_row: List[InlineKeyboardButton] = []
-    for idx, item in enumerate(items, start=1):
-        number_row.append(
-            InlineKeyboardButton(
-                text=str(idx),
-                callback_data=f"shop:select:{page}:{item['id']}",
-            )
+    for row_start in range(0, 9, 3):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_NUMBER_EMOJIS[idx],
+                    callback_data=f"shop:select:{page}:{idx + 1}",
+                )
+                for idx in range(row_start, row_start + 3)
+            ]
         )
-        if len(number_row) == 3:
-            rows.append(number_row)
-            number_row = []
-    if number_row:
-        rows.append(number_row)
 
-    nav: List[InlineKeyboardButton] = []
-    if page > 1:
-        nav.append(
-            InlineKeyboardButton(
-                text="⬅️ Anterior", callback_data=f"shop:page:{page - 1}"
-            )
-        )
-    if page < total_pages:
-        nav.append(
-            InlineKeyboardButton(
-                text="➡️ Siguiente", callback_data=f"shop:page:{page + 1}"
-            )
-        )
-    if nav:
-        rows.append(nav)
+    prev_page = page - 1 if page > 1 else 1
+    next_page = page + 1 if page < total_pages else total_pages
+    rows.append(
+        [
+            InlineKeyboardButton(text="⬅️ <<", callback_data=f"shop:page:{prev_page}"),
+            InlineKeyboardButton(text=">> ➡️", callback_data=f"shop:page:{next_page}"),
+        ]
+    )
+    rows.append(
+        [
+            InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
+            InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+        ]
+    )
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def format_products(items: List[Dict[str, Any]], page: int, total_pages: int) -> str:
+def build_product_detail_keyboard(page: int, index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍️ Comprar", callback_data=f"shop:buy:{page}:{index}"
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📥 Añadir al Carrito",
+                    callback_data=f"shop:cart:{page}:{index}",
+                )
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:page:{page}"),
+                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            ],
+        ]
+    )
+
+
+def build_detail_back_keyboard(page: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:page:{page}"),
+                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            ]
+        ]
+    )
+
+
+def get_shop_page(page: int) -> List[str]:
+    if 1 <= page <= len(_SHOP_PAGES):
+        return _SHOP_PAGES[page - 1]
+    return []
+
+
+def format_products(items: List[str], page: int) -> str:
     if not items:
         return "No hay mas productos disponibles."
 
-    lines = [f"Tienda (pagina {page}/{total_pages})\n"]
+    lines = [f"Productos Disponibles (Página {page})", ""]
     for idx, item in enumerate(items, start=1):
-        lines.append(f"{idx}. {item['name']}")
+        lines.append(f"{_NUMBER_EMOJIS[idx - 1]} {item}")
     return "\n".join(lines)
 
 
-async def send_shop_page(target: Message, page: int) -> None:
-    data = await api_client.list_products(page=page, page_size=8)
-    items = data.get("items", [])
-    total_pages = data.get("total_pages", 1)
+async def render_shop_page(target: Message, user_id: int, page: int) -> None:
+    items = get_shop_page(page)
+    total_pages = len(_SHOP_PAGES)
 
     if not items:
-        await render_main_view(
-            target, target.from_user.id, "No hay mas productos disponibles."
-        )
+        await render_main_view(target, user_id, "No hay mas productos disponibles.")
         return
 
-    text = format_products(items, page, total_pages)
+    text = format_products(items, page)
     await render_main_view(
-        target,
-        target.from_user.id,
-        text,
-        reply_markup=build_shop_keyboard(items, page, total_pages),
+        target, user_id, text, reply_markup=build_shop_keyboard(page, total_pages)
     )
 
 
@@ -113,7 +168,7 @@ async def handle_shop(message: Message) -> None:
     if wait_seconds > 0:
         await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
         return
-    await send_shop_page(message, 1)
+    await render_shop_page(message, message.from_user.id, 1)
 
 
 @router.callback_query(F.data.startswith("shop:page:"))
@@ -133,21 +188,7 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     page = int(callback.data.split(":")[-1])
-    data = await api_client.list_products(page=page, page_size=8)
-    items = data.get("items", [])
-    total_pages = data.get("total_pages", 1)
-
-    if not items:
-        await callback.answer("No hay mas productos disponibles.", show_alert=True)
-        return
-
-    text = format_products(items, page, total_pages)
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        text,
-        reply_markup=build_shop_keyboard(items, page, total_pages),
-    )
+    await render_shop_page(callback.message, callback.from_user.id, page)
     await callback.answer()
 
 
@@ -167,39 +208,81 @@ async def handle_product_select(callback: CallbackQuery) -> None:
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _, _, page_text, product_id = callback.data.split(":", 3)
+    _, _, page_text, index_text = callback.data.split(":", 3)
     page = int(page_text)
-    result = await api_client.list_products(page=page, page_size=8)
-    items = result.get("items", [])
-    product = next((item for item in items if item.get("id") == product_id), None)
-    if not product:
+    index = int(index_text)
+    items = get_shop_page(page)
+    if index < 1 or index > len(items):
         await callback.answer("No se encontro el producto.", show_alert=True)
         return
 
-    description = product.get("description") or "Sin descripcion."
-    price = product.get("price")
-    text = f"{product.get('name')}\n\n{description}\n\nPrecio: ${price}"
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text="Confirmar compra",
-                    callback_data=f"order:create:{product_id}:{page}",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text="⬅️ Back",
-                    callback_data=f"shop:page:{page}",
-                )
-            ],
-        ]
+    product_name = items[index - 1]
+    text = (
+        f"{product_name}\n\n"
+        "Descripción:\n"
+        "Información del producto disponible próximamente.\n\n"
+        "Precio: **$20 USD**"
     )
+    keyboard = build_product_detail_keyboard(page, index)
     await render_main_view(
         callback.message,
         callback.from_user.id,
         text,
         reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop:buy:"))
+async def handle_shop_buy(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, page_text, _ = callback.data.split(":", 3)
+    page = int(page_text)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Compra próximamente",
+        reply_markup=build_detail_back_keyboard(page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("shop:cart:"))
+async def handle_shop_cart(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, page_text, _ = callback.data.split(":", 3)
+    page = int(page_text)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Carrito próximamente",
+        reply_markup=build_detail_back_keyboard(page),
     )
     await callback.answer()
 
