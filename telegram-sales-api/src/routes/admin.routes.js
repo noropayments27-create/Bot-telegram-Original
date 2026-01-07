@@ -1,11 +1,22 @@
 const express = require("express");
 const { getPool } = require("../db");
 const requireAdmin = require("../middlewares/requireAdmin");
-const { getFilePath, downloadFile, sendMessage } = require("../services/telegram");
+const {
+  createLoginRequest,
+  getLoginRequest,
+  setLoginDecision,
+  REQUEST_TTL_SECONDS,
+} = require("../services/adminAuth");
+const {
+  getFilePath,
+  downloadFile,
+  sendDocument,
+  sendMessage,
+  sendPhoto,
+  sendVideo,
+} = require("../services/telegram");
 
 const router = express.Router();
-
-router.use(requireAdmin);
 
 function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
@@ -32,6 +43,234 @@ function mapBroadcastSegment(segment, hasCustomRecipients) {
   }
   return segment;
 }
+
+function normalizePayload(payload) {
+  if (!payload) {
+    return {};
+  }
+  if (typeof payload === "string") {
+    try {
+      return JSON.parse(payload);
+    } catch (error) {
+      return {};
+    }
+  }
+  return payload;
+}
+
+function buildReceiptMessage(order, paymentProof) {
+  const price = order.unit_price_at_purchase || order.product_price;
+  const createdAt = order.paid_at || new Date();
+  const createdAtText = new Date(createdAt).toLocaleString();
+  const lines = [
+    "Recibo de pago",
+    `ID de orden: ${order.id}`,
+    `Producto: ${order.product_name || order.product_id}`,
+    `Precio: $${price}`,
+    `Fecha: ${createdAtText}`,
+    "Estado: PAGADO",
+  ];
+  if (paymentProof && paymentProof.screenshot_file_id) {
+    lines.push(`Referencia: ${paymentProof.screenshot_file_id}`);
+  }
+  return lines.join("\n");
+}
+
+async function sendDeliveryFallback(telegramId, payload) {
+  if (payload.url) {
+    await sendMessage(
+      telegramId,
+      `No pude enviarte el archivo por Telegram, aquí está tu link: ${payload.url}`
+    );
+  } else {
+    await sendMessage(
+      telegramId,
+      "No pude enviarte el archivo por Telegram. Escríbenos por Soporte para entregártelo."
+    );
+  }
+}
+
+async function deliverProductContent(telegramId, deliveryType, deliveryPayload) {
+  const payload = normalizePayload(deliveryPayload);
+  if (!deliveryType) {
+    await sendMessage(
+      telegramId,
+      "No se pudo entregar el contenido. Escríbenos por Soporte."
+    );
+    return;
+  }
+
+  if (deliveryType === "TEXT") {
+    const text =
+      payload.text || payload.message || payload.content || payload.body || "";
+    if (!text) {
+      await sendMessage(
+        telegramId,
+        "No se pudo entregar el contenido. Escríbenos por Soporte."
+      );
+      return;
+    }
+    await sendMessage(telegramId, text);
+    return;
+  }
+
+  if (deliveryType === "LINK") {
+    if (!payload.url) {
+      await sendMessage(
+        telegramId,
+        "No se pudo entregar el contenido. Escríbenos por Soporte."
+      );
+      return;
+    }
+    const note = payload.note ? `${payload.note}\n` : "";
+    await sendMessage(telegramId, `${note}${payload.url}`);
+    return;
+  }
+
+  if (deliveryType === "EXPIRING_LINK") {
+    if (!payload.url) {
+      await sendMessage(
+        telegramId,
+        "No se pudo entregar el contenido. Escríbenos por Soporte."
+      );
+      return;
+    }
+    const note = payload.note ? `${payload.note}\n` : "";
+    const expiresAt = payload.expires_at
+      ? `\nExpira: ${payload.expires_at}`
+      : "";
+    await sendMessage(telegramId, `${note}${payload.url}${expiresAt}`);
+    return;
+  }
+
+  const mediaPayload = {
+    url: payload.url,
+    path: payload.path,
+    file_id: payload.telegram_file_id,
+    filename: payload.filename,
+  };
+
+  try {
+    if (deliveryType === "FILE") {
+      await sendDocument(telegramId, mediaPayload);
+      return;
+    }
+    if (deliveryType === "IMAGE") {
+      await sendPhoto(telegramId, mediaPayload);
+      return;
+    }
+    if (deliveryType === "VIDEO") {
+      await sendVideo(telegramId, mediaPayload);
+      return;
+    }
+  } catch (error) {
+    await sendDeliveryFallback(telegramId, payload);
+    return;
+  }
+
+  await sendMessage(
+    telegramId,
+    "No se pudo entregar el contenido. Escríbenos por Soporte."
+  );
+}
+
+function parseAdminTelegramIds() {
+  const value = process.env.ADMIN_TELEGRAM_IDS || "";
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && /^[0-9]+$/.test(item))
+    .map((item) => Number(item));
+}
+
+router.post("/auth/start", async (req, res) => {
+  const { username, password } = req.body || {};
+  const expectedUsername = process.env.ADMIN_USERNAME;
+  const expectedPassword = process.env.ADMIN_PASSWORD;
+
+  if (!expectedUsername || !expectedPassword) {
+    return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
+  }
+
+  if (username !== expectedUsername || password !== expectedPassword) {
+    return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+  }
+
+  const admins = parseAdminTelegramIds();
+  if (admins.length === 0) {
+    return res.status(500).json({ error: "NO_ADMIN_TELEGRAM_IDS" });
+  }
+
+  const { requestId } = createLoginRequest();
+  const replyMarkup = {
+    inline_keyboard: [
+      [
+        {
+          text: "✅ SÍ",
+          callback_data: `admin_auth:${requestId}:APPROVE`,
+        },
+        {
+          text: "❌ NO",
+          callback_data: `admin_auth:${requestId}:DENY`,
+        },
+      ],
+    ],
+  };
+
+  await Promise.all(
+    admins.map((adminId) =>
+      sendMessage(
+        adminId,
+        "¿Estas intentando Ingresar en el panel del Bot?",
+        { reply_markup: replyMarkup }
+      ).catch((error) => {
+        console.error("Telegram 2FA notification failed", error);
+      })
+    )
+  );
+
+  return res.json({ request_id: requestId, expires_in: REQUEST_TTL_SECONDS });
+});
+
+router.get("/auth/status", (req, res) => {
+  const requestId = String(req.query.request_id || "");
+  if (!requestId) {
+    return res.status(400).json({ error: "REQUEST_ID_REQUIRED" });
+  }
+
+  const entry = getLoginRequest(requestId);
+  if (!entry) {
+    return res.json({ status: "EXPIRED" });
+  }
+
+  if (entry.status === "APPROVED") {
+    return res.json({ status: entry.status, token: entry.token });
+  }
+
+  return res.json({ status: entry.status });
+});
+
+router.post("/auth/decision", (req, res) => {
+  const secret = req.header("x-bot-secret");
+  const expectedSecret = process.env.BOT_TO_API_SECRET;
+  if (!expectedSecret || secret !== expectedSecret) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+
+  const { request_id: requestId, decision } = req.body || {};
+  if (!requestId || !decision) {
+    return res.status(400).json({ error: "INVALID_REQUEST" });
+  }
+
+  const entry = setLoginDecision(String(requestId), String(decision).toUpperCase());
+  if (!entry) {
+    return res.status(404).json({ error: "REQUEST_NOT_FOUND" });
+  }
+
+  return res.json({ status: entry.status });
+});
+
+router.use(requireAdmin);
 
 router.get("/orders", async (req, res, next) => {
   const status = req.query.status;
@@ -187,9 +426,14 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     await client.query("BEGIN");
 
     const orderRes = await client.query(
-      `SELECT o.*, u.telegram_id
+      `SELECT o.*, u.telegram_id,
+              p.name AS product_name,
+              p.price AS product_price,
+              p.delivery_type,
+              p.delivery_payload
        FROM orders o
        JOIN users u ON u.id = o.user_id
+       JOIN products p ON p.id = o.product_id
        WHERE o.id = $1
        FOR UPDATE OF o`,
       [orderId]
@@ -255,14 +499,29 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    // Notify customer that payment was approved
-    const telegramId = orderRes.rows[0].telegram_id;
-    const msg = `✅ Tu pago fue aprobado.\n\nOrden: ${orderId}\nEstado: PAGADA`;
+    const telegramId = order.telegram_id;
+    order.paid_at = updatedOrderRes.rows[0].paid_at;
+
+    const notice =
+      "Aqui tienes tu recibo de pago, en breve momento se te enviara el contenido.";
+    const receipt = buildReceiptMessage(order, paymentRes.rows[0]);
     try {
-      await sendMessage(telegramId, msg);
+      await sendMessage(telegramId, `${notice}\n\n${receipt}`);
     } catch (err) {
-      console.error("Telegram notification failed", err);
+      console.error("Telegram receipt failed", err);
     }
+
+    setTimeout(async () => {
+      try {
+        await deliverProductContent(
+          telegramId,
+          order.delivery_type,
+          order.delivery_payload
+        );
+      } catch (error) {
+        console.error("Telegram delivery failed", error);
+      }
+    }, 10000);
 
     return res.json({ order: updatedOrderRes.rows[0] });
   } catch (error) {

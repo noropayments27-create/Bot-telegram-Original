@@ -7,13 +7,13 @@ from aiogram.types import Message
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
-    BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
-    BOT_RATE_LIMIT_SUPPORT_SECONDS,
+    BOT_RATE_LIMIT_SECONDS,
+    BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
 )
 from ..services.api_client import ApiClient
 from .menu import build_main_keyboard
-from ..utils.rate_limit import check_rate_limit
+from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN)
@@ -25,6 +25,18 @@ class SupportStates(StatesGroup):
 
 @router.message(Command("cancel"))
 async def handle_cancel(message: Message, state: FSMContext) -> None:
+    if message.from_user:
+        wait_seconds = check_global_rate_limit(
+            message.from_user.id,
+            BOT_RATE_LIMIT_SECONDS,
+            BOT_RATE_LIMIT_ENABLED,
+            BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+        )
+        if wait_seconds > 0:
+            await message.answer(
+                f"⏳ Espera {wait_seconds}s antes de intentar de nuevo."
+            )
+            return
     await state.clear()
     await message.answer("Soporte cancelado.", reply_markup=build_main_keyboard())
 
@@ -33,6 +45,15 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
 @router.message(F.text == "🆘 Soporte")
 async def handle_support(message: Message, state: FSMContext) -> None:
     if not message.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        message.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
         return
 
     payload = {
@@ -69,12 +90,11 @@ async def handle_support(message: Message, state: FSMContext) -> None:
 async def handle_support_message(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
-    wait_seconds = check_rate_limit(
+    wait_seconds = check_global_rate_limit(
         message.from_user.id,
-        "support",
-        BOT_RATE_LIMIT_SUPPORT_SECONDS,
+        BOT_RATE_LIMIT_SECONDS,
         BOT_RATE_LIMIT_ENABLED,
-        BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
         await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")

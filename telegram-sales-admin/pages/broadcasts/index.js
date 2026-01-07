@@ -2,7 +2,7 @@ import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
-import { apiFetch, getAdminKey } from "../../lib/api";
+import { apiFetch, getAuthToken } from "../../lib/api";
 
 export default function BroadcastsPage() {
   const router = useRouter();
@@ -12,7 +12,7 @@ export default function BroadcastsPage() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!getAdminKey()) {
+    if (!getAuthToken()) {
       router.replace("/login");
     }
   }, [router]);

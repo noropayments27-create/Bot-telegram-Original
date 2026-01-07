@@ -8,6 +8,7 @@ load_dotenv()
 TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:3001")
 API_TOKEN = os.getenv("API_TOKEN")
+BOT_TO_API_SECRET = os.getenv("BOT_TO_API_SECRET")
 
 
 def _parse_bool(value: str, default: bool = False) -> bool:
@@ -34,13 +35,19 @@ def _parse_id_list(value: str) -> Set[int]:
     return set(items)
 
 
-BOT_RATE_LIMIT_ENABLED = _parse_bool(os.getenv("BOT_RATE_LIMIT_ENABLED"), False)
+BOT_RATE_LIMIT_ENABLED = _parse_bool(os.getenv("BOT_RATE_LIMIT_ENABLED"), True)
+BOT_RATE_LIMIT_SECONDS = _parse_int(os.getenv("BOT_RATE_LIMIT_SECONDS"), 1)
 BOT_RATE_LIMIT_SHOP_SECONDS = _parse_int(os.getenv("BOT_RATE_LIMIT_SHOP_SECONDS"), 1)
 BOT_RATE_LIMIT_PAID_SECONDS = _parse_int(os.getenv("BOT_RATE_LIMIT_PAID_SECONDS"), 10)
 BOT_RATE_LIMIT_SCREENSHOT_SECONDS = _parse_int(
     os.getenv("BOT_RATE_LIMIT_SCREENSHOT_SECONDS"), 15
 )
 BOT_RATE_LIMIT_SUPPORT_SECONDS = _parse_int(os.getenv("BOT_RATE_LIMIT_SUPPORT_SECONDS"), 3)
+ADMIN_TELEGRAM_IDS = _parse_id_list(os.getenv("ADMIN_TELEGRAM_IDS", ""))
 BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS = _parse_id_list(
     os.getenv("BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS", "")
+)
+
+BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS = ADMIN_TELEGRAM_IDS.union(
+    BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS
 )

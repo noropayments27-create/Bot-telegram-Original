@@ -3,6 +3,7 @@ import time
 from typing import Dict, Optional, Set
 
 _RATE_LIMITS: Dict[str, float] = {}
+_GLOBAL_RATE_LIMITS: Dict[int, float] = {}
 
 
 def check_rate_limit(
@@ -26,4 +27,26 @@ def check_rate_limit(
         return max(1, int(math.ceil(expires_at - now)))
 
     _RATE_LIMITS[key] = now + cooldown_seconds
+    return 0
+
+
+def check_global_rate_limit(
+    telegram_id: int,
+    cooldown_seconds: int,
+    enabled: bool,
+    bypass_ids: Optional[Set[int]] = None,
+) -> int:
+    if not enabled or cooldown_seconds <= 0:
+        return 0
+
+    if bypass_ids and telegram_id in bypass_ids:
+        return 0
+
+    now = time.monotonic()
+    expires_at = _GLOBAL_RATE_LIMITS.get(telegram_id)
+
+    if expires_at and expires_at > now:
+        return max(1, int(math.ceil(expires_at - now)))
+
+    _GLOBAL_RATE_LIMITS[telegram_id] = now + cooldown_seconds
     return 0

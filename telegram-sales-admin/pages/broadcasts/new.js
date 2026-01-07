@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
-import { apiFetch, getAdminKey } from "../../lib/api";
+import { apiFetch, getAuthToken } from "../../lib/api";
 
 const SEGMENT_OPTIONS = [
   { value: "ALL_USERS", label: "Todos" },
@@ -24,7 +24,7 @@ export default function NewBroadcastPage() {
   const [loading, setLoading] = useState(false);
 
   useEffect(() => {
-    if (!getAdminKey()) {
+    if (!getAuthToken()) {
       router.replace("/login");
     }
   }, [router]);

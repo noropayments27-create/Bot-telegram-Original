@@ -1,5 +1,6 @@
+import asyncio
 from datetime import datetime
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Set
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -16,16 +17,16 @@ from ..services.api_client import ApiClient
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
-    BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
+    BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
-    BOT_RATE_LIMIT_PAID_SECONDS,
-    BOT_RATE_LIMIT_SCREENSHOT_SECONDS,
-    BOT_RATE_LIMIT_SHOP_SECONDS,
+    BOT_RATE_LIMIT_SECONDS,
 )
-from ..utils.rate_limit import check_rate_limit
+from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN)
+_SCREENSHOTS_RECEIVED: Set[str] = set()
 
 
 class PaymentStates(StatesGroup):
@@ -35,15 +36,19 @@ class PaymentStates(StatesGroup):
 def build_shop_keyboard(items: List[Dict[str, Any]], page: int, total_pages: int) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
 
-    for item in items:
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=f"Comprar {item['name']}",
-                    callback_data=f"shop:buy:{item['id']}",
-                )
-            ]
+    number_row: List[InlineKeyboardButton] = []
+    for idx, item in enumerate(items, start=1):
+        number_row.append(
+            InlineKeyboardButton(
+                text=str(idx),
+                callback_data=f"shop:select:{page}:{item['id']}",
+            )
         )
+        if len(number_row) == 3:
+            rows.append(number_row)
+            number_row = []
+    if number_row:
+        rows.append(number_row)
 
     nav: List[InlineKeyboardButton] = []
     if page > 1:
@@ -70,10 +75,7 @@ def format_products(items: List[Dict[str, Any]], page: int, total_pages: int) ->
 
     lines = [f"Tienda (pagina {page}/{total_pages})\n"]
     for idx, item in enumerate(items, start=1):
-        price = item.get("price")
-        lines.append(f"{idx}. {item['name']} - ${price}")
-        if item.get("description"):
-            lines.append(f"   {item['description']}")
+        lines.append(f"{idx}. {item['name']}")
     return "\n".join(lines)
 
 
@@ -83,11 +85,18 @@ async def send_shop_page(target: Message, page: int) -> None:
     total_pages = data.get("total_pages", 1)
 
     if not items:
-        await target.answer("No hay mas productos disponibles.")
+        await render_main_view(
+            target, target.from_user.id, "No hay mas productos disponibles."
+        )
         return
 
     text = format_products(items, page, total_pages)
-    await target.answer(text, reply_markup=build_shop_keyboard(items, page, total_pages))
+    await render_main_view(
+        target,
+        target.from_user.id,
+        text,
+        reply_markup=build_shop_keyboard(items, page, total_pages),
+    )
 
 
 @router.message(Command("shop"))
@@ -95,12 +104,11 @@ async def send_shop_page(target: Message, page: int) -> None:
 async def handle_shop(message: Message) -> None:
     if not message.from_user:
         return
-    wait_seconds = check_rate_limit(
+    wait_seconds = check_global_rate_limit(
         message.from_user.id,
-        "shop",
-        BOT_RATE_LIMIT_SHOP_SECONDS,
+        BOT_RATE_LIMIT_SECONDS,
         BOT_RATE_LIMIT_ENABLED,
-        BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
         await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
@@ -112,18 +120,18 @@ async def handle_shop(message: Message) -> None:
 async def handle_shop_page(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
-    wait_seconds = check_rate_limit(
+    wait_seconds = check_global_rate_limit(
         callback.from_user.id,
-        "shop",
-        BOT_RATE_LIMIT_SHOP_SECONDS,
+        BOT_RATE_LIMIT_SECONDS,
         BOT_RATE_LIMIT_ENABLED,
-        BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
         await callback.answer(
             f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
         )
         return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
     page = int(callback.data.split(":")[-1])
     data = await api_client.list_products(page=page, page_size=8)
     items = data.get("items", [])
@@ -134,29 +142,64 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
         return
 
     text = format_products(items, page, total_pages)
-    await callback.message.edit_text(
-        text, reply_markup=build_shop_keyboard(items, page, total_pages)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=build_shop_keyboard(items, page, total_pages),
     )
     await callback.answer()
 
 
-@router.callback_query(F.data.startswith("shop:buy:"))
-async def handle_buy(callback: CallbackQuery) -> None:
-    if not callback.message:
+@router.callback_query(F.data.startswith("shop:select:"))
+async def handle_product_select(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
         return
-    product_id = callback.data.split(":")[-1]
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, page_text, product_id = callback.data.split(":", 3)
+    page = int(page_text)
+    result = await api_client.list_products(page=page, page_size=8)
+    items = result.get("items", [])
+    product = next((item for item in items if item.get("id") == product_id), None)
+    if not product:
+        await callback.answer("No se encontro el producto.", show_alert=True)
+        return
+
+    description = product.get("description") or "Sin descripcion."
+    price = product.get("price")
+    text = f"{product.get('name')}\n\n{description}\n\nPrecio: ${price}"
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text="Confirmar compra",
-                    callback_data=f"order:create:{product_id}",
+                    callback_data=f"order:create:{product_id}:{page}",
                 )
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Back",
+                    callback_data=f"shop:page:{page}",
+                )
+            ],
         ]
     )
-    await callback.message.answer(
-        "Confirma la compra del producto seleccionado.", reply_markup=keyboard
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=keyboard,
     )
     await callback.answer()
 
@@ -165,7 +208,21 @@ async def handle_buy(callback: CallbackQuery) -> None:
 async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
-    product_id = callback.data.split(":")[-1]
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    parts = callback.data.split(":")
+    product_id = parts[2] if len(parts) > 2 else parts[-1]
+    page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
 
     order_payload = {
         "telegram_id": callback.from_user.id,
@@ -179,7 +236,11 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     instructions = result.get("payment_instructions", {})
 
     if not order:
-        await callback.message.answer("No se pudo crear la orden.")
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No se pudo crear la orden.",
+        )
         await callback.answer()
         return
 
@@ -200,17 +261,28 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Ya pague", callback_data=f"order:pay:{order['id']}"
+                    text="✅ Ya pagué", callback_data=f"order:pay:{order['id']}"
                 ),
                 InlineKeyboardButton(
                     text="📦 Ver estado",
                     callback_data=f"order:status:{order['id']}",
                 ),
-            ]
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Back",
+                    callback_data=f"shop:page:{page}",
+                )
+            ],
         ]
     )
 
-    await callback.message.answer(text, reply_markup=keyboard)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=keyboard,
+    )
     await callback.answer()
 
 
@@ -218,22 +290,42 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
 async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
-    wait_seconds = check_rate_limit(
+    wait_seconds = check_global_rate_limit(
         callback.from_user.id,
-        "paid",
-        BOT_RATE_LIMIT_PAID_SECONDS,
+        BOT_RATE_LIMIT_SECONDS,
         BOT_RATE_LIMIT_ENABLED,
-        BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
         await callback.answer(
             f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
         )
         return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
     order_id = callback.data.split(":")[-1]
+    if callback.message.reply_markup:
+        rows = []
+        for row in callback.message.reply_markup.inline_keyboard:
+            filtered = [
+                button
+                for button in row
+                if not (button.callback_data or "").startswith("order:pay:")
+            ]
+            if filtered:
+                rows.append(filtered)
+        try:
+            await callback.message.edit_reply_markup(
+                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+            )
+        except Exception:
+            pass
     await state.update_data(order_id=order_id)
     await state.set_state(PaymentStates.waiting_photo)
-    await callback.message.answer("Enviame la captura del pago.")
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Enviame la captura del pago.",
+    )
     await callback.answer()
 
 
@@ -241,12 +333,11 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
-    wait_seconds = check_rate_limit(
+    wait_seconds = check_global_rate_limit(
         message.from_user.id,
-        "screenshot",
-        BOT_RATE_LIMIT_SCREENSHOT_SECONDS,
+        BOT_RATE_LIMIT_SECONDS,
         BOT_RATE_LIMIT_ENABLED,
-        BOT_RATE_LIMIT_ADMIN_BYPASS_TELEGRAM_IDS,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
         await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
@@ -259,6 +350,17 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
 
+    if order_id in _SCREENSHOTS_RECEIVED:
+        notice = await message.answer(
+            "Ya recibimos tu imagen, espera que aprobemos tu pago."
+        )
+        await asyncio.sleep(3)
+        try:
+            await notice.delete()
+        except Exception:
+            pass
+        return
+
     screenshot_file_id = message.photo[-1].file_id
     payload = {
         "telegram_id": message.from_user.id,
@@ -266,28 +368,54 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     }
 
     await api_client.submit_payment_proof(order_id, payload)
+    _SCREENSHOTS_RECEIVED.add(order_id)
     await message.answer("Recibido. Estamos verificando tu pago.")
     await state.clear()
 
 
 @router.callback_query(F.data.startswith("order:status:"))
 async def handle_status_callback(callback: CallbackQuery, state: FSMContext) -> None:
-    if not callback.message:
+    if not callback.message or not callback.from_user:
         return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
     order_id = callback.data.split(":")[-1]
     await state.update_data(last_order_id=order_id)
-    await send_order_status(callback.message, order_id)
+    await send_order_status(callback.message, callback.from_user.id, order_id)
     await callback.answer()
 
 
 @router.message(F.text == "📦 Ver estado")
 async def handle_status_message(message: Message, state: FSMContext) -> None:
+    if not message.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        message.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        return
     data = await state.get_data()
     order_id = data.get("last_order_id")
     if not order_id:
-        await message.answer("No hay ordenes recientes para consultar.")
+        await render_main_view(
+            message, message.from_user.id, "No hay ordenes recientes para consultar."
+        )
         return
-    await send_order_status(message, order_id)
+    await send_order_status(message, message.from_user.id, order_id)
 
 
 def format_receipt(order: Dict[str, Any]) -> str:
@@ -308,22 +436,22 @@ def format_receipt(order: Dict[str, Any]) -> str:
     )
 
 
-async def send_order_status(target: Message, order_id: str) -> None:
+async def send_order_status(target: Message, user_id: int, order_id: str) -> None:
     result = await api_client.get_order(order_id)
     order = result.get("order")
 
     if not order:
-        await target.answer("No se encontro la orden.")
+        await render_main_view(target, user_id, "No se encontro la orden.")
         return
 
     status = order.get("status")
     if status == "PAID":
-        await target.answer(format_receipt(order))
+        await render_main_view(target, user_id, format_receipt(order))
     elif status == "WAITING_PAYMENT":
-        await target.answer("Pago en revision.")
+        await render_main_view(target, user_id, "Pago en revision.")
     elif status == "CREATED":
-        await target.answer("Pendiente de pago.")
+        await render_main_view(target, user_id, "Pendiente de pago.")
     elif status == "CANCELLED":
-        await target.answer("Pago rechazado, contacta soporte.")
+        await render_main_view(target, user_id, "Pago rechazado, contacta soporte.")
     else:
-        await target.answer(f"Estado actual: {status}")
+        await render_main_view(target, user_id, f"Estado actual: {status}")

@@ -1,11 +1,20 @@
-function requireAdmin(req, res, next) {
-  const adminKey = req.header("x-admin-key");
-  const expectedKey = process.env.ADMIN_API_KEY;
+const { verifyAdminToken } = require("../services/adminAuth");
 
-  if (!expectedKey || adminKey !== expectedKey) {
+function requireAdmin(req, res, next) {
+  if (req.method === "OPTIONS") {
+    return next();
+  }
+  const authHeader = req.header("Authorization") || "";
+  const token = authHeader.startsWith("Bearer ")
+    ? authHeader.slice("Bearer ".length).trim()
+    : null;
+
+  const payload = verifyAdminToken(token);
+  if (!payload) {
     return res.status(401).json({ error: "UNAUTHORIZED" });
   }
 
+  req.admin = payload;
   return next();
 }
 

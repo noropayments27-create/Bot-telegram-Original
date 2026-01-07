@@ -1,3 +1,6 @@
+const fs = require("fs/promises");
+const path = require("path");
+
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 
 function getToken() {
@@ -40,7 +43,7 @@ async function downloadFile(filePath) {
   return { buffer: Buffer.from(arrayBuffer), contentType };
 }
 
-async function sendMessage(telegramId, text) {
+async function sendMessage(telegramId, text, options = {}) {
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/bot${token}/sendMessage`;
 
@@ -49,7 +52,7 @@ async function sendMessage(telegramId, text) {
     headers: {
       "Content-Type": "application/json",
     },
-    body: JSON.stringify({ chat_id: telegramId, text }),
+    body: JSON.stringify({ chat_id: telegramId, text, ...options }),
   });
 
   if (!response.ok) {
@@ -64,4 +67,88 @@ async function sendMessage(telegramId, text) {
   return data.result;
 }
 
-module.exports = { getFilePath, downloadFile, sendMessage };
+async function sendMultipart(
+  telegramId,
+  endpoint,
+  fieldName,
+  filePath,
+  filename
+) {
+  const token = getToken();
+  const url = `${TELEGRAM_API_BASE}/bot${token}/${endpoint}`;
+  const buffer = await fs.readFile(filePath);
+  const form = new FormData();
+  form.append("chat_id", String(telegramId));
+  form.append(fieldName, new Blob([buffer]), filename);
+
+  const response = await fetch(url, {
+    method: "POST",
+    body: form,
+  });
+
+  if (!response.ok) {
+    throw new Error("TELEGRAM_SEND_FAILED");
+  }
+
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error("TELEGRAM_SEND_FAILED");
+  }
+
+  return data.result;
+}
+
+async function sendMedia(telegramId, endpoint, fieldName, payload) {
+  const token = getToken();
+  const url = `${TELEGRAM_API_BASE}/bot${token}/${endpoint}`;
+
+  if (payload.file_id || payload.url) {
+    const body = {
+      chat_id: telegramId,
+      [fieldName]: payload.file_id || payload.url,
+    };
+    const response = await fetch(url, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify(body),
+    });
+
+    if (!response.ok) {
+      throw new Error("TELEGRAM_SEND_FAILED");
+    }
+    const data = await response.json();
+    if (!data.ok) {
+      throw new Error("TELEGRAM_SEND_FAILED");
+    }
+    return data.result;
+  }
+
+  if (payload.path) {
+    const filename =
+      payload.filename || path.basename(payload.path) || "archivo";
+    return sendMultipart(telegramId, endpoint, fieldName, payload.path, filename);
+  }
+
+  throw new Error("TELEGRAM_MEDIA_NOT_FOUND");
+}
+
+async function sendDocument(telegramId, payload) {
+  return sendMedia(telegramId, "sendDocument", "document", payload);
+}
+
+async function sendPhoto(telegramId, payload) {
+  return sendMedia(telegramId, "sendPhoto", "photo", payload);
+}
+
+async function sendVideo(telegramId, payload) {
+  return sendMedia(telegramId, "sendVideo", "video", payload);
+}
+
+module.exports = {
+  getFilePath,
+  downloadFile,
+  sendMessage,
+  sendDocument,
+  sendPhoto,
+  sendVideo,
+};

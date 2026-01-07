@@ -1,7 +1,7 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
-import { apiFetch, apiFetchBinary, getAdminKey } from "../../lib/api";
+import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 
 export default function OrderDetail() {
   const router = useRouter();
@@ -13,7 +13,7 @@ export default function OrderDetail() {
   const [error, setError] = useState("");
 
   useEffect(() => {
-    if (!getAdminKey()) {
+    if (!getAuthToken()) {
       router.replace("/login");
     }
   }, [router]);

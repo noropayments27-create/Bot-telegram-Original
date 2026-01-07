@@ -4,34 +4,34 @@ export function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;
 }
 
-export function getAdminKey() {
+export function getAuthToken() {
   if (typeof window === "undefined") {
     return null;
   }
-  return window.localStorage.getItem("ADMIN_KEY");
+  return window.localStorage.getItem("ADMIN_TOKEN");
 }
 
-export function setAdminKey(value) {
+export function setAuthToken(value) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem("ADMIN_KEY", value);
+  window.localStorage.setItem("ADMIN_TOKEN", value);
 }
 
-export function clearAdminKey() {
+export function clearAuthToken() {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.removeItem("ADMIN_KEY");
+  window.localStorage.removeItem("ADMIN_TOKEN");
 }
 
 export async function apiFetch(path, options = {}) {
   const baseUrl = getApiBaseUrl();
   const headers = { ...(options.headers || {}) };
-  const adminKey = getAdminKey();
+  const token = getAuthToken();
 
-  if (adminKey) {
-    headers["x-admin-key"] = adminKey;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   if (options.body && !(options.body instanceof FormData)) {
@@ -44,7 +44,7 @@ export async function apiFetch(path, options = {}) {
   });
 
   if (response.status === 401) {
-    clearAdminKey();
+    clearAuthToken();
     if (typeof window !== "undefined") {
       window.location.href = "/login";
     }
@@ -62,10 +62,10 @@ export async function apiFetch(path, options = {}) {
 export async function apiFetchBinary(path, options = {}) {
   const baseUrl = getApiBaseUrl();
   const headers = { ...(options.headers || {}) };
-  const adminKey = getAdminKey();
+  const token = getAuthToken();
 
-  if (adminKey) {
-    headers["x-admin-key"] = adminKey;
+  if (token) {
+    headers["Authorization"] = `Bearer ${token}`;
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
@@ -74,7 +74,7 @@ export async function apiFetchBinary(path, options = {}) {
   });
 
   if (response.status === 401) {
-    clearAdminKey();
+    clearAuthToken();
     if (typeof window !== "undefined") {
       window.location.href = "/login";
     }

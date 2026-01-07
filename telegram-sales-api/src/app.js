@@ -20,7 +20,7 @@ app.use(helmet());
 
 // ✅ CORS (MVP Admin Panel)
 // - Permite llamadas desde http://localhost:3000
-// - Permite header x-admin-key (para endpoints /admin/*)
+// - Permite header Authorization (para endpoints /admin/*)
 // - Expone Content-Disposition (para descarga de screenshot)
 const corsOptions = {
   origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
