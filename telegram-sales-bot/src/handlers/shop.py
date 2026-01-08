@@ -67,6 +67,185 @@ _SHOP_PAGES = [
         "🔐 Cuentas Verificadas",
     ],
 ]
+_CATEGORY_CATALOGS: Dict[str, Dict[str, Any]] = {
+    "metodos": {
+        "title": "✅ Métodos",
+        "items": [
+            {
+                "item_key": "metodos_01",
+                "name": "✅ Método Flux",
+                "description": "Guía rápida para validar flujos diarios.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_02",
+                "name": "✅ Método Atlas",
+                "description": "Estrategia de control con pasos simples.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_03",
+                "name": "✅ Método Prisma",
+                "description": "Checklist práctico para optimizar procesos.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_04",
+                "name": "✅ Método Vector",
+                "description": "Plan de acción en 5 movimientos.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_05",
+                "name": "✅ Método Delta",
+                "description": "Ejecución directa con métricas claras.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_06",
+                "name": "✅ Método Pulse",
+                "description": "Rutina para mantener resultados constantes.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_07",
+                "name": "✅ Método Nova",
+                "description": "Sistema express para nuevos usuarios.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_08",
+                "name": "✅ Método Sigma",
+                "description": "Secuencia avanzada para escalar rápido.",
+                "price_usd": 20.0,
+            },
+            {
+                "item_key": "metodos_09",
+                "name": "✅ Método Orion",
+                "description": "Guía completa con ajustes recomendados.",
+                "price_usd": 20.0,
+            },
+        ],
+    },
+    "vip": {
+        "title": "💬 Grupos VIP",
+        "items": [
+            {
+                "item_key": "vip_01",
+                "name": "💬 VIP Aurora",
+                "description": "Acceso VIP con alertas diarias.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_02",
+                "name": "💬 VIP Nexus",
+                "description": "Soporte premium y contenido semanal.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_03",
+                "name": "💬 VIP Zenith",
+                "description": "Grupo exclusivo con señales filtradas.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_04",
+                "name": "💬 VIP Pulse",
+                "description": "Comunidad activa con actualizaciones.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_05",
+                "name": "💬 VIP Prime",
+                "description": "Recursos VIP con prioridad alta.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_06",
+                "name": "💬 VIP Terra",
+                "description": "Acceso a contenido y soporte extendido.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_07",
+                "name": "💬 VIP Sigma",
+                "description": "Grupo con resúmenes y plantillas.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_08",
+                "name": "💬 VIP Stellar",
+                "description": "Entradas VIP con seguimiento personalizado.",
+                "price_usd": 25.0,
+            },
+            {
+                "item_key": "vip_09",
+                "name": "💬 VIP Omega",
+                "description": "Acceso total a recursos VIP.",
+                "price_usd": 25.0,
+            },
+        ],
+    },
+    "programas": {
+        "title": "💻 Programas y Web",
+        "items": [
+            {
+                "item_key": "web_01",
+                "name": "💻 Pack Landing Pro",
+                "description": "Plantillas web listas para usar.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_02",
+                "name": "💻 Script Auto",
+                "description": "Automatiza tareas básicas en minutos.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_03",
+                "name": "💻 Toolkit SEO",
+                "description": "Recursos para mejorar posicionamiento.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_04",
+                "name": "💻 Panel Web Lite",
+                "description": "Panel simple con configuracion rapida.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_05",
+                "name": "💻 Web Starter",
+                "description": "Base web para iniciar proyectos.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_06",
+                "name": "💻 Bot Web",
+                "description": "Integracion basica con bots.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_07",
+                "name": "💻 Pack UI",
+                "description": "Componentes visuales reutilizables.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_08",
+                "name": "💻 Web Plus",
+                "description": "Extras para acelerar el despliegue.",
+                "price_usd": 30.0,
+            },
+            {
+                "item_key": "web_09",
+                "name": "💻 Web Master",
+                "description": "Paquete completo para sitios profesionales.",
+                "price_usd": 30.0,
+            },
+        ],
+    },
+}
 
 
 class PaymentStates(StatesGroup):
@@ -244,6 +423,52 @@ def build_product_detail_keyboard(page: int, index: int) -> InlineKeyboardMarkup
     )
 
 
+def build_category_keyboard(category_key: str) -> InlineKeyboardMarkup:
+    rows: List[List[InlineKeyboardButton]] = []
+    for row_start in range(0, 9, 3):
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_NUMBER_EMOJIS[idx],
+                    callback_data=f"category:select:{category_key}:{idx + 1}",
+                )
+                for idx in range(row_start, row_start + 3)
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
+            InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def build_category_detail_keyboard(category_key: str, index: int) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="🛍️ Comprar",
+                    callback_data=f"category:buy:{category_key}:{index}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="📥 Añadir al Carrito",
+                    callback_data=f"category:cart:{category_key}:{index}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="⬅️ Back", callback_data=f"category:page:{category_key}"
+                ),
+                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            ],
+        ]
+    )
+
+
 def build_detail_back_keyboard(page: int) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -261,6 +486,16 @@ def get_shop_page(page: int) -> List[str]:
     return []
 
 
+def get_category_items(category_key: str) -> List[Dict[str, Any]]:
+    catalog = _CATEGORY_CATALOGS.get(category_key, {})
+    items = catalog.get("items", [])
+    return items if isinstance(items, list) else []
+
+
+def get_category_title(category_key: str) -> str:
+    return _CATEGORY_CATALOGS.get(category_key, {}).get("title", "Categoría")
+
+
 def format_products(items: List[str], page: int) -> str:
     if not items:
         return "No hay mas productos disponibles."
@@ -268,6 +503,17 @@ def format_products(items: List[str], page: int) -> str:
     lines = [f"Productos Disponibles (Página {page})", ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{_NUMBER_EMOJIS[idx - 1]} {item}")
+    return "\n".join(lines)
+
+
+def format_category_products(category_key: str) -> str:
+    items = get_category_items(category_key)
+    if not items:
+        return "No hay mas productos disponibles."
+    title = get_category_title(category_key)
+    lines = [f"{title} (Página 1)", ""]
+    for idx, item in enumerate(items, start=1):
+        lines.append(f"{_NUMBER_EMOJIS[idx - 1]} {item['name']}")
     return "\n".join(lines)
 
 
@@ -299,6 +545,13 @@ async def resolve_product_id(page: int, index: int) -> Optional[str]:
     global_index = (page - 1) * 9 + (index - 1)
     if 0 <= global_index < len(product_ids):
         return product_ids[global_index]
+    return product_ids[0]
+
+
+async def get_default_product_id() -> Optional[str]:
+    product_ids = await get_active_product_ids()
+    if not product_ids:
+        return None
     return product_ids[0]
 
 
@@ -374,6 +627,22 @@ async def render_shop_page(target: Message, user_id: int, page: int) -> None:
     )
 
 
+async def render_category_page(
+    target: Message, user_id: int, category_key: str
+) -> None:
+    items = get_category_items(category_key)
+    if not items:
+        await render_main_view(target, user_id, "No hay mas productos disponibles.")
+        return
+    text = format_category_products(category_key)
+    await render_main_view(
+        target,
+        user_id,
+        text,
+        reply_markup=build_category_keyboard(category_key),
+    )
+
+
 @router.message(Command("shop"))
 @router.message(F.text == "🛒 Tienda")
 async def handle_shop(message: Message) -> None:
@@ -412,6 +681,27 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("category:page:"))
+async def handle_category_page(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    category_key = callback.data.split(":")[-1]
+    await render_category_page(callback.message, callback.from_user.id, category_key)
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("shop:select:"))
 async def handle_product_select(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -444,6 +734,45 @@ async def handle_product_select(callback: CallbackQuery) -> None:
         "Precio: **$20 USD**"
     )
     keyboard = build_product_detail_keyboard(page, index)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=keyboard,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("category:select:"))
+async def handle_category_select(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, category_key, index_text = callback.data.split(":", 3)
+    index = int(index_text)
+    items = get_category_items(category_key)
+    if index < 1 or index > len(items):
+        await callback.answer("No se encontro el producto.", show_alert=True)
+        return
+    item = items[index - 1]
+    text = (
+        f"{item['name']}\n\n"
+        "Descripción:\n"
+        f"{item['description']}\n\n"
+        f"Precio: **${int(item['price_usd'])} USD**"
+    )
+    keyboard = build_category_detail_keyboard(category_key, index)
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -517,6 +846,73 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data.startswith("category:buy:"))
+async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, category_key, index_text = callback.data.split(":", 3)
+    index = int(index_text)
+    items = get_category_items(category_key)
+    if index < 1 or index > len(items):
+        await callback.answer("No se encontro el producto.", show_alert=True)
+        return
+    product_id = await get_default_product_id()
+    if not product_id:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No hay productos disponibles.",
+            reply_markup=build_category_detail_keyboard(category_key, index),
+        )
+        await callback.answer()
+        return
+
+    order_payload = {
+        "telegram_id": callback.from_user.id,
+        "product_id": product_id,
+        "qty": 1,
+        "username": callback.from_user.username,
+    }
+
+    result = await api_client.create_order(order_payload)
+    order = result.get("order")
+    if not order:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No se pudo crear la orden.",
+            reply_markup=build_category_detail_keyboard(category_key, index),
+        )
+        await callback.answer()
+        return
+
+    await state.update_data(
+        last_order_id=order["id"],
+        current_order_id=order["id"],
+        current_order_total=order.get("total"),
+        current_order_summary=None,
+    )
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Elije tu método de pago:",
+        reply_markup=build_payment_methods_keyboard(order["id"], 1, 1),
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data.startswith("shop:cart:"))
 async def handle_shop_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -553,6 +949,43 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
             "product_id": product_id,
             "name": product_name,
             "price_usd": _DEFAULT_PRODUCT_PRICE_USD,
+            "qty": 1,
+        }
+    await callback.answer("Añadido al carrito.")
+
+
+@router.callback_query(F.data.startswith("category:cart:"))
+async def handle_category_cart(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, category_key, index_text = callback.data.split(":", 3)
+    index = int(index_text)
+    items = get_category_items(category_key)
+    if index < 1 or index > len(items):
+        await callback.answer("No se encontro el producto.", show_alert=True)
+        return
+    item = items[index - 1]
+    cart_items = _get_cart(callback.from_user.id)
+    entry = cart_items.get(item["item_key"])
+    if entry:
+        entry["qty"] += 1
+    else:
+        cart_items[item["item_key"]] = {
+            "product_id": None,
+            "name": item["name"],
+            "price_usd": item["price_usd"],
             "qty": 1,
         }
     await callback.answer("Añadido al carrito.")

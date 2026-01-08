@@ -10,7 +10,9 @@ from ..config import (
     BOT_RATE_LIMIT_SECONDS,
 )
 from ..services.api_client import ApiClient
-from .menu import build_home_text, build_main_keyboard
+from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
+
+from .menu import build_home_text, build_main_keyboard, build_community_text
 from ..utils.main_view import render_main_view, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
 
@@ -111,5 +113,39 @@ async def handle_home_soon(callback: CallbackQuery) -> None:
         callback.from_user.id,
         "Próximamente",
         reply_markup=build_main_keyboard(),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "home:community")
+async def handle_home_community(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
+                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            ]
+        ]
+    )
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        build_community_text(),
+        reply_markup=keyboard,
+        parse_mode="HTML",
     )
     await callback.answer()
