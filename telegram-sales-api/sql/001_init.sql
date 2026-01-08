@@ -92,7 +92,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 CREATE TABLE IF NOT EXISTS products (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   sku_key text,
-  code text UNIQUE NOT NULL,
+  code text,
   name text NOT NULL,
   description text,
   price numeric(12,2) NOT NULL CHECK (price >= 0),
@@ -106,6 +106,10 @@ CREATE TABLE IF NOT EXISTS products (
 CREATE UNIQUE INDEX IF NOT EXISTS products_sku_key_unique
   ON products(sku_key)
   WHERE sku_key IS NOT NULL;
+
+CREATE UNIQUE INDEX IF NOT EXISTS products_code_unique
+  ON products(code)
+  WHERE code IS NOT NULL;
 
 CREATE SEQUENCE IF NOT EXISTS products_code_seq;
 SELECT setval('products_code_seq', 0, true);

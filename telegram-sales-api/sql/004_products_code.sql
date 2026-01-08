@@ -4,20 +4,14 @@
 ALTER TABLE products
   ADD COLUMN IF NOT EXISTS code text;
 
-WITH max_code AS (
-  SELECT COALESCE(MAX(code::int), 0) AS max_code
+WITH ranked AS (
+  SELECT id, row_number() OVER (ORDER BY created_at ASC, id ASC) AS rn
   FROM products
-  WHERE code ~ '^[0-9]+$'
-),
-ranked AS (
-  SELECT id, row_number() OVER (ORDER BY created_at, id) AS rn
-  FROM products
-  WHERE code IS NULL
 )
 UPDATE products p
-SET code = lpad((ranked.rn + max_code.max_code)::text, 5, '0')
-FROM ranked, max_code
-WHERE p.id = ranked.id;
+SET code = lpad(ranked.rn::text, 5, '0')
+FROM ranked
+WHERE p.id = ranked.id AND p.code IS NULL;
 
 DO $$ BEGIN
   CREATE SEQUENCE IF NOT EXISTS products_code_seq;
@@ -33,12 +27,10 @@ SELECT setval(
 );
 
 DO $$ BEGIN
-  ALTER TABLE products
-    ADD CONSTRAINT products_code_unique UNIQUE (code);
+  CREATE UNIQUE INDEX IF NOT EXISTS products_code_unique
+    ON products(code)
+    WHERE code IS NOT NULL;
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
-
-ALTER TABLE products
-  ALTER COLUMN code SET NOT NULL;
 
 CREATE OR REPLACE FUNCTION set_products_code()
 RETURNS trigger AS $$

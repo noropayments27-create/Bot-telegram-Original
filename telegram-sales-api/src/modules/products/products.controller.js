@@ -35,7 +35,7 @@ async function listProducts(req, res, next) {
     const total = countRes.rows[0].total;
 
     const itemsRes = await pool.query(
-      `SELECT id, name, description, price, is_active, delivery_type, delivery_payload,
+      `SELECT id, code, name, description, price, is_active, delivery_type, delivery_payload,
               created_at, updated_at
        FROM products
        ${whereClause}

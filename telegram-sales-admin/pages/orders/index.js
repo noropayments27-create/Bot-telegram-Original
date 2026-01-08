@@ -88,7 +88,11 @@ export default function OrdersPage() {
               <tr key={order.id}>
                 <td>{order.id}</td>
                 <td>{order.telegram_id}</td>
-                <td>{order.product_name || order.product_id}</td>
+                <td>
+                  {order.product_code
+                    ? `${order.product_code} - ${order.product_name || order.product_id}`
+                    : order.product_name || order.product_id}
+                </td>
                 <td>{order.status}</td>
                 <td>{new Date(order.created_at).toLocaleString()}</td>
                 <td>

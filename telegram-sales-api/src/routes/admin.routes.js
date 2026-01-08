@@ -297,7 +297,7 @@ router.get("/orders", async (req, res, next) => {
     const listRes = await pool.query(
       `SELECT o.id, o.status, o.created_at,
               u.telegram_id,
-              p.id AS product_id, p.name AS product_name,
+              p.id AS product_id, p.code AS product_code, p.name AS product_name,
               (op.id IS NOT NULL) AS has_payment_proof
        FROM orders o
        JOIN users u ON u.id = o.user_id
@@ -328,7 +328,8 @@ router.get("/orders/:id", async (req, res, next) => {
   try {
     const orderRes = await pool.query(
       `SELECT o.*, u.telegram_id, u.telegram_username,
-              p.id AS product_id, p.name AS product_name, p.price AS product_price
+              p.id AS product_id, p.code AS product_code,
+              p.name AS product_name, p.price AS product_price
        FROM orders o
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
@@ -366,6 +367,7 @@ router.get("/orders/:id", async (req, res, next) => {
       },
       product: {
         id: order.product_id,
+        code: order.product_code,
         name: order.product_name,
         price: order.product_price,
       },

@@ -334,11 +334,19 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
     name = str(product.get("name") or "")
     return {
         "id": product.get("id"),
+        "code": product.get("code"),
         "name": name,
         "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "Producto de prueba",
         "price": float(product.get("price") or _DEFAULT_PRODUCT_PRICE_USD),
     }
+
+
+def _format_code_line(product: Dict[str, Any]) -> str:
+    code = str(product.get("code") or "").strip()
+    if not code:
+        return ""
+    return f"Código: {code}\n\n"
 
 
 async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
@@ -552,6 +560,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     await state.update_data(selected_product_id=product["id"])
     text = (
         f"{product['display_name']}\n\n"
+        f"{_format_code_line(product)}"
         "Descripción:\n"
         f"{product['description']}\n\n"
         f"Precio: **${int(product['price'])} USD**"
@@ -592,6 +601,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
     await state.update_data(selected_product_id=item["id"])
     text = (
         f"{item['display_name']}\n\n"
+        f"{_format_code_line(item)}"
         "Descripción:\n"
         f"{item['description']}\n\n"
         f"Precio: **${int(item['price'])} USD**"
@@ -785,6 +795,7 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         add_result = "No se pudo añadir al carrito."
     text = (
         f"{product['display_name']}\n\n"
+        f"{_format_code_line(product)}"
         "Descripción:\n"
         f"{product['description']}\n\n"
         f"Precio: **${int(product['price'])} USD**\n\n"
@@ -840,6 +851,7 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         add_result = "No se pudo añadir al carrito."
     text = (
         f"{item['display_name']}\n\n"
+        f"{_format_code_line(item)}"
         "Descripción:\n"
         f"{item['description']}\n\n"
         f"Precio: **${int(item['price'])} USD**\n\n"

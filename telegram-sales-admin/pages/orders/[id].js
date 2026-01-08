@@ -134,6 +134,7 @@ export default function OrderDetail() {
 
         <h3>Producto</h3>
         <p>ID: {product.id}</p>
+        <p>Código: {product.code || "N/A"}</p>
         <p>Nombre: {product.name}</p>
         <p>Precio: {product.price}</p>
 
