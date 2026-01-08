@@ -39,7 +39,6 @@ router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _PRODUCT_ID_CACHE: List[str] = []
-_CART_BY_USER: Dict[int, Dict[str, Dict[str, Any]]] = {}
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 
 _NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
@@ -252,28 +251,21 @@ class PaymentStates(StatesGroup):
     waiting_photo = State()
 
 
-def _get_cart(user_id: int) -> Dict[str, Dict[str, Any]]:
-    return _CART_BY_USER.setdefault(user_id, {})
-
-
 def _format_usd(amount: float) -> str:
     return f"{amount:.2f}"
 
 
-def _build_cart_text(cart_items: Dict[str, Dict[str, Any]]) -> str:
+def _build_cart_text(cart_items: List[Dict[str, Any]], total_usd: float) -> str:
     if not cart_items:
         return "Carrito de Compras\n\nCarrito vacío."
 
     lines = ["Carrito de Compras", "Tienes Añadido:"]
-    total = 0.0
-    for idx, item in enumerate(cart_items.values(), start=1):
+    for idx, item in enumerate(cart_items, start=1):
         name = html.escape(item["name"])
         qty = int(item["qty"])
-        price = float(item["price_usd"])
-        total += qty * price
         lines.append(f"{idx}. {name} x{qty}")
     lines.append("")
-    lines.append(f"Precio Total: <b>${_format_usd(total)} USD</b>")
+    lines.append(f"Precio Total: <b>${_format_usd(total_usd)} USD</b>")
     return "\n".join(lines)
 
 
@@ -292,26 +284,16 @@ def _build_cart_keyboard() -> InlineKeyboardMarkup:
     )
 
 
-def _build_cart_summary(cart_items: Dict[str, Dict[str, Any]]) -> str:
+def _build_cart_summary(cart_items: List[Dict[str, Any]], total_usd: float) -> str:
     if not cart_items:
         return ""
     lines = ["Resumen del carrito:"]
-    total = 0.0
-    for idx, item in enumerate(cart_items.values(), start=1):
+    for idx, item in enumerate(cart_items, start=1):
         name = html.escape(item["name"])
         qty = int(item["qty"])
-        price = float(item["price_usd"])
-        total += qty * price
         lines.append(f"{idx}. {name} x{qty}")
-    lines.append(f"Total: ${_format_usd(total)} USD")
+    lines.append(f"Total: ${_format_usd(total_usd)} USD")
     return "\n".join(lines)
-
-
-def _get_cart_total(cart_items: Dict[str, Dict[str, Any]]) -> float:
-    total = 0.0
-    for item in cart_items.values():
-        total += float(item["price_usd"]) * int(item["qty"])
-    return total
 
 
 def _build_payment_instructions(
@@ -931,7 +913,6 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, page_text, _ = callback.data.split(":", 3)
     page = int(page_text)
-    cart_items = _get_cart(callback.from_user.id)
     items = get_shop_page(page)
     index_text = callback.data.split(":")[-1]
     index = int(index_text)
@@ -939,19 +920,32 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         await callback.answer("No se encontro el producto.", show_alert=True)
         return
     product_name = items[index - 1]
-    product_id = await resolve_product_id(page, index)
-    product_key = product_id or f"{page}:{index}"
-    entry = cart_items.get(product_key)
-    if entry:
-        entry["qty"] += 1
-    else:
-        cart_items[product_key] = {
-            "product_id": product_id,
+    product_key = f"shop_{page}_{index}"
+    await api_client.add_to_cart(
+        {
+            "telegram_id": callback.from_user.id,
+            "item_key": product_key,
             "name": product_name,
-            "price_usd": _DEFAULT_PRODUCT_PRICE_USD,
+            "unit_price_usd": _DEFAULT_PRODUCT_PRICE_USD,
             "qty": 1,
+            "username": callback.from_user.username,
         }
-    await callback.answer("Añadido al carrito.")
+    )
+    text = (
+        f"{product_name}\n\n"
+        "Descripción:\n"
+        "Información del producto disponible próximamente.\n\n"
+        "Precio: **$20 USD**\n\n"
+        "Añadido al carrito ✅"
+    )
+    keyboard = build_product_detail_keyboard(page, index)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=keyboard,
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data.startswith("category:cart:"))
@@ -977,18 +971,31 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         await callback.answer("No se encontro el producto.", show_alert=True)
         return
     item = items[index - 1]
-    cart_items = _get_cart(callback.from_user.id)
-    entry = cart_items.get(item["item_key"])
-    if entry:
-        entry["qty"] += 1
-    else:
-        cart_items[item["item_key"]] = {
-            "product_id": None,
+    await api_client.add_to_cart(
+        {
+            "telegram_id": callback.from_user.id,
+            "item_key": item["item_key"],
             "name": item["name"],
-            "price_usd": item["price_usd"],
+            "unit_price_usd": item["price_usd"],
             "qty": 1,
+            "username": callback.from_user.username,
         }
-    await callback.answer("Añadido al carrito.")
+    )
+    text = (
+        f"{item['name']}\n\n"
+        "Descripción:\n"
+        f"{item['description']}\n\n"
+        f"Precio: **${int(item['price_usd'])} USD**\n\n"
+        "Añadido al carrito ✅"
+    )
+    keyboard = build_category_detail_keyboard(category_key, index)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=keyboard,
+    )
+    await callback.answer()
 
 
 @router.callback_query(F.data == "home:cart")
@@ -1007,11 +1014,13 @@ async def handle_home_cart(callback: CallbackQuery) -> None:
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    cart_items = _get_cart(callback.from_user.id)
+    cart_data = await api_client.get_cart(callback.from_user.id)
+    cart_items = cart_data.get("items", [])
+    total_usd = float(cart_data.get("total_usd", 0))
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        _build_cart_text(cart_items),
+        _build_cart_text(cart_items, total_usd),
         reply_markup=_build_cart_keyboard(),
         parse_mode=ParseMode.HTML,
     )
@@ -1034,11 +1043,11 @@ async def handle_cart_clear(callback: CallbackQuery) -> None:
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _CART_BY_USER[callback.from_user.id] = {}
+    await api_client.clear_cart({"telegram_id": callback.from_user.id})
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        _build_cart_text({}),
+        _build_cart_text([], 0.0),
         reply_markup=_build_cart_keyboard(),
         parse_mode=ParseMode.HTML,
     )
@@ -1061,7 +1070,9 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    cart_items = _get_cart(callback.from_user.id)
+    cart_data = await api_client.get_cart(callback.from_user.id)
+    cart_items = cart_data.get("items", [])
+    cart_total = float(cart_data.get("total_usd", 0))
     if not cart_items:
         await render_main_view(
             callback.message,
@@ -1070,10 +1081,23 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         )
         await callback.answer()
         return
+    cart_summary = _build_cart_summary(cart_items, cart_total)
+    try:
+        result = await api_client.checkout_cart(
+            {"telegram_id": callback.from_user.id, "username": callback.from_user.username}
+        )
+    except httpx.HTTPStatusError:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "Tu carrito está vacío.",
+        )
+        await callback.answer()
+        return
 
-    first_item = next(iter(cart_items.values()))
-    product_id = first_item.get("product_id")
-    if not product_id:
+    order_id = result.get("order_id")
+    cart_total = float(result.get("total_usd", cart_total))
+    if not order_id:
         await render_main_view(
             callback.message,
             callback.from_user.id,
@@ -1081,29 +1105,9 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         )
         await callback.answer()
         return
-
-    order_payload = {
-        "telegram_id": callback.from_user.id,
-        "product_id": product_id,
-        "qty": 1,
-        "username": callback.from_user.username,
-    }
-    result = await api_client.create_order(order_payload)
-    order = result.get("order")
-    if not order:
-        await render_main_view(
-            callback.message,
-            callback.from_user.id,
-            "No se pudo crear la orden.",
-        )
-        await callback.answer()
-        return
-
-    cart_summary = _build_cart_summary(cart_items)
-    cart_total = _get_cart_total(cart_items)
     await state.update_data(
-        last_order_id=order["id"],
-        current_order_id=order["id"],
+        last_order_id=order_id,
+        current_order_id=order_id,
         current_order_total=cart_total,
         current_order_summary=cart_summary,
     )
@@ -1111,7 +1115,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         callback.message,
         callback.from_user.id,
         "Elije tu método de pago:",
-        reply_markup=build_payment_methods_keyboard(order["id"], 1, 1),
+        reply_markup=build_payment_methods_keyboard(order_id, 1, 1),
     )
     await callback.answer()
 

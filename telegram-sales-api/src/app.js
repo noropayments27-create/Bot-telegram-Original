@@ -8,6 +8,7 @@ const healthRoutes = require('./routes/health.routes');
 const usersRoutes = require('./modules/users/users.routes');
 const productsRoutes = require('./modules/products/products.routes');
 const ordersRoutes = require('./modules/orders/orders.routes');
+const cartRoutes = require('./modules/cart/cart.routes');
 const adminRoutes = require('./routes/admin.routes');
 const ticketsRoutes = require('./routes/tickets.routes');
 const errorMiddleware = require('./middlewares/error.middleware');
@@ -45,6 +46,7 @@ app.use('/health', dbRoutes);
 app.use('/users', usersRoutes);
 app.use('/products', productsRoutes);
 app.use('/orders', ordersRoutes);
+app.use('/bot/cart', cartRoutes);
 app.use('/admin', adminRateLimit, adminRoutes);
 app.use('/tickets', ticketsRoutes);
 

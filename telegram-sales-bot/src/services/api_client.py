@@ -69,6 +69,42 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_cart(self, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/cart"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url, params={"telegram_id": telegram_id}, headers=self._headers(), timeout=5
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def add_to_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/cart/add"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=5
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def clear_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/cart/clear"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=5
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def checkout_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/cart/checkout"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=5
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def open_or_create_ticket(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/tickets/open-or-create"
         async with httpx.AsyncClient() as client:
