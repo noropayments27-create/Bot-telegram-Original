@@ -50,17 +50,19 @@ async def handle_start(message: Message) -> None:
         }
         result = await api_client.upsert_telegram_user(payload)
         if result["status_code"] == 403:
-            await render_main_view(message, message.from_user.id, "Acceso restringido.")
+            sent = await message.answer("Acceso restringido.")
+            if sent:
+                set_main_message_id(message.from_user.id, sent.message_id)
             return
     except Exception:
         pass
 
-    await render_main_view(
-        message,
-        message.from_user.id,
+    sent = await message.answer(
         build_home_text(),
         reply_markup=build_main_keyboard(),
     )
+    if sent:
+        set_main_message_id(message.from_user.id, sent.message_id)
 
 
 @router.callback_query(F.data == "home:show")
