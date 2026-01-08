@@ -91,6 +91,7 @@ EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 -- PRODUCTS
 CREATE TABLE IF NOT EXISTS products (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  code text UNIQUE NOT NULL,
   name text NOT NULL,
   description text,
   price numeric(12,2) NOT NULL CHECK (price >= 0),
@@ -100,6 +101,25 @@ CREATE TABLE IF NOT EXISTS products (
   created_at timestamptz NOT NULL DEFAULT now(),
   updated_at timestamptz NOT NULL DEFAULT now()
 );
+
+CREATE SEQUENCE IF NOT EXISTS products_code_seq;
+SELECT setval('products_code_seq', 0, true);
+
+CREATE OR REPLACE FUNCTION set_products_code()
+RETURNS trigger AS $$
+BEGIN
+  IF NEW.code IS NULL OR NEW.code = '' THEN
+    NEW.code := lpad(nextval('products_code_seq')::text, 5, '0');
+  END IF;
+  RETURN NEW;
+END;
+$$ LANGUAGE plpgsql;
+
+DROP TRIGGER IF EXISTS trg_products_code ON products;
+CREATE TRIGGER trg_products_code
+BEFORE INSERT ON products
+FOR EACH ROW
+EXECUTE FUNCTION set_products_code();
 
 -- ORDERS
 CREATE TABLE IF NOT EXISTS orders (
