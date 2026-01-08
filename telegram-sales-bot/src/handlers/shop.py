@@ -156,18 +156,17 @@ def _build_payment_instructions(
     return "\n".join(instructions)
 
 
-def build_shop_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
+def build_shop_keyboard(page: int, total_pages: int, count: int) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
 
-    for row_start in range(0, 9, 3):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=_NUMBER_EMOJIS[idx],
-                    callback_data=f"shop:select:{page}:{idx + 1}",
-                )
-                for idx in range(row_start, row_start + 3)
-            ]
+    for idx in range(1, count + 1):
+        if (idx - 1) % 3 == 0:
+            rows.append([])
+        rows[-1].append(
+            InlineKeyboardButton(
+                text=str(idx),
+                callback_data=f"shop:select:{page}:{idx}",
+            )
         )
 
     nav_row: List[InlineKeyboardButton] = []
@@ -216,17 +215,16 @@ def build_product_detail_keyboard(page: int, index: int) -> InlineKeyboardMarkup
     )
 
 
-def build_category_keyboard(category_key: str) -> InlineKeyboardMarkup:
+def build_category_keyboard(category_key: str, count: int) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
-    for row_start in range(0, 9, 3):
-        rows.append(
-            [
-                InlineKeyboardButton(
-                    text=_NUMBER_EMOJIS[idx],
-                    callback_data=f"category:select:{category_key}:{idx + 1}",
-                )
-                for idx in range(row_start, row_start + 3)
-            ]
+    for idx in range(1, count + 1):
+        if (idx - 1) % 3 == 0:
+            rows.append([])
+        rows[-1].append(
+            InlineKeyboardButton(
+                text=str(idx),
+                callback_data=f"category:select:{category_key}:{idx}",
+            )
         )
     rows.append(
         [
@@ -452,7 +450,10 @@ async def render_shop_page(target: Message, user_id: int, page: int) -> None:
 
     text = format_products(items, page)
     await render_main_view(
-        target, user_id, text, reply_markup=build_shop_keyboard(page, total_pages)
+        target,
+        user_id,
+        text,
+        reply_markup=build_shop_keyboard(page, total_pages, len(items)),
     )
 
 
@@ -468,7 +469,7 @@ async def render_category_page(
         target,
         user_id,
         text,
-        reply_markup=build_category_keyboard(category_key),
+        reply_markup=build_category_keyboard(category_key, len(items)),
     )
 
 
