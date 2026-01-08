@@ -1,9 +1,11 @@
 import asyncio
+import html
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
 import httpx
 from aiogram import F, Router
+from aiogram.enums import ParseMode
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -29,6 +31,8 @@ router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _PRODUCT_ID_CACHE: List[str] = []
+_CART_BY_USER: Dict[int, Dict[str, Dict[str, Any]]] = {}
+_DEFAULT_PRODUCT_PRICE_USD = 20.0
 
 _NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 _SHOP_PAGES = [
@@ -59,6 +63,46 @@ _SHOP_PAGES = [
 
 class PaymentStates(StatesGroup):
     waiting_photo = State()
+
+
+def _get_cart(user_id: int) -> Dict[str, Dict[str, Any]]:
+    return _CART_BY_USER.setdefault(user_id, {})
+
+
+def _format_usd(amount: float) -> str:
+    return f"{amount:.2f}"
+
+
+def _build_cart_text(cart_items: Dict[str, Dict[str, Any]]) -> str:
+    if not cart_items:
+        return "Carrito de Compras\n\nCarrito vacío."
+
+    lines = ["Carrito de Compras", "Tienes Añadido:"]
+    total = 0.0
+    for idx, item in enumerate(cart_items.values(), start=1):
+        name = html.escape(item["name"])
+        qty = int(item["qty"])
+        price = float(item["price_usd"])
+        total += qty * price
+        lines.append(f"{idx}. {name} x{qty}")
+    lines.append("")
+    lines.append(f"Precio Total: <b>${_format_usd(total)} USD</b>")
+    return "\n".join(lines)
+
+
+def _build_cart_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(text="🛍️ Comprar Todo", callback_data="cart:checkout"),
+                InlineKeyboardButton(text="🗑️ Borrar Todo", callback_data="cart:clear"),
+            ],
+            [
+                InlineKeyboardButton(text="⬅️ Back", callback_data="shop:page:1"),
+                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            ],
+        ]
+    )
 
 
 def build_shop_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
@@ -407,11 +451,143 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, page_text, _ = callback.data.split(":", 3)
     page = int(page_text)
+    cart_items = _get_cart(callback.from_user.id)
+    items = get_shop_page(page)
+    index_text = callback.data.split(":")[-1]
+    index = int(index_text)
+    if index < 1 or index > len(items):
+        await callback.answer("No se encontro el producto.", show_alert=True)
+        return
+    product_name = items[index - 1]
+    product_id = await resolve_product_id(page, index)
+    product_key = product_id or f"{page}:{index}"
+    entry = cart_items.get(product_key)
+    if entry:
+        entry["qty"] += 1
+    else:
+        cart_items[product_key] = {
+            "product_id": product_id,
+            "name": product_name,
+            "price_usd": _DEFAULT_PRODUCT_PRICE_USD,
+            "qty": 1,
+        }
+    await callback.answer("Añadido al carrito.")
+
+
+@router.callback_query(F.data == "home:cart")
+async def handle_home_cart(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    cart_items = _get_cart(callback.from_user.id)
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Carrito próximamente",
-        reply_markup=build_detail_back_keyboard(page),
+        _build_cart_text(cart_items),
+        reply_markup=_build_cart_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cart:clear")
+async def handle_cart_clear(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _CART_BY_USER[callback.from_user.id] = {}
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        _build_cart_text({}),
+        reply_markup=_build_cart_keyboard(),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "cart:checkout")
+async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    cart_items = _get_cart(callback.from_user.id)
+    if not cart_items:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "Tu carrito está vacío.",
+        )
+        await callback.answer()
+        return
+
+    first_item = next(iter(cart_items.values()))
+    product_id = first_item.get("product_id")
+    if not product_id:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No se pudo crear la orden.",
+        )
+        await callback.answer()
+        return
+
+    order_payload = {
+        "telegram_id": callback.from_user.id,
+        "product_id": product_id,
+        "qty": 1,
+        "username": callback.from_user.username,
+    }
+    result = await api_client.create_order(order_payload)
+    order = result.get("order")
+    if not order:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No se pudo crear la orden.",
+        )
+        await callback.answer()
+        return
+
+    await state.update_data(last_order_id=order["id"], current_order_id=order["id"])
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Elije tu método de pago:",
+        reply_markup=build_payment_methods_keyboard(order["id"], 1, 1),
     )
     await callback.answer()
 
@@ -461,6 +637,8 @@ async def handle_order_method(callback: CallbackQuery) -> None:
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, order_id, page_text, index_text, method_key = callback.data.split(":", 5)
+    page = int(page_text)
+    index = int(index_text)
     method_names = {
         "nequi": "Nequi",
         "binance": "Binance ID",
@@ -469,8 +647,6 @@ async def handle_order_method(callback: CallbackQuery) -> None:
         "paypal": "Paypal +25%",
     }
     method_label = method_names.get(method_key, "Método")
-    page = int(page_text)
-    index = int(index_text)
     text = (
         f"{method_label}\n\n"
         "Instrucciones próximamente.\n\n"

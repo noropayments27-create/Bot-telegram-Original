@@ -28,7 +28,7 @@ def build_main_keyboard() -> InlineKeyboardMarkup:
                 InlineKeyboardButton(text="💻 Programas y Web", callback_data="home:soon:programas"),
             ],
             [
-                InlineKeyboardButton(text="🛒 Carrito", callback_data="home:soon:carrito"),
+                InlineKeyboardButton(text="🛒 Carrito", callback_data="home:cart"),
                 InlineKeyboardButton(text="📢 Afiliados", callback_data="home:soon:afiliados"),
             ],
             [
