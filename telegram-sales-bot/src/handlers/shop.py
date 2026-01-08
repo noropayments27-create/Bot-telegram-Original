@@ -2,6 +2,7 @@ import asyncio
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
+import httpx
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -378,7 +379,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
-    await state.update_data(last_order_id=order["id"])
+    await state.update_data(last_order_id=order["id"], current_order_id=order["id"])
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -524,7 +525,7 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         await callback.answer()
         return
 
-    await state.update_data(last_order_id=order["id"])
+    await state.update_data(last_order_id=order["id"], current_order_id=order["id"])
 
     text = (
         "Orden creada.\n"
@@ -602,7 +603,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
             )
         except Exception:
             pass
-    await state.update_data(order_id=order_id)
+    await state.update_data(order_id=order_id, current_order_id=order_id)
     await state.set_state(PaymentStates.waiting_photo)
     await render_main_view(
         callback.message,
@@ -613,7 +614,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     await callback.answer()
 
 
-@router.message(PaymentStates.waiting_photo, F.photo)
+@router.message(F.photo)
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
@@ -628,21 +629,10 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
-    order_id = data.get("order_id")
+    order_id = data.get("order_id") or data.get("current_order_id")
     if not order_id:
-        await message.answer("No tengo una orden pendiente.")
-        await state.clear()
-        return
-
-    if order_id in _SCREENSHOTS_RECEIVED:
-        notice = await message.answer(
-            "Ya recibimos tu imagen, espera que aprobemos tu pago."
-        )
-        await asyncio.sleep(3)
-        try:
-            await notice.delete()
-        except Exception:
-            pass
+        await message.answer("No tengo una orden activa. Presiona Comprar nuevamente.")
+        await state.set_state(None)
         return
 
     screenshot_file_id = message.photo[-1].file_id
@@ -651,10 +641,30 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         "screenshot_file_id": screenshot_file_id,
     }
 
-    await api_client.submit_payment_proof(order_id, payload)
+    try:
+        await api_client.submit_payment_proof(order_id, payload)
+    except httpx.HTTPStatusError as exc:
+        error_payload: Optional[Dict[str, Any]] = None
+        try:
+            error_payload = exc.response.json()
+        except Exception:
+            error_payload = None
+        error_code = error_payload.get("error") if isinstance(error_payload, dict) else None
+        if error_code == "SCREENSHOT_ALREADY_SUBMITTED":
+            notice = await message.answer(
+                "Ya recibimos tu imagen, espera que aprobemos tu pago."
+            )
+            await asyncio.sleep(3)
+            try:
+                await notice.delete()
+            except Exception:
+                pass
+            return
+        raise
     _SCREENSHOTS_RECEIVED.add(order_id)
     await message.answer("Recibido. Estamos verificando tu pago.")
-    await state.clear()
+    await state.update_data(order_id=None)
+    await state.set_state(None)
 
 
 @router.callback_query(F.data.startswith("order:status:"))
