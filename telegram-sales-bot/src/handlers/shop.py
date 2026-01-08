@@ -1,6 +1,6 @@
 import asyncio
 from datetime import datetime
-from typing import Any, Dict, List, Set
+from typing import Any, Dict, List, Optional, Set
 
 from aiogram import F, Router
 from aiogram.filters import Command
@@ -27,6 +27,7 @@ from ..utils.rate_limit import check_global_rate_limit
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
+_PRODUCT_ID_CACHE: List[str] = []
 
 _NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 _SHOP_PAGES = [
@@ -146,6 +147,95 @@ def format_products(items: List[str], page: int) -> str:
     return "\n".join(lines)
 
 
+async def get_active_product_ids() -> List[str]:
+    if _PRODUCT_ID_CACHE:
+        return _PRODUCT_ID_CACHE
+
+    product_ids: List[str] = []
+    page = 1
+    total_pages = 1
+    while page <= total_pages:
+        data = await api_client.list_products(page=page, page_size=50)
+        total_pages = data.get("total_pages", total_pages)
+        items = data.get("items", [])
+        for item in items:
+            product_id = item.get("id")
+            if product_id:
+                product_ids.append(product_id)
+        page += 1
+
+    _PRODUCT_ID_CACHE.extend(product_ids)
+    return _PRODUCT_ID_CACHE
+
+
+async def resolve_product_id(page: int, index: int) -> Optional[str]:
+    product_ids = await get_active_product_ids()
+    if not product_ids:
+        return None
+    global_index = (page - 1) * 9 + (index - 1)
+    if 0 <= global_index < len(product_ids):
+        return product_ids[global_index]
+    return product_ids[0]
+
+
+def build_payment_methods_keyboard(
+    order_id: str, page: int, index: int
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="Nequi",
+                    callback_data=f"order:method:{order_id}:{page}:{index}:nequi",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Binance ID",
+                    callback_data=f"order:method:{order_id}:{page}:{index}:binance",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Cripto Monedas",
+                    callback_data=f"order:method:{order_id}:{page}:{index}:crypto",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Mercado Pago",
+                    callback_data=f"order:method:{order_id}:{page}:{index}:mp",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text="Paypal +25%",
+                    callback_data=f"order:method:{order_id}:{page}:{index}:paypal",
+                )
+            ],
+        ]
+    )
+
+
+def build_payment_prompt_keyboard(
+    order_id: str, page: int, index: int
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="✅ Ya pagué", callback_data=f"order:pay:{order_id}"
+                ),
+                InlineKeyboardButton(
+                    text="⬅️ Back",
+                    callback_data=f"order:methods:{order_id}:{page}:{index}",
+                ),
+            ],
+            [InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show")],
+        ]
+    )
+
+
 async def render_shop_page(target: Message, user_id: int, page: int) -> None:
     items = get_shop_page(page)
     total_pages = len(_SHOP_PAGES)
@@ -240,7 +330,7 @@ async def handle_product_select(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("shop:buy:"))
-async def handle_shop_buy(callback: CallbackQuery) -> None:
+async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
     wait_seconds = check_global_rate_limit(
@@ -255,13 +345,45 @@ async def handle_shop_buy(callback: CallbackQuery) -> None:
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _, _, page_text, _ = callback.data.split(":", 3)
+    _, _, page_text, index_text = callback.data.split(":", 3)
     page = int(page_text)
+    index = int(index_text)
+    product_id = await resolve_product_id(page, index)
+    if not product_id:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No hay productos disponibles.",
+            reply_markup=build_detail_back_keyboard(page),
+        )
+        await callback.answer()
+        return
+
+    order_payload = {
+        "telegram_id": callback.from_user.id,
+        "product_id": product_id,
+        "qty": 1,
+        "username": callback.from_user.username,
+    }
+
+    result = await api_client.create_order(order_payload)
+    order = result.get("order")
+    if not order:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            "No se pudo crear la orden.",
+            reply_markup=build_detail_back_keyboard(page),
+        )
+        await callback.answer()
+        return
+
+    await state.update_data(last_order_id=order["id"])
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Compra próximamente",
-        reply_markup=build_detail_back_keyboard(page),
+        "Elije tu método de pago:",
+        reply_markup=build_payment_methods_keyboard(order["id"], page, index),
     )
     await callback.answer()
 
@@ -289,6 +411,75 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         callback.from_user.id,
         "Carrito próximamente",
         reply_markup=build_detail_back_keyboard(page),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("order:methods:"))
+async def handle_order_methods(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, order_id, page_text, index_text = callback.data.split(":", 4)
+    page = int(page_text)
+    index = int(index_text)
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        "Elije tu método de pago:",
+        reply_markup=build_payment_methods_keyboard(order_id, page, index),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data.startswith("order:method:"))
+async def handle_order_method(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    _, _, order_id, page_text, index_text, method_key = callback.data.split(":", 5)
+    method_names = {
+        "nequi": "Nequi",
+        "binance": "Binance ID",
+        "crypto": "Cripto Monedas",
+        "mp": "Mercado Pago",
+        "paypal": "Paypal +25%",
+    }
+    method_label = method_names.get(method_key, "Método")
+    page = int(page_text)
+    index = int(index_text)
+    text = (
+        f"{method_label}\n\n"
+        "Instrucciones próximamente.\n\n"
+        "Enviame la captura del pago."
+    )
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=build_payment_prompt_keyboard(order_id, page, index),
     )
     await callback.answer()
 
@@ -392,6 +583,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     order_id = callback.data.split(":")[-1]
+    filtered_markup = None
     if callback.message.reply_markup:
         rows = []
         for row in callback.message.reply_markup.inline_keyboard:
@@ -402,9 +594,11 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
             ]
             if filtered:
                 rows.append(filtered)
+        if rows:
+            filtered_markup = InlineKeyboardMarkup(inline_keyboard=rows)
         try:
             await callback.message.edit_reply_markup(
-                reply_markup=InlineKeyboardMarkup(inline_keyboard=rows)
+                reply_markup=filtered_markup
             )
         except Exception:
             pass
@@ -414,6 +608,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         callback.message,
         callback.from_user.id,
         "Enviame la captura del pago.",
+        reply_markup=filtered_markup,
     )
     await callback.answer()
 
