@@ -23,6 +23,14 @@ from ..config import (
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
+    BINANCE_ID,
+    CRYPTO_WALLET_BTC,
+    CRYPTO_WALLET_LTC,
+    CRYPTO_WALLET_USDT,
+    MERCADOPAGO_ACCOUNT,
+    NEQUI_NAME,
+    NEQUI_NUMBER,
+    PAYPAL_ACCOUNT,
 )
 from ..utils.main_view import render_main_view, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
@@ -103,6 +111,77 @@ def _build_cart_keyboard() -> InlineKeyboardMarkup:
             ],
         ]
     )
+
+
+def _build_cart_summary(cart_items: Dict[str, Dict[str, Any]]) -> str:
+    if not cart_items:
+        return ""
+    lines = ["Resumen del carrito:"]
+    total = 0.0
+    for idx, item in enumerate(cart_items.values(), start=1):
+        name = html.escape(item["name"])
+        qty = int(item["qty"])
+        price = float(item["price_usd"])
+        total += qty * price
+        lines.append(f"{idx}. {name} x{qty}")
+    lines.append(f"Total: ${_format_usd(total)} USD")
+    return "\n".join(lines)
+
+
+def _get_cart_total(cart_items: Dict[str, Dict[str, Any]]) -> float:
+    total = 0.0
+    for item in cart_items.values():
+        total += float(item["price_usd"]) * int(item["qty"])
+    return total
+
+
+def _build_payment_instructions(
+    method_key: str,
+    base_total: Optional[float],
+    summary: Optional[str],
+) -> str:
+    total = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
+    total_text = _format_usd(total)
+    instructions: List[str] = []
+
+    if method_key == "nequi":
+        instructions.append("Nequi")
+        if NEQUI_NAME:
+            instructions.append(f"Nombre: {html.escape(NEQUI_NAME)}")
+        if NEQUI_NUMBER:
+            instructions.append(f"Número: {html.escape(NEQUI_NUMBER)}")
+    elif method_key == "binance":
+        instructions.append("Binance ID")
+        if BINANCE_ID:
+            instructions.append(f"ID: {html.escape(BINANCE_ID)}")
+    elif method_key == "crypto":
+        instructions.append("Cripto Monedas")
+        if CRYPTO_WALLET_USDT:
+            instructions.append(f"USDT: {html.escape(CRYPTO_WALLET_USDT)}")
+        if CRYPTO_WALLET_BTC:
+            instructions.append(f"BTC: {html.escape(CRYPTO_WALLET_BTC)}")
+        if CRYPTO_WALLET_LTC:
+            instructions.append(f"LTC: {html.escape(CRYPTO_WALLET_LTC)}")
+    elif method_key == "mp":
+        instructions.append("Mercado Pago")
+        if MERCADOPAGO_ACCOUNT:
+            instructions.append(f"Cuenta: {html.escape(MERCADOPAGO_ACCOUNT)}")
+    elif method_key == "paypal":
+        instructions.append("Paypal +25%")
+        total = total * 1.25
+        total_text = _format_usd(total)
+        if PAYPAL_ACCOUNT:
+            instructions.append(f"Cuenta: {html.escape(PAYPAL_ACCOUNT)}")
+    else:
+        instructions.append("Método de pago")
+
+    instructions.append("")
+    if summary:
+        instructions.append(summary)
+        instructions.append("")
+    instructions.append(f"Total: <b>${total_text} USD</b>")
+    instructions.append("<b><i>Luego que hagas el pago, toma una captura</i></b>")
+    return "\n".join(instructions)
 
 
 def build_shop_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
@@ -423,7 +502,12 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         await callback.answer()
         return
 
-    await state.update_data(last_order_id=order["id"], current_order_id=order["id"])
+    await state.update_data(
+        last_order_id=order["id"],
+        current_order_id=order["id"],
+        current_order_total=order.get("total"),
+        current_order_summary=None,
+    )
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -582,7 +666,14 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         await callback.answer()
         return
 
-    await state.update_data(last_order_id=order["id"], current_order_id=order["id"])
+    cart_summary = _build_cart_summary(cart_items)
+    cart_total = _get_cart_total(cart_items)
+    await state.update_data(
+        last_order_id=order["id"],
+        current_order_id=order["id"],
+        current_order_total=cart_total,
+        current_order_summary=cart_summary,
+    )
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -621,7 +712,7 @@ async def handle_order_methods(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("order:method:"))
-async def handle_order_method(callback: CallbackQuery) -> None:
+async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
     wait_seconds = check_global_rate_limit(
@@ -639,24 +730,16 @@ async def handle_order_method(callback: CallbackQuery) -> None:
     _, _, order_id, page_text, index_text, method_key = callback.data.split(":", 5)
     page = int(page_text)
     index = int(index_text)
-    method_names = {
-        "nequi": "Nequi",
-        "binance": "Binance ID",
-        "crypto": "Cripto Monedas",
-        "mp": "Mercado Pago",
-        "paypal": "Paypal +25%",
-    }
-    method_label = method_names.get(method_key, "Método")
-    text = (
-        f"{method_label}\n\n"
-        "Instrucciones próximamente.\n\n"
-        "Enviame la captura del pago."
-    )
+    data = await state.get_data()
+    total = data.get("current_order_total")
+    summary = data.get("current_order_summary")
+    text = _build_payment_instructions(method_key, total, summary)
     await render_main_view(
         callback.message,
         callback.from_user.id,
         text,
         reply_markup=build_payment_prompt_keyboard(order_id, page, index),
+        parse_mode=ParseMode.HTML,
     )
     await callback.answer()
 
@@ -701,7 +784,12 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         await callback.answer()
         return
 
-    await state.update_data(last_order_id=order["id"], current_order_id=order["id"])
+    await state.update_data(
+        last_order_id=order["id"],
+        current_order_id=order["id"],
+        current_order_total=order.get("total"),
+        current_order_summary=None,
+    )
 
     text = (
         "Orden creada.\n"
