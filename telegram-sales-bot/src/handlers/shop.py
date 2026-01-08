@@ -42,10 +42,10 @@ _DEFAULT_PRODUCT_PRICE_USD = 20.0
 
 _NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 _PAGE_SIZE = 9
-_PREFIX_SHOP = "SHOP - "
-_PREFIX_METODOS = "METODOS - "
-_PREFIX_VIP = "VIP - "
-_PREFIX_WEB = "WEB - "
+_PREFIX_SHOP = "SHOP "
+_PREFIX_METODOS = "METODOS "
+_PREFIX_VIP = "VIP "
+_PREFIX_WEB = "WEB "
 _CATEGORY_PREFIXES = {
     "metodos": _PREFIX_METODOS,
     "vip": _PREFIX_VIP,
@@ -72,7 +72,7 @@ def _build_cart_text(cart_items: List[Dict[str, Any]], total_usd: float) -> str:
 
     lines = ["Carrito de Compras", "Tienes Añadido:"]
     for idx, item in enumerate(cart_items, start=1):
-        name = html.escape(item["name"])
+        name = html.escape(_strip_category_prefix(item["name"]))
         qty = int(item["qty"])
         lines.append(f"{idx}. {name} x{qty}")
     lines.append("")
@@ -100,7 +100,7 @@ def _build_cart_summary(cart_items: List[Dict[str, Any]], total_usd: float) -> s
         return ""
     lines = ["Resumen del carrito:"]
     for idx, item in enumerate(cart_items, start=1):
-        name = html.escape(item["name"])
+        name = html.escape(_strip_category_prefix(item["name"]))
         qty = int(item["qty"])
         lines.append(f"{idx}. {name} x{qty}")
     lines.append(f"Total: ${_format_usd(total_usd)} USD")
@@ -311,10 +311,23 @@ async def _fetch_active_products() -> List[Dict[str, Any]]:
     return products
 
 
-def _strip_prefix(name: str, prefix: str) -> str:
-    if name.startswith(prefix):
-        return name[len(prefix) :].strip()
-    return name
+_PREFIXES_FOR_STRIP = ("SHOP", "METODOS", "VIP", "WEB")
+
+
+def _strip_category_prefix(name: str) -> str:
+    cleaned = name.strip()
+    for base in _PREFIXES_FOR_STRIP:
+        base_prefix = f"{base} "
+        if not cleaned.startswith(base_prefix):
+            continue
+        remainder = cleaned[len(base_prefix) :]
+        if remainder.startswith("- "):
+            return remainder[2:].strip()
+        if " - " in remainder:
+            maybe_code, rest = remainder.split(" - ", 1)
+            if maybe_code.isdigit():
+                return rest.strip()
+    return cleaned
 
 
 def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
@@ -322,7 +335,7 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
     return {
         "id": product.get("id"),
         "name": name,
-        "display_name": _strip_prefix(name, prefix),
+        "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "Producto de prueba",
         "price": float(product.get("price") or _DEFAULT_PRODUCT_PRICE_USD),
     }
@@ -335,7 +348,7 @@ async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
         for product in products
         if str(product.get("name") or "").startswith(prefix)
     ]
-    filtered.sort(key=lambda item: item["display_name"])
+    filtered.sort(key=lambda item: item["name"])
     return filtered
 
 

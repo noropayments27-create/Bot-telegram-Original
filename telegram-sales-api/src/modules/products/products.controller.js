@@ -39,7 +39,7 @@ async function listProducts(req, res, next) {
               created_at, updated_at
        FROM products
        ${whereClause}
-       ORDER BY created_at DESC
+       ORDER BY name ASC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
     );
