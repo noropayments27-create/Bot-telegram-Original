@@ -1,5 +1,5 @@
 -- 003_products_demo_prefix_order.sql
--- Prefix demo product names to enforce ordering per category.
+-- DEPRECATED: ahora se ordena por prefijo y se controla por seed UPSERT.
 
 UPDATE products SET name = 'SHOP 01 - 💳 Venta de Tarjetas' WHERE name = 'SHOP - 💳 Venta de Tarjetas';
 UPDATE products SET name = 'SHOP 02 - 🔗 Links de CCS Shop' WHERE name = 'SHOP - 🔗 Links de CCS Shop';
