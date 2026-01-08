@@ -73,14 +73,20 @@ def build_shop_keyboard(page: int, total_pages: int) -> InlineKeyboardMarkup:
             ]
         )
 
-    prev_page = page - 1 if page > 1 else 1
-    next_page = page + 1 if page < total_pages else total_pages
-    rows.append(
-        [
-            InlineKeyboardButton(text="⬅️ <<", callback_data=f"shop:page:{prev_page}"),
-            InlineKeyboardButton(text=">> ➡️", callback_data=f"shop:page:{next_page}"),
-        ]
-    )
+    nav_row: List[InlineKeyboardButton] = []
+    if total_pages > 1:
+        if page > 1:
+            nav_row.append(
+                InlineKeyboardButton(text="⬅️ <<", callback_data=f"shop:page:{page - 1}")
+            )
+        if page < total_pages:
+            nav_row.append(
+                InlineKeyboardButton(
+                    text=">> ➡️", callback_data=f"shop:page:{page + 1}"
+                )
+            )
+        if nav_row:
+            rows.append(nav_row)
     rows.append(
         [
             InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
