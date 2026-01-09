@@ -33,21 +33,21 @@ async def handle_admin_auth_decision(callback: CallbackQuery) -> None:
         )
         return
     if callback.from_user.id not in ADMIN_TELEGRAM_IDS:
-        await callback.answer("No autorizado.", show_alert=True)
+        await callback.answer("⛔️ No autorizado.", show_alert=True)
         return
     if not BOT_TO_API_SECRET:
-        await callback.answer("Configura BOT_TO_API_SECRET.", show_alert=True)
+        await callback.answer("⚙️ Falta configurar BOT_TO_API_SECRET.", show_alert=True)
         return
 
     parts = callback.data.split(":")
     if len(parts) < 3:
-        await callback.answer("Solicitud invalida.", show_alert=True)
+        await callback.answer("⚠️ Solicitud inválida.", show_alert=True)
         return
 
     request_id = parts[1]
     decision = parts[2].upper()
     if decision not in {"APPROVE", "DENY"}:
-        await callback.answer("Decision invalida.", show_alert=True)
+        await callback.answer("⚠️ Decisión inválida.", show_alert=True)
         return
 
     try:
@@ -58,6 +58,6 @@ async def handle_admin_auth_decision(callback: CallbackQuery) -> None:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-        await callback.answer("Confirmacion enviada.")
+        await callback.answer("✅ Confirmación enviada.")
     except Exception:
-        await callback.answer("No se pudo enviar la decision.", show_alert=True)
+        await callback.answer("❌ No se pudo enviar la decisión. Intenta de nuevo.", show_alert=True)

@@ -11,6 +11,12 @@ API base para el bot de ventas en Telegram.
 npm install
 ```
 
+## Playwright (render de recibos)
+En servidores Linux, instala el navegador de Chromium y dependencias:
+```bash
+npx playwright install chromium --with-deps
+```
+
 ## Variables de entorno
 Configura estas variables en `.env`:
 - `DATABASE_URL`

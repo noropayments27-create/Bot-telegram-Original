@@ -38,7 +38,7 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
             )
             return
     await state.clear()
-    await message.answer("Soporte cancelado.", reply_markup=build_main_keyboard())
+    await message.answer("✅ Soporte cancelado. Si necesitas algo más, aquí estoy. 😊", reply_markup=build_main_keyboard())
 
 
 @router.message(Command("soporte"))
@@ -70,7 +70,7 @@ async def handle_support(message: Message, state: FSMContext) -> None:
             await state.update_data(ticket_id=ticket["id"])
             await state.set_state(SupportStates.active)
         await message.answer(
-            "🕒 Ya tienes un ticket abierto. Por favor espera mi respuesta.\n"
+            "🕒 Ya tienes un ticket abierto. En cuanto responda, podrás abrir otro. 🙏\n"
             "Si quieres agregar informacion, escribela aqui y la anexare al ticket."
         )
         return
@@ -82,7 +82,7 @@ async def handle_support(message: Message, state: FSMContext) -> None:
         await state.set_state(SupportStates.active)
 
     await message.answer(
-        "✅ Ticket creado. Escribeme tu problema y te respondere lo antes posible."
+        "✅ Ticket creado. Cuéntame tu problema y te respondo lo antes posible. 🙌"
     )
 
 
@@ -107,7 +107,7 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
     if not ticket_id:
-        await message.answer("No tengo un ticket activo.")
+        await message.answer("ℹ️ No tienes un ticket activo en este momento.")
         await state.clear()
         return
 
@@ -117,4 +117,4 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
     }
 
     await api_client.send_ticket_message(ticket_id, payload)
-    await message.answer("📨 Mensaje recibido. Te responderemos pronto.")
+    await message.answer("📨 ¡Mensaje recibido! Te responderé lo antes posible. 🙌")

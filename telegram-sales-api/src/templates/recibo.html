@@ -1,0 +1,132 @@
+<!DOCTYPE html>
+<html lang="es">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Recibo de Pago</title>
+    <style>
+        body {
+            font-family: 'Courier New', Courier, monospace;
+            background-color: #f0f0f0;
+            display: flex;
+            justify-content: center;
+            margin: 0;
+            padding: 20px;
+        }
+        .receipt {
+            width: 300px; /* Ancho típico de un recibo térmico */
+            background-color: #fff;
+            padding: 20px;
+            border: 1px solid #ccc;
+            box-shadow: 0 0 10px rgba(0,0,0,0.1);
+            color: #333;
+            line-height: 1.4;
+            font-size: 14px;
+        }
+        .header, .footer {
+            text-align: center;
+            text-transform: uppercase;
+        }
+        .divider {
+            border-top: 1px dashed #333;
+            margin: 10px 0;
+        }
+        .details, .items, .totals {
+            margin-bottom: 10px;
+        }
+        .details div, .totals div {
+            display: flex;
+            justify-content: space-between;
+        }
+        .items table {
+            width: 100%;
+            border-collapse: collapse;
+        }
+        .items th, .items td {
+            text-align: left;
+            padding: 3px 0;
+        }
+        .items td:last-child, .totals div span:last-child {
+            text-align: right;
+            font-weight: bold;
+        }
+        .thank-you {
+            margin-top: 20px;
+            font-size: 16px;
+            font-weight: bold;
+        }
+        .barcode {
+            margin-top: 15px;
+            text-align: center;
+        }
+        .barcode img {
+             width: 100%;
+             height: auto;
+        }
+    </style>
+</head>
+<body>
+
+<div class="receipt">
+    <div class="header">
+        <h2><strong>RECIBO DE PAGO</strong></h2>
+    </div>
+
+    <div class="details">
+        <div><span>Telegram ID:</span> <span>{{TELEGRAM_ID}}</span></div>
+        <div><span>Username:</span> <span>{{USERNAME}}</span></div>
+        <div><span>Whatsapp:</span> <span>N/A</span></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="details">
+        <div><span>Fecha:</span> <span>{{DATE_TIME}}</span></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div class="items">
+        <table>
+            <thead>
+                <tr>
+                    <th>Descripción</th>
+                    <th>Valor</th>
+                </tr>
+            </thead>
+            <tbody>
+                {{ITEM_ROWS_HTML}}
+            </tbody>
+        </table>
+    </div>
+
+    <div class="divider"></div>
+
+    <div style="font-size: 13px;">Telegram Bot: @Noroventas_bot</div>
+
+    <div class="divider"></div>
+
+    <div class="totals">
+        <div><span>Sub-total</span> <span>{{SUBTOTAL}}</span></div>
+        <div><span>Comisión</span> <span>{{COMMISSION}}</span></div>
+        <div><span><strong>Total</strong></span> <span><strong>{{TOTAL}}</strong></span></div>
+        <div><span>Referido de:</span> <span>{{REFERRED_BY}}</span></div>
+    </div>
+
+    <div class="divider"></div>
+
+    <div style="font-size: 13px;">Telegram: @Noropapayments</div>
+
+    <div class="divider"></div>
+
+    <div class="footer">
+        <div class="thank-you">Gracias<br>Por Tu Compra<br></div>
+        <div class="barcode">
+            ||||||||||||||||||||||||||||||
+            <!-- Representación visual del código de barras (placeholder) -->
+        </div>
+    </div>
+</div>
+
+</body>
+</html>

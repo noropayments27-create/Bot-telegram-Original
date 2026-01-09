@@ -52,7 +52,9 @@ async def handle_start(message: Message) -> None:
         }
         result = await api_client.upsert_telegram_user(payload)
         if result["status_code"] == 403:
-            sent = await message.answer("Acceso restringido.")
+            sent = await message.answer(
+                "⛔️ Acceso restringido.\n\nSi crees que es un error, escríbenos a soporte y te ayudamos. 🤝"
+            )
             if sent:
                 set_main_message_id(message.from_user.id, sent.message_id)
             return
@@ -111,7 +113,7 @@ async def handle_home_soon(callback: CallbackQuery) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Próximamente",
+        "✨ Próximamente...\n\nEstamos preparando esta sección para ti. 🚀",
         reply_markup=build_main_keyboard(),
     )
     await callback.answer()

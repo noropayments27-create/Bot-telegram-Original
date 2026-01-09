@@ -15,6 +15,7 @@ const {
   sendPhoto,
   sendVideo,
 } = require("../services/telegram");
+const { renderReceiptPng } = require("../services/receiptRenderer");
 
 const router = express.Router();
 
@@ -428,7 +429,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     await client.query("BEGIN");
 
     const orderRes = await client.query(
-      `SELECT o.*, u.telegram_id,
+      `SELECT o.*, u.telegram_id, u.telegram_username,
               p.name AS product_name,
               p.price AS product_price,
               p.delivery_type,
@@ -508,9 +509,57 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       "Aqui tienes tu recibo de pago, en breve momento se te enviara el contenido.";
     const receipt = buildReceiptMessage(order, paymentRes.rows[0]);
     try {
-      await sendMessage(telegramId, `${notice}\n\n${receipt}`);
+      let items = [];
+      let subtotal = 0;
+      try {
+        const itemsRes = await pool.query(
+          `SELECT oi.*, p.name, oi.unit_price
+           FROM order_items oi
+           JOIN products p ON p.id = oi.product_id
+           WHERE oi.order_id = $1`,
+          [order.id]
+        );
+        if (itemsRes.rowCount > 0) {
+          items = itemsRes.rows.map((row) => {
+            const price = Number(row.unit_price ?? 0);
+            subtotal += Number.isFinite(price) ? price : 0;
+            return { name: row.name, price: row.unit_price };
+          });
+        }
+      } catch (err) {
+        console.error("Receipt items query failed", err);
+      }
+
+      if (items.length === 0) {
+        const price = Number(order.product_price ?? 0);
+        subtotal = Number.isFinite(price) ? price : 0;
+        items = [{ name: order.product_name, price: order.product_price }];
+      }
+
+      const receiptPng = await renderReceiptPng({
+        orderId: order.id,
+        telegramId,
+        username: order.telegram_username,
+        dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
+        items,
+        subtotal,
+        commission: 0,
+        total: subtotal,
+        referredBy: "N/A",
+      });
+
+      try {
+        await sendPhoto(telegramId, { path: receiptPng.pngPath });
+      } finally {
+        await receiptPng.cleanup();
+      }
     } catch (err) {
       console.error("Telegram receipt failed", err);
+      try {
+        await sendMessage(telegramId, `${notice}\n\n${receipt}`);
+      } catch (fallbackError) {
+        console.error("Telegram receipt fallback failed", fallbackError);
+      }
     }
 
     setTimeout(async () => {

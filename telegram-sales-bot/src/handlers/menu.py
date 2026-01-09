@@ -5,30 +5,31 @@ router = Router()
 
 
 HOME_TEXT = (
-    "Bienvenido a:\n"
-    "Noropayments shop\n\n"
-    "Tenemos muchas cosas a la venta\n\n"
-    "¿Que deseas Comprar hoy?"
+    "👋 ¡Hola! Bienvenido a Noropayments Shop 🛍️\n\n"
+    "Aquí puedes comprar de forma rápida y segura. ✅\n\n"
+    "¿Qué te gustaría comprar hoy? 👇"
+
 )
 COMMUNITY_TEXT_HTML = (
-    "Información:\n\n"
-    "🖥 Mi Pagina Web:  <a href=\"https://noropayments.shop/\">CLICK AQUI</a> ⬅️\n"
-    "⭐️ Mi Canal de promos:  <a href=\"https://t.me/promos_noro\">CLICK AQUI</a> ⬅️\n"
-    "🔎 Mis Referencias de ventas: <a href=\"https://t.me/Nororeferencias\">CLICK AQUI</a> ⬅️\n"
-    "🛡 Mi Grupo Privado: <a href=\"https://t.me/+3qNiiq16iXM2YjEx\">CLICK AQUI</a> ⬅️\n"
+    "🌐 <b>Información y enlaces oficiales</b>\n\n"
+    "🖥 Mi Página Web:  <a href=\"https://noropayments.shop/\">CLICK AQUI</a> ⬅️\n"
+    "⭐️ Canal de promos:  <a href=\"https://t.me/promos_noro\">CLICK AQUI</a> ⬅️\n"
+    "🔎 Referencias de ventas: <a href=\"https://t.me/Nororeferencias\">CLICK AQUI</a> ⬅️\n"
+    "🛡 Grupo Privado: <a href=\"https://t.me/+3qNiiq16iXM2YjEx\">CLICK AQUI</a> ⬅️\n"
     "🆓 Grupo Ventas Free: <a href=\"https://t.me/VentasNoropayments\">CLICK AQUI</a> ⬅️\n"
-    "⚙️ Grupo de Bins Gratis: <a href=\"https://t.me/BinsGratis_NoroPayments\">CLICK AQUI</a> ⬅️\n\n"
+    "⚙️ Bins Gratis: <a href=\"https://t.me/BinsGratis_NoroPayments\">CLICK AQUI</a> ⬅️\n\n"
     "✅ Ofertas exclusivas\n"
     "✅ Información actualizada\n"
-    "✅Contenido directo y sin vueltas\n\n"
-    "SI TIENES PREGUNTAS NO DUDES EN ACUDIR A NOSOTROS\n\n"
-    "Youtube:   <a href=\"https://www.youtube.com/@Noropayments\">CLICK AQUI</a>\n"
+    "✅ Contenido directo y sin vueltas\n\n"
+    "💬 Si tienes preguntas, escríbenos por soporte y te ayudamos con gusto. 🤝\n\n"
+    "YouTube:   <a href=\"https://www.youtube.com/@Noropayments\">CLICK AQUI</a>\n"
     "TikTok:    <a href=\"https://www.tiktok.com/@noro_payments1\">CLICK AQUI</a>\n"
-    "Whatsapp:  <a href=\"https://api.whatsapp.com/send/?phone=573009545964&text=Hola%2C+vengo+de+Telegram&type=phone_number&app_absent=0\">CLICK AQUI</a>\n"
+    "WhatsApp:  <a href=\"https://api.whatsapp.com/send/?phone=573009545964&text=Hola+vengo+de+Telegram&type=phone_number&app_absent=0\">CLICK AQUI</a>\n"
     "Telegram:  <a href=\"https://t.me/NoroPayments\">CLICK AQUI</a>\n"
     "Instagram: <a href=\"https://www.instagram.com/noropayments\">CLICK AQUI</a>\n"
     "(Twitter) X: <a href=\"https://x.com/NoroPayments\">CLICK AQUI</a>\n\n"
-    "🔥 ¡Síguenos yá! y no te pierdas nada 🔥"
+    "🔥 ¡Síguenos y no te pierdas nada! 🔥"
+
 )
 
 

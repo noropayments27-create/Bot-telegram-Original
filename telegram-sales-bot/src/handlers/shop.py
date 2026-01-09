@@ -27,6 +27,8 @@ from ..config import (
     CRYPTO_WALLET_BTC,
     CRYPTO_WALLET_LTC,
     CRYPTO_WALLET_USDT,
+    CRYPTO_WALLET_USDT_BSC,
+    CRYPTO_WALLET_USDT_TRON,
     MERCADOPAGO_ACCOUNT,
     NEQUI_NAME,
     NEQUI_NUMBER,
@@ -117,26 +119,28 @@ def _build_payment_instructions(
 
     if method_key == "nequi":
         instructions.append("Nequi")
-        if NEQUI_NAME:
-            instructions.append(f"Nombre: {html.escape(NEQUI_NAME)}")
         if NEQUI_NUMBER:
             instructions.append(f"Número: {html.escape(NEQUI_NUMBER)}")
+        if NEQUI_NAME:
+            instructions.append(f"Nombre: {html.escape(NEQUI_NAME)}")
     elif method_key == "binance":
-        instructions.append("Binance ID")
+        instructions.append("BINANCE ID")
         if BINANCE_ID:
             instructions.append(f"ID: {html.escape(BINANCE_ID)}")
     elif method_key == "crypto":
-        instructions.append("Cripto Monedas")
-        if CRYPTO_WALLET_USDT:
-            instructions.append(f"USDT: {html.escape(CRYPTO_WALLET_USDT)}")
+        instructions.append("CRIPTO MONEDAS")
         if CRYPTO_WALLET_BTC:
-            instructions.append(f"BTC: {html.escape(CRYPTO_WALLET_BTC)}")
+            instructions.append(f"Bitcoin: {html.escape(CRYPTO_WALLET_BTC)}")
+        if CRYPTO_WALLET_USDT_TRON:
+            instructions.append(f"USDT Tron: {html.escape(CRYPTO_WALLET_USDT_TRON)}")
+        if CRYPTO_WALLET_USDT_BSC:
+            instructions.append(f"USDT BSC: {html.escape(CRYPTO_WALLET_USDT_BSC)}")
         if CRYPTO_WALLET_LTC:
             instructions.append(f"LTC: {html.escape(CRYPTO_WALLET_LTC)}")
     elif method_key == "mp":
         instructions.append("Mercado Pago")
         if MERCADOPAGO_ACCOUNT:
-            instructions.append(f"Cuenta: {html.escape(MERCADOPAGO_ACCOUNT)}")
+            instructions.append(f"{html.escape(MERCADOPAGO_ACCOUNT)}")
     elif method_key == "paypal":
         instructions.append("Paypal +25%")
         total = total * 1.25
@@ -555,7 +559,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     catalog = await _get_shop_page_items(page)
     items = catalog["items"]
     if index < 1 or index > len(items):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
 
     product = items[index - 1]
@@ -597,7 +601,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
     index = int(index_text)
     items = await _get_category_items(category_key)
     if index < 1 or index > len(items):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     item = items[index - 1]
     await state.update_data(selected_product_id=item["id"])
@@ -640,7 +644,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     catalog = await _get_shop_page_items(page)
     items = catalog["items"]
     if index < 1 or index > len(items):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     product = items[index - 1]
     if not product.get("id"):
@@ -666,7 +670,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "No se pudo crear la orden.",
+            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
             reply_markup=build_detail_back_keyboard(page),
         )
         await callback.answer()
@@ -681,7 +685,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Elije tu método de pago:",
+        "💳 Elige tu método de pago:",
         reply_markup=build_payment_methods_keyboard(order["id"], page, index),
     )
     await callback.answer()
@@ -707,7 +711,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     index = int(index_text)
     items = await _get_category_items(category_key)
     if index < 1 or index > len(items):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     product = items[index - 1]
     if not product.get("id"):
@@ -733,7 +737,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "No se pudo crear la orden.",
+            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
             reply_markup=build_category_detail_keyboard(category_key, index),
         )
         await callback.answer()
@@ -748,7 +752,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Elije tu método de pago:",
+        "💳 Elige tu método de pago:",
         reply_markup=build_payment_methods_keyboard(order["id"], 1, 1),
     )
     await callback.answer()
@@ -777,11 +781,11 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     index_text = callback.data.split(":")[-1]
     index = int(index_text)
     if index < 1 or index > len(items):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     product = items[index - 1]
     if not product.get("id"):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     try:
         await api_client.add_to_cart(
@@ -833,11 +837,11 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     index = int(index_text)
     items = await _get_category_items(category_key)
     if index < 1 or index > len(items):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     item = items[index - 1]
     if not item.get("id"):
-        await callback.answer("No se encontro el producto.", show_alert=True)
+        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
         return
     try:
         await api_client.add_to_cart(
@@ -972,7 +976,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "No se pudo crear la orden.",
+            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
         )
         await callback.answer()
         return
@@ -985,7 +989,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Elije tu método de pago:",
+        "💳 Elige tu método de pago:",
         reply_markup=build_payment_methods_keyboard(order_id, 1, 1),
     )
     await callback.answer()
@@ -1013,7 +1017,7 @@ async def handle_order_methods(callback: CallbackQuery) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Elije tu método de pago:",
+        "💳 Elige tu método de pago:",
         reply_markup=build_payment_methods_keyboard(order_id, page, index),
     )
     await callback.answer()
@@ -1087,7 +1091,7 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "No se pudo crear la orden.",
+            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
         )
         await callback.answer()
         return
@@ -1100,14 +1104,15 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     )
 
     text = (
-        "Orden creada.\n"
-        f"ID: {order['id']}\n"
-        f"Total: ${order.get('total')}\n\n"
-        "Instrucciones de pago:\n"
-        f"Red: {instructions.get('network')}\n"
-        f"Activo: {instructions.get('asset')}\n"
-        f"Wallet: {instructions.get('wallet')}\n"
-        f"Nota: {instructions.get('note')}"
+        "✅ ¡Orden creada! 🛍️\n\n"
+        f"🧾 ID: {order['id']}\n"
+        f"💰 Total: ${order.get('total')}\n\n"
+        "💳 <b>Instrucciones de pago</b>\n"
+        f"🌐 Red: {instructions.get('network')}\n"
+        f"🪙 Activo: {instructions.get('asset')}\n"
+        f"👛 Wallet: {instructions.get('wallet')}\n"
+        f"📝 Nota: {instructions.get('note')}\n\n"
+        "📌 Cuando pagues, presiona <b>Ya pagué</b> y envía la captura. 📸"
     )
 
     keyboard = InlineKeyboardMarkup(
@@ -1180,7 +1185,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "Enviame la captura del pago.",
+        "📸 Envíame la captura del pago aquí mismo para confirmar. 😊",
         reply_markup=filtered_markup,
     )
     await callback.answer()
@@ -1203,7 +1208,7 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     order_id = data.get("order_id") or data.get("current_order_id")
     if not order_id:
-        await message.answer("No tengo una orden activa. Presiona Comprar nuevamente.")
+        await message.answer("🛒 No veo una orden activa. Presiona <b>Comprar</b> de nuevo para crearla. 😊")
         await state.set_state(None)
         return
 
@@ -1224,7 +1229,7 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         error_code = error_payload.get("error") if isinstance(error_payload, dict) else None
         if error_code == "SCREENSHOT_ALREADY_SUBMITTED":
             notice = await message.answer(
-                "Ya recibimos tu imagen, espera que aprobemos tu pago."
+                "✅ ¡Captura recibida! Estamos revisando tu pago, porfa espera un momentico 🙏"
             )
             await asyncio.sleep(3)
             try:
@@ -1234,7 +1239,7 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
             return
         raise
     _SCREENSHOTS_RECEIVED.add(order_id)
-    await message.answer("Recibido. Estamos verificando tu pago.")
+    await message.answer("✅ ¡Recibido! Estamos verificando tu pago ahora mismo 🔎⏳")
     await state.update_data(order_id=None)
     await state.set_state(None)
 
@@ -1278,7 +1283,9 @@ async def handle_status_message(message: Message, state: FSMContext) -> None:
     order_id = data.get("last_order_id")
     if not order_id:
         await render_main_view(
-            message, message.from_user.id, "No hay ordenes recientes para consultar."
+            message,
+            message.from_user.id,
+            "📦 No veo órdenes recientes para consultar todavía.\n\nHaz una compra y aquí podrás ver el estado. 😊",
         )
         return
     await send_order_status(message, message.from_user.id, order_id)
@@ -1307,17 +1314,21 @@ async def send_order_status(target: Message, user_id: int, order_id: str) -> Non
     order = result.get("order")
 
     if not order:
-        await render_main_view(target, user_id, "No se encontro la orden.")
+        await render_main_view(
+            target,
+            user_id,
+            "😕 No encontré esa orden.\n\nVerifica e intenta de nuevo, porfa. 🙏",
+        )
         return
 
     status = order.get("status")
     if status == "PAID":
         await render_main_view(target, user_id, format_receipt(order))
     elif status == "WAITING_PAYMENT":
-        await render_main_view(target, user_id, "Pago en revision.")
+        await render_main_view(target, user_id, "🔎 Pago en revisión")
     elif status == "CREATED":
-        await render_main_view(target, user_id, "Pendiente de pago.")
+        await render_main_view(target, user_id, "⏳ Pendiente de pago")
     elif status == "CANCELLED":
-        await render_main_view(target, user_id, "Pago rechazado, contacta soporte.")
+        await render_main_view(target, user_id, "❌ Pago rechazado. Escríbenos a Soporte y te ayudamos. 🤝")
     else:
         await render_main_view(target, user_id, f"Estado actual: {status}")
