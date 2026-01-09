@@ -5,12 +5,14 @@
   "main": "src/server.js",
   "scripts": {
     "dev": "nodemon src/server.js",
-    "start": "node src/server.js"
+    "start": "node src/server.js",
+    "seed:catalog": "node seeds/seed_catalog.js"
   },
   "dependencies": {
     "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
+    "js-yaml": "^4.1.0",
     "helmet": "^7.1.0",
     "morgan": "^1.10.0",
     "pg": "^8.16.3",

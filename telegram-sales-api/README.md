@@ -31,5 +31,29 @@ npm run dev
 npm start
 ```
 
+## Catalogo editable (seed)
+Editar el archivo `seeds/catalog_placeholder.yaml` y ejecutar:
+```bash
+npm run seed:catalog
+```
+Verificar en DB:
+```sql
+SELECT sku_key, code, is_active FROM products ORDER BY code;
+```
+
+## Migracion codes por seccion
+Ejecutar:
+```bash
+psql "$DATABASE_URL" -f sql/006_products_code_by_section.sql
+```
+Verificar por seccion:
+```sql
+SELECT sku_key, code, name FROM products WHERE sku_key LIKE 'shop_%' ORDER BY code;
+SELECT sku_key, code, name FROM products WHERE sku_key LIKE 'metodos_%' ORDER BY code;
+SELECT sku_key, code, name FROM products WHERE sku_key LIKE 'vip_%' ORDER BY code;
+SELECT sku_key, code, name FROM products WHERE sku_key LIKE 'web_%' ORDER BY code;
+SELECT COUNT(*) FROM products WHERE sku_key LIKE 'shop_%' AND (code IS NULL OR code='');
+```
+
 ## Endpoint de salud
 - GET `http://localhost:3001/health`

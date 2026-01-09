@@ -40,7 +40,6 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 
-_NUMBER_EMOJIS = ["1️⃣", "2️⃣", "3️⃣", "4️⃣", "5️⃣", "6️⃣", "7️⃣", "8️⃣", "9️⃣"]
 _PAGE_SIZE = 9
 _PREFIX_SHOP = "SHOP "
 _PREFIX_METODOS = "METODOS "
@@ -151,7 +150,7 @@ def _build_payment_instructions(
     if summary:
         instructions.append(summary)
         instructions.append("")
-    instructions.append(f"Total: <b>${total_text} USD</b>")
+    instructions.append(f"<b>Total: ${total_text} USD</b>")
     instructions.append("<b><i>Luego que hagas el pago, toma una captura</i></b>")
     return "\n".join(instructions)
 
@@ -173,12 +172,12 @@ def build_shop_keyboard(page: int, total_pages: int, count: int) -> InlineKeyboa
     if total_pages > 1:
         if page > 1:
             nav_row.append(
-                InlineKeyboardButton(text="⬅️ <<", callback_data=f"shop:page:{page - 1}")
+                InlineKeyboardButton(text="<<", callback_data=f"shop:page:{page - 1}")
             )
         if page < total_pages:
             nav_row.append(
                 InlineKeyboardButton(
-                    text=">> ➡️", callback_data=f"shop:page:{page + 1}"
+                    text=">>", callback_data=f"shop:page:{page + 1}"
                 )
             )
         if nav_row:
@@ -281,7 +280,7 @@ def format_products(items: List[Dict[str, Any]], page: int) -> str:
 
     lines = [f"Productos Disponibles (Página {page})", ""]
     for idx, item in enumerate(items, start=1):
-        lines.append(f"{_NUMBER_EMOJIS[idx - 1]} {item['display_name']}")
+        lines.append(f"{idx}. {item['display_name']}")
     return "\n".join(lines)
 
 
@@ -291,7 +290,7 @@ def format_category_products(category_key: str, items: List[Dict[str, Any]]) -> 
     title = get_category_title(category_key)
     lines = [f"{title} (Página 1)", ""]
     for idx, item in enumerate(items, start=1):
-        lines.append(f"{_NUMBER_EMOJIS[idx - 1]} {item['display_name']}")
+        lines.append(f"{idx}. {item['display_name']}")
     return "\n".join(lines)
 
 
@@ -304,7 +303,9 @@ async def _fetch_active_products() -> List[Dict[str, Any]]:
         total_pages = data.get("total_pages", total_pages)
         items = data.get("items", [])
         if isinstance(items, list):
-            products.extend(items)
+            products.extend(
+                [item for item in items if item.get("is_active") is True]
+            )
         page += 1
     return products
 
@@ -564,7 +565,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         f"{_format_code_line(product)}"
         "Descripción:\n"
         f"{product['description']}\n\n"
-        f"Precio: **${int(product['price'])} USD**"
+        f"Precio: ${int(product['price'])} USD"
     )
     keyboard = build_product_detail_keyboard(page, index)
     await render_main_view(
@@ -605,7 +606,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         f"{_format_code_line(item)}"
         "Descripción:\n"
         f"{item['description']}\n\n"
-        f"Precio: **${int(item['price'])} USD**"
+        f"Precio: ${int(item['price'])} USD"
     )
     keyboard = build_category_detail_keyboard(category_key, index)
     await render_main_view(
@@ -799,7 +800,7 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         f"{_format_code_line(product)}"
         "Descripción:\n"
         f"{product['description']}\n\n"
-        f"Precio: **${int(product['price'])} USD**\n\n"
+        f"Precio: ${int(product['price'])} USD\n\n"
         f"{add_result}"
     )
     keyboard = build_product_detail_keyboard(page, index)
@@ -855,7 +856,7 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         f"{_format_code_line(item)}"
         "Descripción:\n"
         f"{item['description']}\n\n"
-        f"Precio: **${int(item['price'])} USD**\n\n"
+        f"Precio: ${int(item['price'])} USD\n\n"
         f"{add_result}"
     )
     keyboard = build_category_detail_keyboard(category_key, index)
