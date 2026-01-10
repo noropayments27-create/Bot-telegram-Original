@@ -10,9 +10,12 @@ from ..config import (
     BOT_RATE_LIMIT_SECONDS,
 )
 from ..services.api_client import ApiClient
+from ..services.i18n import t
+from ..services.user_locale import get_user_locale
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .menu import build_home_text, build_main_keyboard, build_community_text
+from .menu import build_language_keyboard
 from ..utils.main_view import render_main_view, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
 
@@ -24,6 +27,9 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN)
 async def handle_start(message: Message) -> None:
     if not message.from_user:
         return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -31,7 +37,9 @@ async def handle_start(message: Message) -> None:
         BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
-        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        await message.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds)
+        )
         return
     start_payload = None
 
@@ -47,13 +55,17 @@ async def handle_start(message: Message) -> None:
             "first_name": message.from_user.first_name,
             "last_name": message.from_user.last_name,
             "language_code": message.from_user.language_code,
+            "locale": "es"
+            if not message.from_user.language_code
+            or (message.from_user.language_code or "").lower().startswith("es")
+            else "en",
             "start_payload": start_payload,
             "start_affiliate_code": start_payload,
         }
         result = await api_client.upsert_telegram_user(payload)
         if result["status_code"] == 403:
             sent = await message.answer(
-                "⛔️ Acceso restringido.\n\nSi crees que es un error, escríbenos a soporte y te ayudamos. 🤝"
+                t(locale, "access_restricted")
             )
             if sent:
                 set_main_message_id(message.from_user.id, sent.message_id)
@@ -61,9 +73,13 @@ async def handle_start(message: Message) -> None:
     except Exception:
         pass
 
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     sent = await message.answer(
-        build_home_text(),
-        reply_markup=build_main_keyboard(),
+        build_home_text(locale),
+        reply_markup=build_main_keyboard(locale),
+        parse_mode="HTML",
     )
     if sent:
         set_main_message_id(message.from_user.id, sent.message_id)
@@ -73,6 +89,9 @@ async def handle_start(message: Message) -> None:
 async def handle_home_show(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -81,15 +100,55 @@ async def handle_home_show(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        build_home_text(),
-        reply_markup=build_main_keyboard(),
+        build_home_text(locale),
+        reply_markup=build_main_keyboard(locale),
+        parse_mode="HTML",
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "home:soon:idioma")
+async def handle_language_panel(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    current = (
+        t(locale, "language_name_es")
+        if str(locale).lower() == "es"
+        else t(locale, "language_name_en")
+    )
+    text = (
+        f"{t(locale, 'language_panel_title')}\n\n"
+        f"{t(locale, 'language_panel_current').format(language=current)}\n\n"
+        f"{t(locale, 'language_panel_choose')}"
+    )
+    await callback.message.edit_text(
+        text,
+        reply_markup=build_language_keyboard(locale),
+        parse_mode="HTML",
     )
     await callback.answer()
 
@@ -98,6 +157,9 @@ async def handle_home_show(callback: CallbackQuery) -> None:
 async def handle_home_soon(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -106,15 +168,16 @@ async def handle_home_soon(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "✨ Próximamente...\n\nEstamos preparando esta sección para ti. 🚀",
-        reply_markup=build_main_keyboard(),
+        f"{t(locale, 'home_soon_title')}\n\n{t(locale, 'home_soon_body')}",
+        reply_markup=build_main_keyboard(locale),
     )
     await callback.answer()
 
@@ -123,6 +186,9 @@ async def handle_home_soon(callback: CallbackQuery) -> None:
 async def handle_home_community(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -131,22 +197,27 @@ async def handle_home_community(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
-                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"), callback_data="home:show"
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"), callback_data="home:show"
+                ),
             ]
         ]
     )
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        build_community_text(),
+        build_community_text(locale),
         reply_markup=keyboard,
         parse_mode="HTML",
     )

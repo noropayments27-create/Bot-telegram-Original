@@ -12,6 +12,8 @@ from ..config import (
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
 )
 from ..services.api_client import ApiClient
+from ..services.i18n import t
+from ..services.user_locale import get_user_locale
 from .menu import build_main_keyboard
 from ..utils.rate_limit import check_global_rate_limit
 
@@ -25,7 +27,11 @@ class SupportStates(StatesGroup):
 
 @router.message(Command("cancel"))
 async def handle_cancel(message: Message, state: FSMContext) -> None:
+    locale = "es"
     if message.from_user:
+        locale = await get_user_locale(
+            api_client, message.from_user.id, message.from_user.language_code
+        )
         wait_seconds = check_global_rate_limit(
             message.from_user.id,
             BOT_RATE_LIMIT_SECONDS,
@@ -34,11 +40,13 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
         )
         if wait_seconds > 0:
             await message.answer(
-                f"⏳ Espera {wait_seconds}s antes de intentar de nuevo."
+                t(locale, "rate_limit_wait").format(seconds=wait_seconds)
             )
             return
     await state.clear()
-    await message.answer("✅ Soporte cancelado. Si necesitas algo más, aquí estoy. 😊", reply_markup=build_main_keyboard())
+    await message.answer(
+        t(locale, "support_cancelled"), reply_markup=build_main_keyboard(locale)
+    )
 
 
 @router.message(Command("soporte"))
@@ -46,6 +54,9 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
 async def handle_support(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -53,7 +64,9 @@ async def handle_support(message: Message, state: FSMContext) -> None:
         BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
-        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        await message.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds)
+        )
         return
 
     payload = {
@@ -70,8 +83,7 @@ async def handle_support(message: Message, state: FSMContext) -> None:
             await state.update_data(ticket_id=ticket["id"])
             await state.set_state(SupportStates.active)
         await message.answer(
-            "🕒 Ya tienes un ticket abierto. En cuanto responda, podrás abrir otro. 🙏\n"
-            "Si quieres agregar informacion, escribela aqui y la anexare al ticket."
+            t(locale, "support_ticket_open")
         )
         return
 
@@ -82,7 +94,7 @@ async def handle_support(message: Message, state: FSMContext) -> None:
         await state.set_state(SupportStates.active)
 
     await message.answer(
-        "✅ Ticket creado. Cuéntame tu problema y te respondo lo antes posible. 🙌"
+        t(locale, "support_ticket_created")
     )
 
 
@@ -90,6 +102,9 @@ async def handle_support(message: Message, state: FSMContext) -> None:
 async def handle_support_message(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -97,7 +112,9 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
         BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
-        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        await message.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds)
+        )
         return
 
     text = message.text.strip()
@@ -107,7 +124,7 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
     if not ticket_id:
-        await message.answer("ℹ️ No tienes un ticket activo en este momento.")
+        await message.answer(t(locale, "support_no_active_ticket"))
         await state.clear()
         return
 
@@ -117,4 +134,4 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
     }
 
     await api_client.send_ticket_message(ticket_id, payload)
-    await message.answer("📨 ¡Mensaje recibido! Te responderé lo antes posible. 🙌")
+    await message.answer(t(locale, "support_message_received"))

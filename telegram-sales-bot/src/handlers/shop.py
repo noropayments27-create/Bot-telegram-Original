@@ -1,5 +1,6 @@
 import asyncio
 import html
+import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 
@@ -17,6 +18,10 @@ from aiogram.types import (
 )
 
 from ..services.api_client import ApiClient
+from ..services.crypto_rates import usd_to_btc_rate, usd_to_ltc_rate
+from ..services.fx import apply_markup, usd_to_cop, usd_to_mxn
+from ..services.i18n import t
+from ..services.user_locale import get_user_locale
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
@@ -67,68 +72,185 @@ def _format_usd(amount: float) -> str:
     return f"{amount:.2f}"
 
 
-def _build_cart_text(cart_items: List[Dict[str, Any]], total_usd: float) -> str:
+def _build_cart_text(
+    cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
+) -> str:
     if not cart_items:
-        return "Carrito de Compras\n\nCarrito vacío."
+        return t(locale, "cart_empty")
 
-    lines = ["Carrito de Compras", "Tienes Añadido:"]
+    lines = [t(locale, "cart_title"), "", t(locale, "cart_products_title"), ""]
     for idx, item in enumerate(cart_items, start=1):
         name = html.escape(_strip_category_prefix(item["name"]))
         qty = int(item["qty"])
         lines.append(f"{idx}. {name} x{qty}")
     lines.append("")
-    lines.append(f"Precio Total: <b>${_format_usd(total_usd)} USD</b>")
+    lines.append(
+        t(locale, "cart_total_label").format(total=_format_usd(total_usd))
+    )
     return "\n".join(lines)
 
 
-def _build_cart_keyboard() -> InlineKeyboardMarkup:
+def _build_cart_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🛍️ Comprar Todo", callback_data="cart:checkout"),
-                InlineKeyboardButton(text="🗑️ Borrar Todo", callback_data="cart:clear"),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_cart_buy_all"),
+                    callback_data="cart:checkout",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_cart_clear_all"),
+                    callback_data="cart:clear",
+                ),
             ],
             [
-                InlineKeyboardButton(text="⬅️ Back", callback_data="shop:page:1"),
-                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="shop:page:1",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
 
 
-def _build_cart_summary(cart_items: List[Dict[str, Any]], total_usd: float) -> str:
+def _build_cart_empty_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="shop:page:1",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_cart_summary(
+    cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
+) -> str:
     if not cart_items:
         return ""
-    lines = ["Resumen del carrito:"]
+    lines = [t(locale, "cart_summary_title"), "", t(locale, "cart_products_title"), ""]
     for idx, item in enumerate(cart_items, start=1):
         name = html.escape(_strip_category_prefix(item["name"]))
         qty = int(item["qty"])
         lines.append(f"{idx}. {name} x{qty}")
-    lines.append(f"Total: ${_format_usd(total_usd)} USD")
     return "\n".join(lines)
 
 
-def _build_payment_instructions(
+def _build_products_only_summary(summary_text: Optional[str]) -> str:
+    if not summary_text:
+        return ""
+    lines: List[str] = []
+    for line in str(summary_text).splitlines():
+        low = line.lower().strip()
+        if not low:
+            continue
+        if low.startswith("resumen"):
+            continue
+        if low.startswith("productos en el carrito.") or low.startswith(
+            "products in the cart."
+        ):
+            continue
+        if low.startswith("📦"):
+            continue
+        if low.startswith("total:") or low.startswith("monto:") or low.startswith(
+            "amount:"
+        ):
+            continue
+        if low.startswith("💰") or low.startswith("💱"):
+            continue
+        if "total" in low and ("usd" in low or "$" in low):
+            if low.startswith("total"):
+                continue
+        lines.append(line)
+    return "\n".join(lines).strip()
+
+
+async def _build_payment_instructions(
     method_key: str,
     base_total: Optional[float],
     summary: Optional[str],
+    locale: str | None = None,
 ) -> str:
     total = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
-    total_text = _format_usd(total)
+    base_total_text = _format_usd(total)
+    total_text = base_total_text
+    summary_text = _build_products_only_summary(summary)
+    include_final_total = True
     instructions: List[str] = []
 
     if method_key == "nequi":
-        instructions.append("Nequi")
+        instructions.append(t(locale, "payment_nequi_title"))
+        instructions.append("")
         if NEQUI_NUMBER:
-            instructions.append(f"Número: {html.escape(NEQUI_NUMBER)}")
+            instructions.append(
+                t(locale, "payment_nequi_number").format(
+                    number=html.escape(NEQUI_NUMBER)
+                )
+            )
         if NEQUI_NAME:
-            instructions.append(f"Nombre: {html.escape(NEQUI_NAME)}")
+            instructions.append(
+                t(locale, "payment_nequi_name").format(
+                    name=html.escape(NEQUI_NAME)
+                )
+            )
+        if summary_text:
+            instructions.append("")
+            instructions.append(t(locale, "payment_products_title"))
+            instructions.append("")
+            instructions.append(summary_text)
+        instructions.append("")
+        instructions.append(
+            t(locale, "payment_amount_label").format(amount=base_total_text)
+        )
+        try:
+            rate = await usd_to_cop()
+            rate = apply_markup(rate, 0.02)
+            cop_amount = total * rate
+            instructions.append(
+                t(locale, "payment_send_label").format(
+                    amount=f"{cop_amount:,.0f} COP"
+                )
+            )
+        except Exception as exc:
+            print("[FX] Nequi COP error:", repr(exc))
+            instructions.append(t(locale, "payment_send_unavailable_cop"))
+        instructions.append("")
+        instructions.append(t(locale, "payment_after_pay"))
+        include_final_total = False
     elif method_key == "binance":
-        instructions.append("BINANCE ID")
+        instructions.append(t(locale, "payment_binance_title"))
+        instructions.append("")
         if BINANCE_ID:
-            instructions.append(f"ID: {html.escape(BINANCE_ID)}")
+            instructions.append(
+                t(locale, "payment_binance_id").format(
+                    id=html.escape(BINANCE_ID)
+                )
+            )
+        if summary_text:
+            instructions.append("")
+            instructions.append(t(locale, "payment_products_title"))
+            instructions.append("")
+            instructions.append(summary_text)
+        instructions.append("")
+        instructions.append(
+            t(locale, "payment_amount_label").format(amount=base_total_text)
+        )
+        instructions.append("")
+        instructions.append(t(locale, "payment_after_pay_short"))
+        include_final_total = False
     elif method_key == "crypto":
-        instructions.append("CRIPTO MONEDAS")
+        instructions.append(t(locale, "crypto_title"))
         if CRYPTO_WALLET_BTC:
             instructions.append(f"Bitcoin: {html.escape(CRYPTO_WALLET_BTC)}")
         if CRYPTO_WALLET_USDT_TRON:
@@ -138,28 +260,80 @@ def _build_payment_instructions(
         if CRYPTO_WALLET_LTC:
             instructions.append(f"LTC: {html.escape(CRYPTO_WALLET_LTC)}")
     elif method_key == "mp":
-        instructions.append("Mercado Pago")
+        instructions.append(t(locale, "payment_mp_title"))
+        instructions.append("")
         if MERCADOPAGO_ACCOUNT:
-            instructions.append(f"{html.escape(MERCADOPAGO_ACCOUNT)}")
+            clabe = str(MERCADOPAGO_ACCOUNT).replace("CLABE:", "").strip()
+            instructions.append(t(locale, "payment_mp_clabe"))
+            instructions.append(f"<code>{html.escape(clabe)}</code>")
+        if summary_text:
+            instructions.append("")
+            instructions.append(t(locale, "payment_products_title"))
+            instructions.append("")
+            instructions.append(summary_text)
+        instructions.append("")
+        instructions.append(
+            t(locale, "payment_amount_label").format(amount=base_total_text)
+        )
+        try:
+            rate = await usd_to_mxn()
+            rate = apply_markup(rate, 0.02)
+            mxn_amount = total * rate
+            instructions.append(
+                t(locale, "payment_send_label").format(
+                    amount=f"{mxn_amount:,.2f} MXN"
+                )
+            )
+        except Exception as exc:
+            print("[FX] MP MXN error:", repr(exc))
+            instructions.append(t(locale, "payment_send_unavailable_mxn"))
+        instructions.append("")
+        instructions.append(t(locale, "payment_after_pay"))
+        include_final_total = False
     elif method_key == "paypal":
-        instructions.append("Paypal +25%")
-        total = total * 1.25
-        total_text = _format_usd(total)
+        instructions.append(t(locale, "payment_paypal_title"))
+        instructions.append("")
         if PAYPAL_ACCOUNT:
-            instructions.append(f"Cuenta: {html.escape(PAYPAL_ACCOUNT)}")
+            instructions.append(
+                t(locale, "payment_paypal_account").format(
+                    account=html.escape(PAYPAL_ACCOUNT)
+                )
+            )
+        if summary_text:
+            instructions.append("")
+            instructions.append(t(locale, "payment_products_title"))
+            instructions.append("")
+            instructions.append(summary_text)
+        instructions.append("")
+        instructions.append(
+            t(locale, "payment_paypal_amount_note").format(amount=base_total_text)
+        )
+        paypal_total = total * 1.25
+        total_text = _format_usd(paypal_total)
+        instructions.append(
+            t(locale, "payment_send_total_label").format(amount=total_text)
+        )
+        instructions.append("")
+        instructions.append(t(locale, "payment_after_pay_short"))
+        include_final_total = False
     else:
-        instructions.append("Método de pago")
+        instructions.append(t(locale, "payment_method_default"))
 
     instructions.append("")
-    if summary:
-        instructions.append(summary)
+    if summary_text and include_final_total:
+        instructions.append(summary_text)
         instructions.append("")
-    instructions.append(f"<b>Total: ${total_text} USD</b>")
-    instructions.append("<b><i>Luego que hagas el pago, toma una captura</i></b>")
+    if include_final_total:
+        instructions.append(
+            t(locale, "payment_final_total").format(amount=total_text)
+        )
+        instructions.append(t(locale, "payment_final_note"))
     return "\n".join(instructions)
 
 
-def build_shop_keyboard(page: int, total_pages: int, count: int) -> InlineKeyboardMarkup:
+def build_shop_keyboard(
+    page: int, total_pages: int, count: int, locale: str | None = None
+) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
 
     for idx in range(1, count + 1):
@@ -188,37 +362,52 @@ def build_shop_keyboard(page: int, total_pages: int, count: int) -> InlineKeyboa
             rows.append(nav_row)
     rows.append(
         [
-            InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
-            InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="home:show"),
+            InlineKeyboardButton(text=t(locale, "btn_home"), callback_data="home:show"),
         ]
     )
 
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_product_detail_keyboard(page: int, index: int) -> InlineKeyboardMarkup:
+def build_product_detail_keyboard(
+    page: int, index: int, locale: str | None = None
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🛍️ Comprar", callback_data=f"shop:buy:{page}:{index}"
+                    text=t(locale, "btn_buy"),
+                    callback_data=f"shop:buy:{page}:{index}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="📥 Añadir al Carrito",
+                    text=t(locale, "btn_add_to_cart"),
                     callback_data=f"shop:cart:{page}:{index}",
                 )
             ],
             [
-                InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:page:{page}"),
-                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_go_to_cart"), callback_data="home:cart"
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data=f"shop:page:{page}",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"), callback_data="home:show"
+                ),
             ],
         ]
     )
 
 
-def build_category_keyboard(category_key: str, count: int) -> InlineKeyboardMarkup:
+def build_category_keyboard(
+    category_key: str, count: int, locale: str | None = None
+) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     for idx in range(1, count + 1):
         if (idx - 1) % 3 == 0:
@@ -231,68 +420,96 @@ def build_category_keyboard(category_key: str, count: int) -> InlineKeyboardMark
         )
     rows.append(
         [
-            InlineKeyboardButton(text="⬅️ Back", callback_data="home:show"),
-            InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="home:show"),
+            InlineKeyboardButton(text=t(locale, "btn_home"), callback_data="home:show"),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
-def build_category_detail_keyboard(category_key: str, index: int) -> InlineKeyboardMarkup:
+def build_category_detail_keyboard(
+    category_key: str, index: int, locale: str | None = None
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="🛍️ Comprar",
+                    text=t(locale, "btn_buy"),
                     callback_data=f"category:buy:{category_key}:{index}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="📥 Añadir al Carrito",
+                    text=t(locale, "btn_add_to_cart"),
                     callback_data=f"category:cart:{category_key}:{index}",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="⬅️ Back", callback_data=f"category:page:{category_key}"
+                    text=t(locale, "btn_go_to_cart"), callback_data="home:cart"
                 ),
-                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data=f"category:page:{category_key}",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"), callback_data="home:show"
+                ),
             ],
         ]
     )
 
 
-def build_detail_back_keyboard(page: int) -> InlineKeyboardMarkup:
+def build_detail_back_keyboard(
+    page: int, locale: str | None = None
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="⬅️ Back", callback_data=f"shop:page:{page}"),
-                InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show"),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"), callback_data=f"shop:page:{page}"
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"), callback_data="home:show"
+                ),
             ]
         ]
     )
 
 
-def get_category_title(category_key: str) -> str:
-    return _CATEGORY_TITLES.get(category_key, "Categoría")
+def get_category_title(category_key: str, locale: str | None = None) -> str:
+    key_map = {
+        "metodos": "category_title_metodos",
+        "vip": "category_title_vip",
+        "programas": "category_title_programas",
+    }
+    key = key_map.get(category_key)
+    if not key:
+        return t(locale, "category_default_title")
+    return t(locale, key)
 
 
-def format_products(items: List[Dict[str, Any]], page: int) -> str:
+def format_products(
+    items: List[Dict[str, Any]], page: int, locale: str | None = None
+) -> str:
     if not items:
-        return "No hay mas productos disponibles."
+        return t(locale, "no_more_products")
 
-    lines = [f"Productos Disponibles (Página {page})", ""]
+    lines = [t(locale, "shop_products_page").format(page=page), ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}. {item['display_name']}")
     return "\n".join(lines)
 
 
-def format_category_products(category_key: str, items: List[Dict[str, Any]]) -> str:
+def format_category_products(
+    category_key: str, items: List[Dict[str, Any]], locale: str | None = None
+) -> str:
     if not items:
-        return "No hay mas productos disponibles."
-    title = get_category_title(category_key)
-    lines = [f"{title} (Página 1)", ""]
+        return t(locale, "no_more_products")
+    title = get_category_title(category_key, locale)
+    lines = [t(locale, "category_page_title").format(title=title, page=1), ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}. {item['display_name']}")
     return "\n".join(lines)
@@ -340,16 +557,32 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
         "code": product.get("code"),
         "name": name,
         "display_name": _strip_category_prefix(name),
-        "description": product.get("description") or "Producto de prueba",
+        "description": product.get("description") or "",
         "price": float(product.get("price") or _DEFAULT_PRODUCT_PRICE_USD),
     }
 
 
-def _format_code_line(product: Dict[str, Any]) -> str:
+def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str:
     code = str(product.get("code") or "").strip()
     if not code:
         return ""
-    return f"Código: {code}\n\n"
+    return f"{t(locale, 'product_code_label').format(code=code)}\n\n"
+
+
+def _format_description(raw: Optional[str], locale: str | None = None) -> str:
+    if not raw:
+        return f"⌾ {t(locale, 'description_fallback')}"
+    lines: List[str] = []
+    for line in str(raw).splitlines():
+        clean = line.strip()
+        if not clean:
+            continue
+        clean = re.sub(r"^\s*(⌾+|[•\-\*\u2022◦·]+)\s*", "", clean)
+        clean = re.sub(r"^(⌾\s*)+", "", clean).strip()
+        if not clean:
+            continue
+        lines.append(f"⌾ {clean}")
+    return "\n".join(lines)
 
 
 async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
@@ -387,37 +620,37 @@ async def _get_category_items(category_key: str) -> List[Dict[str, Any]]:
 
 
 def build_payment_methods_keyboard(
-    order_id: str, page: int, index: int
+    order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Nequi",
+                    text=t(locale, "btn_method_nequi"),
                     callback_data=f"order:method:{order_id}:{page}:{index}:nequi",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Binance ID",
+                    text=t(locale, "btn_method_binance"),
                     callback_data=f"order:method:{order_id}:{page}:{index}:binance",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Cripto Monedas",
+                    text=t(locale, "btn_method_crypto"),
                     callback_data=f"order:method:{order_id}:{page}:{index}:crypto",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Mercado Pago",
+                    text=t(locale, "btn_method_mp"),
                     callback_data=f"order:method:{order_id}:{page}:{index}:mp",
                 )
             ],
             [
                 InlineKeyboardButton(
-                    text="Paypal +25%",
+                    text=t(locale, "btn_method_paypal"),
                     callback_data=f"order:method:{order_id}:{page}:{index}:paypal",
                 )
             ],
@@ -425,56 +658,102 @@ def build_payment_methods_keyboard(
     )
 
 
-def build_payment_prompt_keyboard(
-    order_id: str, page: int, index: int
+def build_crypto_assets_keyboard(
+    order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Ya pagué", callback_data=f"order:pay:{order_id}"
-                ),
-                InlineKeyboardButton(
-                    text="⬅️ Back",
-                    callback_data=f"order:methods:{order_id}:{page}:{index}",
-                ),
+                    text=t(locale, "btn_crypto_btc"),
+                    callback_data=f"cryptoasset:btc:{order_id}:{page}:{index}",
+                )
             ],
-            [InlineKeyboardButton(text="🏠 Inicio", callback_data="home:show")],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_crypto_usdt_tron"),
+                    callback_data=f"cryptoasset:usdt_tron:{order_id}:{page}:{index}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_crypto_usdt_bsc"),
+                    callback_data=f"cryptoasset:usdt_bsc:{order_id}:{page}:{index}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_crypto_ltc"),
+                    callback_data=f"cryptoasset:ltc:{order_id}:{page}:{index}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data=f"order:methods:{order_id}:{page}:{index}",
+                )
+            ],
         ]
     )
 
 
-async def render_shop_page(target: Message, user_id: int, page: int) -> None:
+def build_payment_prompt_keyboard(
+    order_id: str, page: int, index: int, locale: str | None = None
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_paid"),
+                    callback_data=f"order:pay:{order_id}",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data=f"order:methods:{order_id}:{page}:{index}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"), callback_data="home:show"
+                )
+            ],
+        ]
+    )
+
+
+async def render_shop_page(
+    target: Message, user_id: int, page: int, locale: str | None = None
+) -> None:
     catalog = await _get_shop_page_items(page)
     items = catalog["items"]
     total_pages = catalog["total_pages"]
 
     if not items:
-        await render_main_view(target, user_id, "No hay mas productos disponibles.")
+        await render_main_view(target, user_id, t(locale, "no_more_products"))
         return
 
-    text = format_products(items, page)
+    text = format_products(items, page, locale)
     await render_main_view(
         target,
         user_id,
         text,
-        reply_markup=build_shop_keyboard(page, total_pages, len(items)),
+        reply_markup=build_shop_keyboard(page, total_pages, len(items), locale),
     )
 
 
 async def render_category_page(
-    target: Message, user_id: int, category_key: str
+    target: Message, user_id: int, category_key: str, locale: str | None = None
 ) -> None:
     items = await _get_category_items(category_key)
     if not items:
-        await render_main_view(target, user_id, "No hay mas productos disponibles.")
+        await render_main_view(target, user_id, t(locale, "no_more_products"))
         return
-    text = format_category_products(category_key, items)
+    text = format_category_products(category_key, items, locale)
     await render_main_view(
         target,
         user_id,
         text,
-        reply_markup=build_category_keyboard(category_key, len(items)),
+        reply_markup=build_category_keyboard(category_key, len(items), locale),
     )
 
 
@@ -483,6 +762,9 @@ async def render_category_page(
 async def handle_shop(message: Message) -> None:
     if not message.from_user:
         return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -490,15 +772,20 @@ async def handle_shop(message: Message) -> None:
         BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
-        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        await message.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds)
+        )
         return
-    await render_shop_page(message, message.from_user.id, 1)
+    await render_shop_page(message, message.from_user.id, 1, locale)
 
 
 @router.callback_query(F.data.startswith("shop:page:"))
 async def handle_shop_page(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -507,12 +794,13 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     page = int(callback.data.split(":")[-1])
-    await render_shop_page(callback.message, callback.from_user.id, page)
+    await render_shop_page(callback.message, callback.from_user.id, page, locale)
     await callback.answer()
 
 
@@ -520,6 +808,9 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
 async def handle_category_page(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -528,12 +819,15 @@ async def handle_category_page(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     category_key = callback.data.split(":")[-1]
-    await render_category_page(callback.message, callback.from_user.id, category_key)
+    await render_category_page(
+        callback.message, callback.from_user.id, category_key, locale
+    )
     await callback.answer()
 
 
@@ -541,6 +835,9 @@ async def handle_category_page(callback: CallbackQuery) -> None:
 async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -549,7 +846,8 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -559,19 +857,19 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     catalog = await _get_shop_page_items(page)
     items = catalog["items"]
     if index < 1 or index > len(items):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
 
     product = items[index - 1]
     await state.update_data(selected_product_id=product["id"])
     text = (
         f"{product['display_name']}\n\n"
-        f"{_format_code_line(product)}"
-        "Descripción:\n"
-        f"{product['description']}\n\n"
-        f"Precio: ${int(product['price'])} USD"
+        f"{_format_code_line(product, locale)}"
+        f"{t(locale, 'product_description_label')}\n\n"
+        f"{_format_description(product['description'], locale)}\n\n"
+        f"{t(locale, 'product_price_label').format(price=int(product['price']))}"
     )
-    keyboard = build_product_detail_keyboard(page, index)
+    keyboard = build_product_detail_keyboard(page, index, locale)
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -585,6 +883,9 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
 async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -593,7 +894,8 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -601,18 +903,18 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
     index = int(index_text)
     items = await _get_category_items(category_key)
     if index < 1 or index > len(items):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     item = items[index - 1]
     await state.update_data(selected_product_id=item["id"])
     text = (
         f"{item['display_name']}\n\n"
-        f"{_format_code_line(item)}"
-        "Descripción:\n"
-        f"{item['description']}\n\n"
-        f"Precio: ${int(item['price'])} USD"
+        f"{_format_code_line(item, locale)}"
+        f"{t(locale, 'product_description_label')}\n\n"
+        f"{_format_description(item['description'], locale)}\n\n"
+        f"{t(locale, 'product_price_label').format(price=int(item['price']))}"
     )
-    keyboard = build_category_detail_keyboard(category_key, index)
+    keyboard = build_category_detail_keyboard(category_key, index, locale)
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -626,6 +928,9 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
 async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -634,7 +939,8 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -644,15 +950,15 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     catalog = await _get_shop_page_items(page)
     items = catalog["items"]
     if index < 1 or index > len(items):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     product = items[index - 1]
     if not product.get("id"):
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "No hay productos disponibles.",
-            reply_markup=build_detail_back_keyboard(page),
+            t(locale, "no_products_available"),
+            reply_markup=build_detail_back_keyboard(page, locale),
         )
         await callback.answer()
         return
@@ -670,8 +976,8 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
-            reply_markup=build_detail_back_keyboard(page),
+            t(locale, "order_create_failed"),
+            reply_markup=build_detail_back_keyboard(page, locale),
         )
         await callback.answer()
         return
@@ -685,8 +991,8 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "💳 Elige tu método de pago:",
-        reply_markup=build_payment_methods_keyboard(order["id"], page, index),
+        t(locale, "payment_choose_method"),
+        reply_markup=build_payment_methods_keyboard(order["id"], page, index, locale),
     )
     await callback.answer()
 
@@ -695,6 +1001,9 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
 async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -703,7 +1012,8 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -711,15 +1021,15 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     index = int(index_text)
     items = await _get_category_items(category_key)
     if index < 1 or index > len(items):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     product = items[index - 1]
     if not product.get("id"):
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "No hay productos disponibles.",
-            reply_markup=build_category_detail_keyboard(category_key, index),
+            t(locale, "no_products_available"),
+            reply_markup=build_category_detail_keyboard(category_key, index, locale),
         )
         await callback.answer()
         return
@@ -737,8 +1047,8 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
-            reply_markup=build_category_detail_keyboard(category_key, index),
+            t(locale, "order_create_failed"),
+            reply_markup=build_category_detail_keyboard(category_key, index, locale),
         )
         await callback.answer()
         return
@@ -752,8 +1062,8 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "💳 Elige tu método de pago:",
-        reply_markup=build_payment_methods_keyboard(order["id"], 1, 1),
+        t(locale, "payment_choose_method"),
+        reply_markup=build_payment_methods_keyboard(order["id"], 1, 1, locale),
     )
     await callback.answer()
 
@@ -762,6 +1072,9 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
 async def handle_shop_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -770,7 +1083,8 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -781,11 +1095,11 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     index_text = callback.data.split(":")[-1]
     index = int(index_text)
     if index < 1 or index > len(items):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     product = items[index - 1]
     if not product.get("id"):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     try:
         await api_client.add_to_cart(
@@ -796,18 +1110,18 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
                 "username": callback.from_user.username,
             }
         )
-        add_result = "Añadido al carrito ✅"
+        add_result = t(locale, "add_to_cart_success")
     except httpx.HTTPStatusError:
-        add_result = "No se pudo añadir al carrito."
+        add_result = t(locale, "add_to_cart_failed")
     text = (
         f"{product['display_name']}\n\n"
-        f"{_format_code_line(product)}"
-        "Descripción:\n"
-        f"{product['description']}\n\n"
-        f"Precio: ${int(product['price'])} USD\n\n"
+        f"{_format_code_line(product, locale)}"
+        f"{t(locale, 'product_description_label')}\n\n"
+        f"{_format_description(product['description'], locale)}\n\n"
+        f"{t(locale, 'product_price_label').format(price=int(product['price']))}\n\n"
         f"{add_result}"
     )
-    keyboard = build_product_detail_keyboard(page, index)
+    keyboard = build_product_detail_keyboard(page, index, locale)
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -821,6 +1135,9 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
 async def handle_category_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -829,7 +1146,8 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -837,11 +1155,11 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     index = int(index_text)
     items = await _get_category_items(category_key)
     if index < 1 or index > len(items):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     item = items[index - 1]
     if not item.get("id"):
-        await callback.answer("😕 No encontré ese producto. Intenta de nuevo, porfa.", show_alert=True)
+        await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     try:
         await api_client.add_to_cart(
@@ -852,18 +1170,18 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
                 "username": callback.from_user.username,
             }
         )
-        add_result = "Añadido al carrito ✅"
+        add_result = t(locale, "add_to_cart_success")
     except httpx.HTTPStatusError:
-        add_result = "No se pudo añadir al carrito."
+        add_result = t(locale, "add_to_cart_failed")
     text = (
         f"{item['display_name']}\n\n"
-        f"{_format_code_line(item)}"
-        "Descripción:\n"
-        f"{item['description']}\n\n"
-        f"Precio: ${int(item['price'])} USD\n\n"
+        f"{_format_code_line(item, locale)}"
+        f"{t(locale, 'product_description_label')}\n\n"
+        f"{_format_description(item['description'], locale)}\n\n"
+        f"{t(locale, 'product_price_label').format(price=int(item['price']))}\n\n"
         f"{add_result}"
     )
-    keyboard = build_category_detail_keyboard(category_key, index)
+    keyboard = build_category_detail_keyboard(category_key, index, locale)
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -877,6 +1195,9 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
 async def handle_home_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -885,18 +1206,31 @@ async def handle_home_cart(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    cart_data = await api_client.get_cart(callback.from_user.id)
+    try:
+        cart_data = await api_client.get_cart(callback.from_user.id)
+    except httpx.HTTPError:
+        await callback.answer(
+            t(locale, "cart_load_failed"),
+            show_alert=True,
+        )
+        return
     cart_items = cart_data.get("items", [])
     total_usd = float(cart_data.get("total_usd", 0))
+    cart_keyboard = (
+        _build_cart_keyboard(locale)
+        if cart_items
+        else _build_cart_empty_keyboard(locale)
+    )
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        _build_cart_text(cart_items, total_usd),
-        reply_markup=_build_cart_keyboard(),
+        _build_cart_text(cart_items, total_usd, locale),
+        reply_markup=cart_keyboard,
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -906,6 +1240,9 @@ async def handle_home_cart(callback: CallbackQuery) -> None:
 async def handle_cart_clear(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -914,7 +1251,8 @@ async def handle_cart_clear(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -922,8 +1260,8 @@ async def handle_cart_clear(callback: CallbackQuery) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        _build_cart_text([], 0.0),
-        reply_markup=_build_cart_keyboard(),
+        _build_cart_text([], 0.0, locale),
+        reply_markup=_build_cart_empty_keyboard(locale),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -933,6 +1271,9 @@ async def handle_cart_clear(callback: CallbackQuery) -> None:
 async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -941,7 +1282,8 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -952,11 +1294,11 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "Tu carrito está vacío.",
+            t(locale, "cart_empty_short"),
         )
         await callback.answer()
         return
-    cart_summary = _build_cart_summary(cart_items, cart_total)
+    cart_summary = _build_cart_summary(cart_items, cart_total, locale)
     try:
         result = await api_client.checkout_cart(
             {"telegram_id": callback.from_user.id, "username": callback.from_user.username}
@@ -965,7 +1307,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "Error procesando la compra. Intenta de nuevo.",
+            t(locale, "cart_checkout_error"),
         )
         await callback.answer()
         return
@@ -976,7 +1318,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
+            t(locale, "order_create_failed"),
         )
         await callback.answer()
         return
@@ -989,8 +1331,8 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "💳 Elige tu método de pago:",
-        reply_markup=build_payment_methods_keyboard(order_id, 1, 1),
+        t(locale, "payment_choose_method"),
+        reply_markup=build_payment_methods_keyboard(order_id, 1, 1, locale),
     )
     await callback.answer()
 
@@ -999,6 +1341,9 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
 async def handle_order_methods(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1007,7 +1352,8 @@ async def handle_order_methods(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -1017,8 +1363,8 @@ async def handle_order_methods(callback: CallbackQuery) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "💳 Elige tu método de pago:",
-        reply_markup=build_payment_methods_keyboard(order_id, page, index),
+        t(locale, "payment_choose_method"),
+        reply_markup=build_payment_methods_keyboard(order_id, page, index, locale),
     )
     await callback.answer()
 
@@ -1027,6 +1373,9 @@ async def handle_order_methods(callback: CallbackQuery) -> None:
 async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1035,22 +1384,32 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, order_id, page_text, index_text, method_key = callback.data.split(":", 5)
     page = int(page_text)
     index = int(index_text)
+    if method_key == "crypto":
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            t(locale, "payment_choose_crypto"),
+            reply_markup=build_crypto_assets_keyboard(order_id, page, index, locale),
+        )
+        await callback.answer()
+        return
     data = await state.get_data()
     total = data.get("current_order_total")
     summary = data.get("current_order_summary")
-    text = _build_payment_instructions(method_key, total, summary)
+    text = await _build_payment_instructions(method_key, total, summary, locale)
     await render_main_view(
         callback.message,
         callback.from_user.id,
         text,
-        reply_markup=build_payment_prompt_keyboard(order_id, page, index),
+        reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -1060,6 +1419,9 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
 async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1068,7 +1430,8 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -1091,7 +1454,7 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            "😕 No pude crear la orden en este momento.\n\nIntenta de nuevo en unos segundos, porfa. 🙏",
+            t(locale, "order_create_failed"),
         )
         await callback.answer()
         return
@@ -1104,31 +1467,32 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     )
 
     text = (
-        "✅ ¡Orden creada! 🛍️\n\n"
-        f"🧾 ID: {order['id']}\n"
-        f"💰 Total: ${order.get('total')}\n\n"
-        "💳 <b>Instrucciones de pago</b>\n"
-        f"🌐 Red: {instructions.get('network')}\n"
-        f"🪙 Activo: {instructions.get('asset')}\n"
-        f"👛 Wallet: {instructions.get('wallet')}\n"
-        f"📝 Nota: {instructions.get('note')}\n\n"
-        "📌 Cuando pagues, presiona <b>Ya pagué</b> y envía la captura. 📸"
+        f"{t(locale, 'order_created_title')}\n\n"
+        f"{t(locale, 'order_id_label').format(order_id=order['id'])}\n"
+        f"{t(locale, 'order_total_label').format(total=order.get('total'))}\n\n"
+        f"{t(locale, 'payment_instructions_title')}\n"
+        f"{t(locale, 'payment_network_label').format(network=instructions.get('network'))}\n"
+        f"{t(locale, 'payment_asset_label').format(asset=instructions.get('asset'))}\n"
+        f"{t(locale, 'payment_wallet_label').format(wallet=instructions.get('wallet'))}\n"
+        f"{t(locale, 'payment_note_label').format(note=instructions.get('note'))}\n\n"
+        f"{t(locale, 'payment_instructions_footer')}"
     )
 
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="✅ Ya pagué", callback_data=f"order:pay:{order['id']}"
+                    text=t(locale, "btn_paid"),
+                    callback_data=f"order:pay:{order['id']}",
                 ),
                 InlineKeyboardButton(
-                    text="📦 Ver estado",
+                    text=t(locale, "btn_status"),
                     callback_data=f"order:status:{order['id']}",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="⬅️ Back",
+                    text=t(locale, "btn_back"),
                     callback_data=f"shop:page:{page}",
                 )
             ],
@@ -1148,6 +1512,9 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
 async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1156,7 +1523,8 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
@@ -1185,7 +1553,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        "📸 Envíame la captura del pago aquí mismo para confirmar. 😊",
+        t(locale, "payment_screenshot_request"),
         reply_markup=filtered_markup,
     )
     await callback.answer()
@@ -1195,6 +1563,9 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1202,13 +1573,15 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
-        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        await message.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds)
+        )
         return
 
     data = await state.get_data()
     order_id = data.get("order_id") or data.get("current_order_id")
     if not order_id:
-        await message.answer("🛒 No veo una orden activa. Presiona <b>Comprar</b> de nuevo para crearla. 😊")
+        await message.answer(t(locale, "no_active_order"))
         await state.set_state(None)
         return
 
@@ -1229,7 +1602,7 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         error_code = error_payload.get("error") if isinstance(error_payload, dict) else None
         if error_code == "SCREENSHOT_ALREADY_SUBMITTED":
             notice = await message.answer(
-                "✅ ¡Captura recibida! Estamos revisando tu pago, porfa espera un momentico 🙏"
+                t(locale, "screenshot_received_already")
             )
             await asyncio.sleep(3)
             try:
@@ -1239,7 +1612,7 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
             return
         raise
     _SCREENSHOTS_RECEIVED.add(order_id)
-    await message.answer("✅ ¡Recibido! Estamos verificando tu pago ahora mismo 🔎⏳")
+    await message.answer(t(locale, "screenshot_received"))
     await state.update_data(order_id=None)
     await state.set_state(None)
 
@@ -1248,6 +1621,9 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
 async def handle_status_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1256,13 +1632,16 @@ async def handle_status_callback(callback: CallbackQuery, state: FSMContext) -> 
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     order_id = callback.data.split(":")[-1]
     await state.update_data(last_order_id=order_id)
-    await send_order_status(callback.message, callback.from_user.id, order_id)
+    await send_order_status(
+        callback.message, callback.from_user.id, order_id, locale
+    )
     await callback.answer()
 
 
@@ -1270,6 +1649,9 @@ async def handle_status_callback(callback: CallbackQuery, state: FSMContext) -> 
 async def handle_status_message(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1277,7 +1659,9 @@ async def handle_status_message(message: Message, state: FSMContext) -> None:
         BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     )
     if wait_seconds > 0:
-        await message.answer(f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.")
+        await message.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds)
+        )
         return
     data = await state.get_data()
     order_id = data.get("last_order_id")
@@ -1285,13 +1669,113 @@ async def handle_status_message(message: Message, state: FSMContext) -> None:
         await render_main_view(
             message,
             message.from_user.id,
-            "📦 No veo órdenes recientes para consultar todavía.\n\nHaz una compra y aquí podrás ver el estado. 😊",
+            t(locale, "no_recent_orders"),
         )
         return
-    await send_order_status(message, message.from_user.id, order_id)
+    await send_order_status(message, message.from_user.id, order_id, locale)
 
 
-def format_receipt(order: Dict[str, Any]) -> str:
+@router.callback_query(F.data.startswith("cryptoasset:"))
+async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+
+    _, asset_key, order_id, page_text, index_text = callback.data.split(":", 4)
+    page = int(page_text)
+    index = int(index_text)
+
+    data = await state.get_data()
+    total = float(data.get("current_order_total") or 0)
+
+    items_text = ""
+    summary = data.get("current_order_summary")
+    if summary:
+        items_text = _build_products_only_summary(summary)
+    else:
+        try:
+            cart = await api_client.get_cart(callback.from_user.id)
+            items = cart.get("items", [])
+            if items:
+                lines = []
+                for idx, item in enumerate(items, start=1):
+                    name = html.escape(
+                        (item.get("name") or t(locale, "item_fallback")).strip()
+                    )
+                    qty = int(item.get("qty") or 1)
+                    lines.append(f"{idx}. {name} x{qty}")
+                items_text = "\n".join(lines)
+        except Exception:
+            items_text = ""
+
+    wallet = ""
+    send_str = ""
+
+    if asset_key == "btc":
+        wallet = CRYPTO_WALLET_BTC
+        try:
+            rate = await usd_to_btc_rate()
+            send_amount = total * rate
+            send_str = f"{send_amount:.8f} BTC"
+        except Exception:
+            send_str = t(locale, "crypto_send_unavailable_btc")
+    elif asset_key == "ltc":
+        wallet = CRYPTO_WALLET_LTC
+        try:
+            rate = await usd_to_ltc_rate()
+            send_amount = total * rate
+            send_str = f"{send_amount:.8f} LTC"
+        except Exception:
+            send_str = t(locale, "crypto_send_unavailable_ltc")
+    elif asset_key == "usdt_tron":
+        wallet = CRYPTO_WALLET_USDT_TRON
+        send_str = f"{total:.2f} USDT (TRON)"
+    elif asset_key == "usdt_bsc":
+        wallet = CRYPTO_WALLET_USDT_BSC
+        send_str = f"{total:.2f} USDT (BSC)"
+    else:
+        send_str = f"{total:.2f} USDT"
+
+    if not wallet:
+        wallet = t(locale, "crypto_wallet_not_configured")
+
+    title = {
+        "btc": t(locale, "crypto_asset_btc"),
+        "usdt_tron": t(locale, "crypto_asset_usdt_tron"),
+        "usdt_bsc": t(locale, "crypto_asset_usdt_bsc"),
+        "ltc": t(locale, "crypto_asset_ltc"),
+    }.get(asset_key, t(locale, "crypto_asset_default"))
+
+    text = (
+        f"{title}\n\n"
+        f"{t(locale, 'crypto_wallet_label')}\n<code>{html.escape(wallet)}</code>\n\n"
+    )
+
+    if items_text:
+        text += (
+            f"{t(locale, 'payment_products_title')}\n\n{items_text}\n\n"
+        )
+
+    text += (
+        f"{t(locale, 'payment_amount_total_label').format(amount=f'{total:.2f}')}\n"
+        f"{t(locale, 'payment_send_label_bold').format(amount=send_str)}\n\n"
+        f"{t(locale, 'payment_after_pay_short')}"
+    )
+
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+def format_receipt(order: Dict[str, Any], locale: str | None = None) -> str:
     total = order.get("unit_price_at_purchase")
     paid_at = order.get("paid_at") or order.get("created_at")
     paid_at_text = paid_at
@@ -1299,17 +1783,19 @@ def format_receipt(order: Dict[str, Any]) -> str:
         paid_at_text = paid_at.isoformat()
 
     return (
-        "Recibo digital\n"
-        f"Orden: {order['id']}\n"
-        f"Producto: {order.get('product_id')}\n"
-        "Cantidad: 1\n"
-        f"Total: ${total}\n"
-        f"Fecha: {paid_at_text}\n"
-        "Estado: PAGADA"
+        f"{t(locale, 'receipt_title')}\n"
+        f"{t(locale, 'receipt_order').format(order_id=order['id'])}\n"
+        f"{t(locale, 'receipt_product').format(product_id=order.get('product_id'))}\n"
+        f"{t(locale, 'receipt_qty').format(qty=1)}\n"
+        f"{t(locale, 'receipt_total').format(total=total)}\n"
+        f"{t(locale, 'receipt_date').format(date=paid_at_text)}\n"
+        f"{t(locale, 'receipt_status')}"
     )
 
 
-async def send_order_status(target: Message, user_id: int, order_id: str) -> None:
+async def send_order_status(
+    target: Message, user_id: int, order_id: str, locale: str | None = None
+) -> None:
     result = await api_client.get_order(order_id)
     order = result.get("order")
 
@@ -1317,18 +1803,24 @@ async def send_order_status(target: Message, user_id: int, order_id: str) -> Non
         await render_main_view(
             target,
             user_id,
-            "😕 No encontré esa orden.\n\nVerifica e intenta de nuevo, porfa. 🙏",
+            t(locale, "order_not_found"),
         )
         return
 
     status = order.get("status")
     if status == "PAID":
-        await render_main_view(target, user_id, format_receipt(order))
+        await render_main_view(target, user_id, format_receipt(order, locale))
     elif status == "WAITING_PAYMENT":
-        await render_main_view(target, user_id, "🔎 Pago en revisión")
+        await render_main_view(target, user_id, t(locale, "status_paid_review"))
     elif status == "CREATED":
-        await render_main_view(target, user_id, "⏳ Pendiente de pago")
+        await render_main_view(target, user_id, t(locale, "status_pending_payment"))
     elif status == "CANCELLED":
-        await render_main_view(target, user_id, "❌ Pago rechazado. Escríbenos a Soporte y te ayudamos. 🤝")
+        await render_main_view(
+            target, user_id, t(locale, "status_payment_rejected")
+        )
     else:
-        await render_main_view(target, user_id, f"Estado actual: {status}")
+        await render_main_view(
+            target,
+            user_id,
+            t(locale, "status_current").format(status=status),
+        )

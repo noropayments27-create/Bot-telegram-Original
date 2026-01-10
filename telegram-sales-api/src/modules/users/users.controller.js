@@ -7,6 +7,21 @@ function isUuid(value) {
   return typeof value === "string" && UUID_REGEX.test(value);
 }
 
+function normalizeLocale(input, languageCode) {
+  const raw = (input || "").toString().trim().toLowerCase();
+  if (raw === "es" || raw === "en") {
+    return raw;
+  }
+  const lc = (languageCode || "").toString().toLowerCase();
+  if (!lc) {
+    return "es";
+  }
+  if (lc.startsWith("es")) {
+    return "es";
+  }
+  return "en";
+}
+
 async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
   let affiliateId = null;
 
@@ -56,6 +71,8 @@ async function isUserBanned(client, telegramId) {
 async function upsertTelegramUser(req, res, next) {
   const telegramId = Number(req.body.telegram_id);
   const username = req.body.username || null;
+  const languageCode = req.body.language_code || null;
+  const userLocale = normalizeLocale(req.body.locale, languageCode);
   const startAffiliateCode =
     req.body.start_affiliate_code || req.body.start_payload || null;
 
@@ -83,12 +100,13 @@ async function upsertTelegramUser(req, res, next) {
 
     const upserted = await client.query(
       `INSERT INTO users
-        (telegram_id, telegram_username, referred_by_affiliate_id, referred_at)
-       VALUES ($1, $2, $3, $4)
+        (telegram_id, telegram_username, referred_by_affiliate_id, referred_at, locale)
+       VALUES ($1, $2, $3, $4, $5)
        ON CONFLICT (telegram_id)
-       DO UPDATE SET telegram_username = EXCLUDED.telegram_username
+       DO UPDATE SET telegram_username = EXCLUDED.telegram_username,
+                     locale = COALESCE(EXCLUDED.locale, users.locale)
        RETURNING *, (xmax = 0) AS is_new`,
-      [telegramId, username, affiliateId, referredAt]
+      [telegramId, username, affiliateId, referredAt, userLocale]
     );
 
     await client.query("COMMIT");
@@ -134,4 +152,31 @@ async function getUserByTelegramId(req, res, next) {
   }
 }
 
-module.exports = { upsertTelegramUser, getUserByTelegramId };
+async function updateUserLocale(req, res) {
+  const telegramId = Number(req.params.telegram_id);
+  const userLocale = normalizeLocale(req.body && req.body.locale, null);
+
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+
+  try {
+    const pool = getPool();
+    const result = await pool.query(
+      "UPDATE users SET locale = $1 WHERE telegram_id = $2 RETURNING telegram_id, locale",
+      [userLocale, telegramId]
+    );
+    if (result.rowCount === 0) {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    return res.json({
+      ok: true,
+      telegram_id: telegramId,
+      locale: result.rows[0].locale,
+    });
+  } catch (error) {
+    return res.status(500).json({ error: "UPDATE_LOCALE_FAILED" });
+  }
+}
+
+module.exports = { upsertTelegramUser, getUserByTelegramId, updateUserLocale };

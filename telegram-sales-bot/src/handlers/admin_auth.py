@@ -11,6 +11,8 @@ from ..config import (
     BOT_TO_API_SECRET,
 )
 from ..services.api_client import ApiClient
+from ..services.i18n import t
+from ..services.user_locale import get_user_locale
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
@@ -21,6 +23,9 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN)
 async def handle_admin_auth_decision(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
         return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
     wait_seconds = check_global_rate_limit(
         callback.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -29,25 +34,26 @@ async def handle_admin_auth_decision(callback: CallbackQuery) -> None:
     )
     if wait_seconds > 0:
         await callback.answer(
-            f"⏳ Espera {wait_seconds}s antes de intentar de nuevo.", show_alert=True
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
         )
         return
     if callback.from_user.id not in ADMIN_TELEGRAM_IDS:
-        await callback.answer("⛔️ No autorizado.", show_alert=True)
+        await callback.answer(t(locale, "admin_not_authorized"), show_alert=True)
         return
     if not BOT_TO_API_SECRET:
-        await callback.answer("⚙️ Falta configurar BOT_TO_API_SECRET.", show_alert=True)
+        await callback.answer(t(locale, "admin_missing_secret"), show_alert=True)
         return
 
     parts = callback.data.split(":")
     if len(parts) < 3:
-        await callback.answer("⚠️ Solicitud inválida.", show_alert=True)
+        await callback.answer(t(locale, "admin_invalid_request"), show_alert=True)
         return
 
     request_id = parts[1]
     decision = parts[2].upper()
     if decision not in {"APPROVE", "DENY"}:
-        await callback.answer("⚠️ Decisión inválida.", show_alert=True)
+        await callback.answer(t(locale, "admin_invalid_decision"), show_alert=True)
         return
 
     try:
@@ -58,6 +64,8 @@ async def handle_admin_auth_decision(callback: CallbackQuery) -> None:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-        await callback.answer("✅ Confirmación enviada.")
+        await callback.answer(t(locale, "admin_confirm_sent"))
     except Exception:
-        await callback.answer("❌ No se pudo enviar la decisión. Intenta de nuevo.", show_alert=True)
+        await callback.answer(
+            t(locale, "admin_decision_failed"), show_alert=True
+        )

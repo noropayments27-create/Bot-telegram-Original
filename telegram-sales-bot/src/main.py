@@ -5,7 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from .config import TELEGRAM_BOT_TOKEN
-from .handlers import admin_auth, start, shop, support
+from .handlers import admin_auth, lang, start, shop, support
 
 
 async def main() -> None:
@@ -18,6 +18,7 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
 
     dp.include_router(start.router)
+    dp.include_router(lang.router)
     dp.include_router(shop.router)
     dp.include_router(support.router)
     dp.include_router(admin_auth.router)
