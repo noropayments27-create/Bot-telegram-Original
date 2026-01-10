@@ -76,8 +76,10 @@ async def handle_start(message: Message) -> None:
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
-    sent = await message.answer(
-        build_home_text(locale),
+    photo_url = "https://i.ibb.co/356LrnLr/bot.png"
+    sent = await message.answer_photo(
+        photo=photo_url,
+        caption=build_home_text(locale),
         reply_markup=build_main_keyboard(locale),
         parse_mode="HTML",
     )

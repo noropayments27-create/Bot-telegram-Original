@@ -175,6 +175,21 @@ async function submitPaymentProof(req, res, next) {
       return res.status(409).json({ error: "Order rejected" });
     }
 
+    const existingPaymentRes = await client.query(
+      "SELECT * FROM order_payments WHERE order_id = $1 FOR UPDATE",
+      [orderId]
+    );
+
+    if (
+      existingPaymentRes.rowCount > 0
+      && order.status === "WAITING_PAYMENT"
+    ) {
+      await client.query("ROLLBACK");
+      return res
+        .status(409)
+        .json({ error: "SCREENSHOT_ALREADY_SUBMITTED" });
+    }
+
     const paymentRes = await client.query(
       `INSERT INTO order_payments (order_id, screenshot_file_id, review_status)
        VALUES ($1, $2, 'PENDING')

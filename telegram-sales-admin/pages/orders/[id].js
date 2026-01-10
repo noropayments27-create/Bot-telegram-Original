@@ -3,6 +3,13 @@ import { useRouter } from "next/router";
 
 import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 
+function cleanProductName(name) {
+  if (!name) {
+    return "";
+  }
+  return String(name).replace(/^shop\s*\d+\s*-\s*/i, "").trim();
+}
+
 export default function OrderDetail() {
   const router = useRouter();
   const { id } = router.query;
@@ -101,7 +108,7 @@ export default function OrderDetail() {
     }
   };
 
-  if (!detail) {
+  if (!detail || !detail.order) {
     return (
       <main className="page">
         <section className="card">
@@ -111,14 +118,18 @@ export default function OrderDetail() {
     );
   }
 
-  const { order, user, product, payment, commission } = detail;
+  const { order, user, payment, commission } = detail;
   const hasProof = Boolean(payment && payment.screenshot_file_id);
   const isPaid = order.status === "PAID";
+  const orderNumberText = order.order_number
+    ? String(order.order_number).padStart(5, "0")
+    : "-";
+  const items = detail.items || [];
 
   return (
     <main className="page">
       <section className="card">
-        <h1>Orden {order.id}</h1>
+        <h1>Número de orden: {orderNumberText}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 
@@ -132,11 +143,25 @@ export default function OrderDetail() {
         <p>Telegram ID: {user.telegram_id}</p>
         <p>Username: {user.telegram_username || "-"}</p>
 
-        <h3>Producto</h3>
-        <p>ID: {product.id}</p>
-        <p>Código: {product.code || "N/A"}</p>
-        <p>Nombre: {product.name}</p>
-        <p>Precio: {product.price}</p>
+        <h3>Productos</h3>
+        {items.length > 0 ? (
+          <>
+            {items.map((item) => {
+              const qty = Number(item.qty || 0);
+              const displayName = cleanProductName(item.name);
+              const nameText =
+                qty > 1 ? `${displayName} x${qty}` : displayName;
+              return (
+                <p key={`${item.product_id}-${item.name}`}>
+                  {nameText}: {item.line_total_usd}
+                </p>
+              );
+            })}
+            <p>Total: {order.unit_price_at_purchase}</p>
+          </>
+        ) : (
+          <p>No hay productos registrados.</p>
+        )}
 
         <h3>Pago</h3>
         {payment ? (

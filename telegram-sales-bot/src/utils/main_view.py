@@ -36,7 +36,21 @@ async def render_main_view(
             if "message is not modified" in error_text:
                 return message
             if "message to edit not found" not in error_text and "message can't be edited" not in error_text:
-                return message
+                try:
+                    await message.bot.edit_message_caption(
+                        chat_id=chat_id,
+                        message_id=message_id,
+                        caption=text,
+                        reply_markup=reply_markup,
+                        parse_mode=parse_mode,
+                    )
+                    return message
+                except TelegramBadRequest as caption_exc:
+                    caption_error = str(caption_exc).lower()
+                    if "message is not modified" in caption_error:
+                        return message
+                    if "message to edit not found" not in caption_error and "message can't be edited" not in caption_error:
+                        return message
 
     sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
     if sent:

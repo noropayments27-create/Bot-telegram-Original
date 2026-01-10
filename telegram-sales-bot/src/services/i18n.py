@@ -148,7 +148,7 @@ MESSAGES = {
         "add_to_cart_success": "Añadido al carrito ✅",
         "add_to_cart_failed": "No se pudo añadir al carrito.",
         "screenshot_received": "✅ ¡Recibido! Estamos verificando tu pago ahora mismo 🔎⏳",
-        "screenshot_received_already": "✅ ¡Captura recibida! Estamos revisando tu pago, porfa espera un momentico 🙏",
+        "screenshot_received_already": "❌ No se pudo enviar, espera confirmación de tu primera imagen.",
         "wait_products_empty": "No hay mas productos disponibles.",
     },
     "en": {
@@ -298,7 +298,7 @@ MESSAGES = {
         "add_to_cart_success": "Added to cart ✅",
         "add_to_cart_failed": "Could not add to cart.",
         "screenshot_received": "✅ Received! We're verifying your payment now 🔎⏳",
-        "screenshot_received_already": "✅ Screenshot received! We're reviewing your payment, please wait a moment 🙏",
+        "screenshot_received_already": "❌ Could not send. Please wait for confirmation of your first image.",
         "wait_products_empty": "No more products available.",
     },
 }

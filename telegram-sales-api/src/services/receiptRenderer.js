@@ -55,7 +55,10 @@ function buildItemRowsHtml(items) {
   }
   return items
     .map((it) => {
-      const name = escapeHtml(cleanProductName(it.name ?? it.product_name ?? "Item"));
+      const rawName = cleanProductName(it.name ?? it.product_name ?? "Item");
+      const qty = Number(it.qty ?? 0);
+      const nameText = qty > 1 ? `${rawName} x${qty}` : rawName;
+      const name = escapeHtml(nameText);
       const price = escapeHtml(formatMoney(it.price ?? it.unit_price ?? it.product_price ?? 0));
       return `<tr><td>${name}</td><td>${price}</td></tr>`;
     })
@@ -82,6 +85,7 @@ function applyTokens(template, tokens) {
  * @param {string|number} data.commission
  * @param {string|number} data.total
  * @param {string} data.referredBy
+ * @param {string} data.orderNumber
  */
 async function renderReceiptPng(data) {
   if (!playwright) {
@@ -92,6 +96,7 @@ async function renderReceiptPng(data) {
 
   const html = applyTokens(template, {
     ORDER_ID: escapeHtml(data.orderId),
+    ORDER_NUMBER: escapeHtml(data.orderNumber || "-"),
     TELEGRAM_ID: escapeHtml(data.telegramId),
     USERNAME: escapeHtml(data.username || "N/A"),
     DATE_TIME: escapeHtml(data.dateTime || new Date().toLocaleString()),
@@ -114,9 +119,10 @@ async function renderReceiptPng(data) {
     });
 
     await page.setContent(html, { waitUntil: "load" });
-    await page.waitForTimeout(50);
+    await page.waitForSelector(".receipt", { timeout: 5000 });
 
-    await page.screenshot({ path: pngPath, fullPage: true });
+    const receipt = page.locator(".receipt");
+    await receipt.screenshot({ path: pngPath, omitBackground: true });
   } finally {
     if (browser) await browser.close().catch(() => {});
   }

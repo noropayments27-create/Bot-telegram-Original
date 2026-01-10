@@ -297,6 +297,7 @@ router.get("/orders", async (req, res, next) => {
 
     const listRes = await pool.query(
       `SELECT o.id, o.status, o.created_at,
+              o.order_number,
               u.telegram_id,
               p.id AS product_id, p.code AS product_code, p.name AS product_name,
               (op.id IS NOT NULL) AS has_payment_proof
@@ -352,11 +353,27 @@ router.get("/orders/:id", async (req, res, next) => {
       [orderId]
     );
 
+    const itemsRes = await pool.query(
+      `SELECT
+         oi.product_id,
+         p.code,
+         p.name,
+         oi.qty,
+         oi.unit_price_usd,
+         oi.line_total_usd
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       WHERE oi.order_id = $1
+       ORDER BY oi.created_at ASC`,
+      [orderId]
+    );
+
     const order = orderRes.rows[0];
 
     return res.json({
       order: {
         id: order.id,
+        order_number: order.order_number,
         status: order.status,
         unit_price_at_purchase: order.unit_price_at_purchase,
         created_at: order.created_at,
@@ -372,6 +389,14 @@ router.get("/orders/:id", async (req, res, next) => {
         name: order.product_name,
         price: order.product_price,
       },
+      items: itemsRes.rows.map((row) => ({
+        product_id: row.product_id,
+        code: row.code,
+        name: row.name,
+        qty: row.qty,
+        unit_price_usd: row.unit_price_usd,
+        line_total_usd: row.line_total_usd,
+      })),
       payment: paymentRes.rows[0] || null,
       commission: commissionRes.rows[0] || null,
     });
@@ -505,25 +530,39 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     const telegramId = order.telegram_id;
     order.paid_at = updatedOrderRes.rows[0].paid_at;
 
-    const notice =
-      "Aqui tienes tu recibo de pago, en breve momento se te enviara el contenido.";
+    try {
+      await sendMessage(
+        telegramId,
+        "🎉 Felicidades, hemos recibido tu pago 🎉 🥳"
+      );
+    } catch (err) {
+      console.error("Telegram congratulations failed", err);
+    }
+
     const receipt = buildReceiptMessage(order, paymentRes.rows[0]);
     try {
       let items = [];
-      let subtotal = 0;
+      const subtotal = order.unit_price_at_purchase;
       try {
         const itemsRes = await pool.query(
-          `SELECT oi.*, p.name, oi.unit_price
+          `SELECT
+             p.name,
+             oi.qty,
+             oi.unit_price_usd,
+             oi.line_total_usd
            FROM order_items oi
            JOIN products p ON p.id = oi.product_id
-           WHERE oi.order_id = $1`,
-          [order.id]
+           WHERE oi.order_id = $1
+           ORDER BY oi.created_at ASC`,
+          [orderId]
         );
         if (itemsRes.rowCount > 0) {
           items = itemsRes.rows.map((row) => {
-            const price = Number(row.unit_price ?? 0);
-            subtotal += Number.isFinite(price) ? price : 0;
-            return { name: row.name, price: row.unit_price };
+            const itemName = row.qty > 1 ? `${row.name} x${row.qty}` : row.name;
+            return {
+              name: itemName,
+              price: row.line_total_usd,
+            };
           });
         }
       } catch (err) {
@@ -531,13 +570,16 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       }
 
       if (items.length === 0) {
-        const price = Number(order.product_price ?? 0);
-        subtotal = Number.isFinite(price) ? price : 0;
         items = [{ name: order.product_name, price: order.product_price }];
       }
 
+      const orderNumberText = order.order_number
+        ? String(order.order_number).padStart(5, "0")
+        : "-";
+
       const receiptPng = await renderReceiptPng({
         orderId: order.id,
+        orderNumber: orderNumberText,
         telegramId,
         username: order.telegram_username,
         dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
@@ -556,10 +598,19 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     } catch (err) {
       console.error("Telegram receipt failed", err);
       try {
-        await sendMessage(telegramId, `${notice}\n\n${receipt}`);
+        await sendMessage(telegramId, receipt);
       } catch (fallbackError) {
         console.error("Telegram receipt fallback failed", fallbackError);
       }
+    }
+
+    try {
+      await sendMessage(
+        telegramId,
+        "⌚️ En breve momento estarás recibiendo tu contenido."
+      );
+    } catch (err) {
+      console.error("Telegram content notice failed", err);
     }
 
     setTimeout(async () => {
@@ -620,7 +671,7 @@ router.post("/orders/:id/reject", async (req, res, next) => {
       return res.status(400).json({ error: "NO_PAYMENT_PROOF" });
     }
 
-    const nextStatus = mode === "retry" ? "WAITING_PAYMENT" : "CANCELLED";
+    const nextStatus = mode === "retry" ? "CREATED" : "CANCELLED";
 
     const updatedOrderRes = await client.query(
       `UPDATE orders

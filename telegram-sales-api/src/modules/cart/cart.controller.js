@@ -352,8 +352,8 @@ async function checkoutCart(req, res, next) {
     await client.query(
       `UPDATE carts
        SET status = 'CHECKED_OUT', updated_at = now()
-       WHERE id = $1`,
-      [cart.id]
+       WHERE telegram_id = $1 AND status = 'ACTIVE'`,
+      [telegramId]
     );
 
     await client.query(
@@ -369,6 +369,13 @@ async function checkoutCart(req, res, next) {
     });
   } catch (error) {
     await client.query("ROLLBACK");
+    console.error("[cart/checkout] FAILED:", {
+      message: error?.message,
+      code: error?.code,
+      detail: error?.detail,
+      hint: error?.hint,
+    });
+    console.error(error);
     return res.status(500).json({
       error: "CHECKOUT_FAILED",
       message: "No se pudo procesar el checkout",

@@ -4,6 +4,13 @@ import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
 
+function cleanProductName(name) {
+  if (!name) {
+    return "";
+  }
+  return String(name).replace(/^shop\s*\d+\s*-\s*/i, "").trim();
+}
+
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
   { value: "WAITING_PAYMENT", label: "WAITING_PAYMENT" },
@@ -75,7 +82,7 @@ export default function OrdersPage() {
         <table style={{ width: "100%", marginTop: "16px" }}>
           <thead>
             <tr>
-              <th align="left">Order ID</th>
+              <th align="left">Número</th>
               <th align="left">Telegram</th>
               <th align="left">Producto</th>
               <th align="left">Estado</th>
@@ -86,12 +93,18 @@ export default function OrdersPage() {
           <tbody>
             {items.map((order) => (
               <tr key={order.id}>
-                <td>{order.id}</td>
+                <td>
+                  {order.order_number
+                    ? String(order.order_number).padStart(5, "0")
+                    : "-"}
+                </td>
                 <td>{order.telegram_id}</td>
                 <td>
                   {order.product_code
-                    ? `${order.product_code} - ${order.product_name || order.product_id}`
-                    : order.product_name || order.product_id}
+                    ? `${order.product_code} - ${cleanProductName(
+                        order.product_name || order.product_id
+                      )}`
+                    : cleanProductName(order.product_name || order.product_id)}
                 </td>
                 <td>{order.status}</td>
                 <td>{new Date(order.created_at).toLocaleString()}</td>
