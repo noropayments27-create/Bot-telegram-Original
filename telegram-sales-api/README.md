@@ -26,6 +26,8 @@ Configura estas variables en `.env`:
 - `ADMIN_TELEGRAM_IDS`
 - `BOT_TO_API_SECRET`
 - `ADMIN_TOKEN_SECRET` (opcional, si no se usa se reutiliza `ADMIN_PASSWORD`)
+- `DELIVERY_INITIAL_DELAY_MS` (opcional, default 10000)
+- `DELIVERY_MESSAGE_INTERVAL_MS` (opcional, default 1000)
 
 ## Desarrollo
 ```bash

@@ -162,9 +162,27 @@ async function addToCart(req, res, next) {
     }
 
     const productRes = await client.query(
-      `SELECT id, name, price
-       FROM products
-       WHERE id = $1 AND is_active = true`,
+      `SELECT p.id,
+              p.name,
+              p.price,
+              p.stock_mode,
+              p.stock_qty,
+              COALESCE(psu.available_units, 0) AS available_units,
+              COALESCE(psh.held_qty, 0) AS held_qty
+       FROM products p
+       LEFT JOIN (
+         SELECT product_id, COUNT(*)::int AS available_units
+         FROM product_stock_units
+         WHERE status = 'AVAILABLE'
+         GROUP BY product_id
+       ) psu ON psu.product_id = p.id
+       LEFT JOIN (
+         SELECT product_id, COALESCE(SUM(qty), 0)::int AS held_qty
+         FROM product_stock_holds
+         WHERE status = 'HELD' AND expires_at > now()
+         GROUP BY product_id
+       ) psh ON psh.product_id = p.id
+       WHERE p.id = $1 AND p.is_active = true`,
       [productId]
     );
     if (productRes.rowCount === 0) {
@@ -173,6 +191,60 @@ async function addToCart(req, res, next) {
     }
 
     const product = productRes.rows[0];
+    const cartItemRes = await client.query(
+      `SELECT qty
+       FROM cart_items
+       WHERE cart_id = $1 AND product_id = $2`,
+      [cart.id, product.id]
+    );
+    const currentQty = cartItemRes.rowCount
+      ? Number(cartItemRes.rows[0].qty)
+      : 0;
+    const nextQty = currentQty + qty;
+
+    let availableStock = null;
+    let isUnlimited = false;
+    if (product.stock_mode === "SIMPLE") {
+      if (product.stock_qty === null || product.stock_qty === undefined) {
+        isUnlimited = true;
+      } else {
+        const heldQty = Number(product.held_qty || 0);
+        availableStock = Math.max(Number(product.stock_qty) - heldQty, 0);
+      }
+    } else if (product.stock_mode === "UNITS") {
+      availableStock = Number(product.available_units || 0);
+    }
+
+    if (!isUnlimited && availableStock !== null) {
+      if (availableStock <= 0) {
+        console.log("[cart/add] out_of_stock:", {
+          product_id: product.id,
+          requested_qty: nextQty,
+          available: 0,
+        });
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OUT_OF_STOCK",
+          message: "❌ Producto sin stock por el momento.",
+          available: 0,
+        });
+      }
+      if (nextQty > availableStock) {
+        console.log("[cart/add] out_of_stock:", {
+          product_id: product.id,
+          requested_qty: nextQty,
+          available: availableStock,
+        });
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OUT_OF_STOCK",
+          message: `❌ Solo quedan ${availableStock} disponibles.`,
+          available: availableStock,
+        });
+      }
+    }
     const unitPrice = Number(product.price);
     const totalPrice = Number((unitPrice * qty).toFixed(2));
 
@@ -289,11 +361,14 @@ async function checkoutCart(req, res, next) {
     const itemsRes = await client.query(
       `SELECT ci.*,
               p.name,
-              p.price
+              p.price,
+              p.stock_mode,
+              p.stock_qty
        FROM cart_items ci
        JOIN products p ON p.id = ci.product_id
        WHERE ci.cart_id = $1
-       ORDER BY p.name ASC`,
+       ORDER BY p.name ASC
+       FOR UPDATE OF p`,
       [cart.id]
     );
 
@@ -304,6 +379,76 @@ async function checkoutCart(req, res, next) {
     }
 
     console.log("[cart/checkout] items_count:", itemsRes.rowCount);
+
+    const productIds = Array.from(
+      new Set(itemsRes.rows.map((item) => item.product_id))
+    );
+    const holdsMap = new Map();
+    const unitsMap = new Map();
+
+    if (productIds.length > 0) {
+      const holdsRes = await client.query(
+        `SELECT product_id, COALESCE(SUM(qty), 0)::int AS held_qty
+         FROM product_stock_holds
+         WHERE status = 'HELD' AND expires_at > now() AND product_id = ANY($1)
+         GROUP BY product_id`,
+        [productIds]
+      );
+      for (const row of holdsRes.rows) {
+        holdsMap.set(row.product_id, Number(row.held_qty));
+      }
+
+      const unitsRes = await client.query(
+        `SELECT product_id, COUNT(*)::int AS available_units
+         FROM product_stock_units
+         WHERE status = 'AVAILABLE' AND product_id = ANY($1)
+         GROUP BY product_id`,
+        [productIds]
+      );
+      for (const row of unitsRes.rows) {
+        unitsMap.set(row.product_id, Number(row.available_units));
+      }
+    }
+
+    for (const item of itemsRes.rows) {
+      const qty = Number(item.qty);
+      if (item.stock_mode === "SIMPLE") {
+        if (item.stock_qty !== null && item.stock_qty !== undefined) {
+          const heldQty = holdsMap.get(item.product_id) || 0;
+          const available = Math.max(Number(item.stock_qty) - heldQty, 0);
+          if (qty > available) {
+            console.log("[cart/checkout] out_of_stock:", {
+              product_id: item.product_id,
+              requested_qty: qty,
+              available,
+            });
+            await client.query("ROLLBACK");
+            return res.status(409).json({
+              ok: false,
+              error: "OUT_OF_STOCK",
+              message: `❌ Solo quedan ${available} disponibles.`,
+              available,
+            });
+          }
+        }
+      } else if (item.stock_mode === "UNITS") {
+        const available = unitsMap.get(item.product_id) || 0;
+        if (qty > available) {
+          console.log("[cart/checkout] out_of_stock:", {
+            product_id: item.product_id,
+            requested_qty: qty,
+            available,
+          });
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            ok: false,
+            error: "OUT_OF_STOCK",
+            message: `❌ Solo quedan ${available} disponibles.`,
+            available,
+          });
+        }
+      }
+    }
     const total = itemsRes.rows.reduce((sum, item) => {
       const unitPrice = Number(item.unit_price_usd ?? item.price);
       if (item.total_price_usd !== null && item.total_price_usd !== undefined) {
@@ -315,6 +460,13 @@ async function checkoutCart(req, res, next) {
 
     const firstItem = itemsRes.rows[0];
 
+    const expirySeconds = Math.max(
+      parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
+        || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 10) * 60
+        || 600,
+      1
+    );
+
     const orderRes = await client.query(
       `INSERT INTO orders
         (user_id, product_id, affiliate_id, status, unit_price_at_purchase)
@@ -324,10 +476,72 @@ async function checkoutCart(req, res, next) {
         user.id,
         firstItem.product_id,
         user.referred_by_affiliate_id,
-        "CREATED",
+        "WAITING_PAYMENT",
         totalRounded,
       ]
     );
+
+    for (const item of itemsRes.rows) {
+      const qty = Number(item.qty);
+      if (item.stock_mode === "SIMPLE") {
+        if (item.stock_qty !== null && item.stock_qty !== undefined) {
+          await client.query(
+            `INSERT INTO product_stock_holds
+              (product_id, order_id, cart_id, telegram_id, qty, status, expires_at)
+             VALUES ($1, $2, $3, $4, $5, 'HELD', now() + ($6 * interval '1 second'))`,
+            [
+              item.product_id,
+              orderRes.rows[0].id,
+              cart.id,
+              Number(telegramId),
+              qty,
+              expirySeconds,
+            ]
+          );
+        }
+      } else if (item.stock_mode === "UNITS") {
+        const holdRes = await client.query(
+          `WITH picked AS (
+             SELECT id
+             FROM product_stock_units
+             WHERE product_id = $1 AND status = 'AVAILABLE'
+             LIMIT $2
+             FOR UPDATE SKIP LOCKED
+           )
+           UPDATE product_stock_units
+           SET status = 'HELD',
+               held_by_order_id = $3,
+               held_by_telegram_id = $4,
+               held_by_username = $5,
+               held_at = now()
+           WHERE id IN (SELECT id FROM picked)
+           RETURNING id`,
+          [
+            item.product_id,
+            qty,
+            orderRes.rows[0].id,
+            Number(telegramId),
+            username,
+          ]
+        );
+
+        if (holdRes.rowCount < qty) {
+          console.log("[cart/checkout] hold_failed:", {
+            product_id: item.product_id,
+            requested_qty: qty,
+            held: holdRes.rowCount,
+          });
+          await client.query("ROLLBACK");
+          const available = holdRes.rowCount;
+          return res.status(409).json({
+            ok: false,
+            error: "OUT_OF_STOCK",
+            message: `❌ Solo quedan ${available} disponibles.`,
+            available,
+          });
+        }
+      }
+    }
 
     for (const item of itemsRes.rows) {
       const qty = Number(item.qty);

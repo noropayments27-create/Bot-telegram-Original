@@ -500,6 +500,9 @@ def format_products(
     lines = [t(locale, "shop_products_page").format(page=page), ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}. {item['display_name']}")
+        stock_line = _build_stock_line(item)
+        if stock_line:
+            lines.append(f"   {stock_line}")
     return "\n".join(lines)
 
 
@@ -512,6 +515,9 @@ def format_category_products(
     lines = [t(locale, "category_page_title").format(title=title, page=1), ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}. {item['display_name']}")
+        stock_line = _build_stock_line(item)
+        if stock_line:
+            lines.append(f"   {stock_line}")
     return "\n".join(lines)
 
 
@@ -559,6 +565,9 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
         "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "",
         "price": float(product.get("price") or _DEFAULT_PRODUCT_PRICE_USD),
+        "available_stock": product.get("available_stock"),
+        "stock_is_unlimited": product.get("stock_is_unlimited"),
+        "show_stock": product.get("show_stock"),
     }
 
 
@@ -567,6 +576,28 @@ def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str
     if not code:
         return ""
     return f"{t(locale, 'product_code_label').format(code=code)}\n\n"
+
+
+def _build_stock_line(product: Dict[str, Any]) -> str:
+    if product.get("show_stock") is not True:
+        return ""
+    if product.get("stock_is_unlimited") is True:
+        return ""
+    available = product.get("available_stock")
+    if available is None:
+        return ""
+    try:
+        available_int = int(available)
+    except (TypeError, ValueError):
+        return ""
+    return f"📦 Disponibles: {available_int}"
+
+
+def _format_stock_block(product: Dict[str, Any]) -> str:
+    line = _build_stock_line(product)
+    if not line:
+        return ""
+    return f"{line}\n\n"
 
 
 def _format_description(raw: Optional[str], locale: str | None = None) -> str:
@@ -867,6 +898,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         f"{_format_code_line(product, locale)}"
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(product['description'], locale)}\n\n"
+        f"{_format_stock_block(product)}"
         f"{t(locale, 'product_price_label').format(price=int(product['price']))}"
     )
     keyboard = build_product_detail_keyboard(page, index, locale)
@@ -912,6 +944,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         f"{_format_code_line(item, locale)}"
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(item['description'], locale)}\n\n"
+        f"{_format_stock_block(item)}"
         f"{t(locale, 'product_price_label').format(price=int(item['price']))}"
     )
     keyboard = build_category_detail_keyboard(category_key, index, locale)
@@ -1102,7 +1135,7 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     try:
-        await api_client.add_to_cart(
+        result = await api_client.add_to_cart(
             {
                 "telegram_id": callback.from_user.id,
                 "product_id": product["id"],
@@ -1110,14 +1143,21 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
                 "username": callback.from_user.username,
             }
         )
-        add_result = t(locale, "add_to_cart_success")
-    except httpx.HTTPStatusError:
+        if result.get("ok") is False and result.get("error") == "OUT_OF_STOCK":
+            backend_msg = result.get("message")
+            add_result = backend_msg or t(locale, "add_to_cart_failed")
+            if backend_msg:
+                await callback.answer(backend_msg, show_alert=True)
+        else:
+            add_result = t(locale, "add_to_cart_success")
+    except httpx.HTTPError:
         add_result = t(locale, "add_to_cart_failed")
     text = (
         f"{product['display_name']}\n\n"
         f"{_format_code_line(product, locale)}"
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(product['description'], locale)}\n\n"
+        f"{_format_stock_block(product)}"
         f"{t(locale, 'product_price_label').format(price=int(product['price']))}\n\n"
         f"{add_result}"
     )
@@ -1162,7 +1202,7 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     try:
-        await api_client.add_to_cart(
+        result = await api_client.add_to_cart(
             {
                 "telegram_id": callback.from_user.id,
                 "product_id": item["id"],
@@ -1170,14 +1210,21 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
                 "username": callback.from_user.username,
             }
         )
-        add_result = t(locale, "add_to_cart_success")
-    except httpx.HTTPStatusError:
+        if result.get("ok") is False and result.get("error") == "OUT_OF_STOCK":
+            backend_msg = result.get("message")
+            add_result = backend_msg or t(locale, "add_to_cart_failed")
+            if backend_msg:
+                await callback.answer(backend_msg, show_alert=True)
+        else:
+            add_result = t(locale, "add_to_cart_success")
+    except httpx.HTTPError:
         add_result = t(locale, "add_to_cart_failed")
     text = (
         f"{item['display_name']}\n\n"
         f"{_format_code_line(item, locale)}"
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(item['description'], locale)}\n\n"
+        f"{_format_stock_block(item)}"
         f"{t(locale, 'product_price_label').format(price=int(item['price']))}\n\n"
         f"{add_result}"
     )
@@ -1303,13 +1350,23 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         result = await api_client.checkout_cart(
             {"telegram_id": callback.from_user.id, "username": callback.from_user.username}
         )
-    except httpx.HTTPStatusError:
+    except httpx.HTTPError:
         await render_main_view(
             callback.message,
             callback.from_user.id,
             t(locale, "cart_checkout_error"),
         )
         await callback.answer()
+        return
+
+    if result.get("ok") is False and result.get("error") == "OUT_OF_STOCK":
+        backend_msg = result.get("message") or t(locale, "cart_checkout_error")
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            backend_msg,
+        )
+        await callback.answer(backend_msg, show_alert=True)
         return
 
     order_id = result.get("order_id")

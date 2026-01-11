@@ -135,6 +135,14 @@ class ApiClient:
                 response = await client.post(
                     url, json=payload, headers=self._headers(), timeout=15
                 )
+                if response.status_code == 409:
+                    try:
+                        data = response.json()
+                    except ValueError:
+                        data = {}
+                    return data if isinstance(data, dict) else {"ok": False}
+                if response.status_code in (200, 201):
+                    return response.json()
                 response.raise_for_status()
                 return response.json()
 
@@ -155,6 +163,14 @@ class ApiClient:
             response = await client.post(
                 url, json=payload, headers=self._headers(), timeout=15
             )
+            if response.status_code == 409:
+                try:
+                    data = response.json()
+                except ValueError:
+                    data = {}
+                return data if isinstance(data, dict) else {"ok": False}
+            if response.status_code in (200, 201):
+                return response.json()
             response.raise_for_status()
             return response.json()
 

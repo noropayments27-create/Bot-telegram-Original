@@ -1,4 +1,6 @@
 const { getPool } = require("../../db");
+const { consumeStockForOrder, releaseStockForOrder } = require("../../services/stock");
+const { deliverOrderToTelegram } = require("../../services/delivery");
 
 const ORDER_STATUS_PENDING = "CREATED"; // maps to PENDING_PAYMENT
 const ORDER_STATUS_WAITING_CONFIRMATION = "WAITING_PAYMENT"; // maps to WAITING_CONFIRMATION
@@ -232,7 +234,11 @@ async function markOrderPaid(req, res, next) {
     await client.query("BEGIN");
 
     const orderRes = await client.query(
-      "SELECT * FROM orders WHERE id = $1 FOR UPDATE",
+      `SELECT o.*, u.telegram_id
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       WHERE o.id = $1
+       FOR UPDATE`,
       [orderId]
     );
 
@@ -242,6 +248,26 @@ async function markOrderPaid(req, res, next) {
     }
 
     const order = orderRes.rows[0];
+
+    if (order.status === ORDER_STATUS_PAID) {
+      await client.query("COMMIT");
+      return res.status(200).json({ status: "already_paid" });
+    }
+
+    try {
+      await consumeStockForOrder(client, order.id);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "INSUFFICIENT_STOCK") {
+        return res.status(409).json({
+          ok: false,
+          code: "INSUFFICIENT_STOCK",
+          message: "Stock insuficiente para aprobar la orden.",
+          available: error.available ?? null,
+        });
+      }
+      throw error;
+    }
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
@@ -280,7 +306,32 @@ async function markOrderPaid(req, res, next) {
     }
 
     await client.query("COMMIT");
-    return res.json({ order: updatedOrderRes.rows[0] });
+
+    const deliveryResult = await deliverOrderToTelegram({
+      dbClient: pool,
+      orderId: order.id,
+      telegramId: order.telegram_id,
+    });
+
+    if (deliveryResult.delivered) {
+      await pool.query(
+        `UPDATE orders SET status = 'DELIVERED', delivered_at = now() WHERE id = $1`,
+        [order.id]
+      );
+      return res.json({
+        ok: true,
+        delivered: true,
+        order: updatedOrderRes.rows[0],
+      });
+    }
+
+    console.error("[order/delivery] failed:", deliveryResult.error);
+    return res.json({
+      ok: true,
+      delivered: false,
+      delivery_error: deliveryResult.error,
+      order: updatedOrderRes.rows[0],
+    });
   } catch (error) {
     await client.query("ROLLBACK");
     return next(error);
@@ -314,6 +365,8 @@ async function rejectPayment(req, res, next) {
        RETURNING *`,
       [orderId, ORDER_STATUS_REJECTED]
     );
+
+    await releaseStockForOrder(client, orderId);
 
     await client.query(
       `UPDATE order_payments
