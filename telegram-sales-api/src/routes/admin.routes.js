@@ -10,14 +10,19 @@ const {
 const {
   getFilePath,
   downloadFile,
-  sendDocument,
   sendMessage,
   sendPhoto,
-  sendVideo,
 } = require("../services/telegram");
 const { renderReceiptPng } = require("../services/receiptRenderer");
+const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
+const { deliverOrderToTelegram } = require("../services/delivery");
 
 const router = express.Router();
+
+const DELIVERY_START_DELAY_MS = Math.max(
+  Number(process.env.DELIVERY_START_DELAY_MS || 10000) || 10000,
+  0
+);
 
 function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
@@ -45,20 +50,6 @@ function mapBroadcastSegment(segment, hasCustomRecipients) {
   return segment;
 }
 
-function normalizePayload(payload) {
-  if (!payload) {
-    return {};
-  }
-  if (typeof payload === "string") {
-    try {
-      return JSON.parse(payload);
-    } catch (error) {
-      return {};
-    }
-  }
-  return payload;
-}
-
 function buildReceiptMessage(order, paymentProof) {
   const price = order.unit_price_at_purchase || order.product_price;
   const createdAt = order.paid_at || new Date();
@@ -75,104 +66,6 @@ function buildReceiptMessage(order, paymentProof) {
     lines.push(`Referencia: ${paymentProof.screenshot_file_id}`);
   }
   return lines.join("\n");
-}
-
-async function sendDeliveryFallback(telegramId, payload) {
-  if (payload.url) {
-    await sendMessage(
-      telegramId,
-      `No pude enviarte el archivo por Telegram, aquí está tu link: ${payload.url}`
-    );
-  } else {
-    await sendMessage(
-      telegramId,
-      "No pude enviarte el archivo por Telegram. Escríbenos por Soporte para entregártelo."
-    );
-  }
-}
-
-async function deliverProductContent(telegramId, deliveryType, deliveryPayload) {
-  const payload = normalizePayload(deliveryPayload);
-  if (!deliveryType) {
-    await sendMessage(
-      telegramId,
-      "No se pudo entregar el contenido. Escríbenos por Soporte."
-    );
-    return;
-  }
-
-  if (deliveryType === "TEXT") {
-    const text =
-      payload.text || payload.message || payload.content || payload.body || "";
-    if (!text) {
-      await sendMessage(
-        telegramId,
-        "No se pudo entregar el contenido. Escríbenos por Soporte."
-      );
-      return;
-    }
-    await sendMessage(telegramId, text);
-    return;
-  }
-
-  if (deliveryType === "LINK") {
-    if (!payload.url) {
-      await sendMessage(
-        telegramId,
-        "No se pudo entregar el contenido. Escríbenos por Soporte."
-      );
-      return;
-    }
-    const note = payload.note ? `${payload.note}\n` : "";
-    await sendMessage(telegramId, `${note}${payload.url}`);
-    return;
-  }
-
-  if (deliveryType === "EXPIRING_LINK") {
-    if (!payload.url) {
-      await sendMessage(
-        telegramId,
-        "No se pudo entregar el contenido. Escríbenos por Soporte."
-      );
-      return;
-    }
-    const note = payload.note ? `${payload.note}\n` : "";
-    const expiresAt = payload.expires_at
-      ? `\nExpira: ${payload.expires_at}`
-      : "";
-    await sendMessage(telegramId, `${note}${payload.url}${expiresAt}`);
-    return;
-  }
-
-  const mediaPayload = {
-    url: payload.url,
-    path: payload.path,
-    file_id: payload.telegram_file_id,
-    filename: payload.filename,
-  };
-
-  try {
-    if (deliveryType === "FILE") {
-      await sendDocument(telegramId, mediaPayload);
-      return;
-    }
-    if (deliveryType === "IMAGE") {
-      await sendPhoto(telegramId, mediaPayload);
-      return;
-    }
-    if (deliveryType === "VIDEO") {
-      await sendVideo(telegramId, mediaPayload);
-      return;
-    }
-  } catch (error) {
-    await sendDeliveryFallback(telegramId, payload);
-    return;
-  }
-
-  await sendMessage(
-    telegramId,
-    "No se pudo entregar el contenido. Escríbenos por Soporte."
-  );
 }
 
 function parseAdminTelegramIds() {
@@ -449,7 +342,6 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
   const orderId = req.params.id;
   const pool = getPool();
   const client = await pool.connect();
-
   try {
     await client.query("BEGIN");
 
@@ -458,7 +350,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
               p.name AS product_name,
               p.price AS product_price,
               p.delivery_type,
-              p.delivery_payload
+              p.delivery_payload,
+              p.delivery_template,
+              p.stock_mode
        FROM orders o
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
@@ -487,6 +381,21 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     if (paymentRes.rowCount === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_PAYMENT_PROOF" });
+    }
+
+    try {
+      await consumeStockForOrder(client, order.id);
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "INSUFFICIENT_STOCK") {
+        return res.status(409).json({
+          ok: false,
+          code: "INSUFFICIENT_STOCK",
+          message: "Stock insuficiente para aprobar la orden.",
+          available: error.available ?? null,
+        });
+      }
+      throw error;
     }
 
     const updatedOrderRes = await client.query(
@@ -613,17 +522,35 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       console.error("Telegram content notice failed", err);
     }
 
+    console.log("[order-delivery] scheduled", {
+      orderId: order.id,
+      delayMs: DELIVERY_START_DELAY_MS,
+    });
     setTimeout(async () => {
+      console.log("[order-delivery] starting", { orderId: order.id });
       try {
-        await deliverProductContent(
+        const deliveryResult = await deliverOrderToTelegram({
+          dbClient: pool,
+          orderId: order.id,
           telegramId,
-          order.delivery_type,
-          order.delivery_payload
-        );
+        });
+        if (deliveryResult.delivered) {
+          await pool.query(
+            `UPDATE orders
+             SET status = 'DELIVERED', delivered_at = now()
+             WHERE id = $1`,
+            [order.id]
+          );
+        } else {
+          console.error(
+            "[order/delivery] failed:",
+            deliveryResult.error || "DELIVERY_FAILED"
+          );
+        }
       } catch (error) {
         console.error("Telegram delivery failed", error);
       }
-    }, 10000);
+    }, DELIVERY_START_DELAY_MS);
 
     return res.json({ order: updatedOrderRes.rows[0] });
   } catch (error) {
@@ -680,6 +607,8 @@ router.post("/orders/:id/reject", async (req, res, next) => {
        RETURNING *`,
       [orderId, nextStatus]
     );
+
+    await releaseStockForOrder(client, orderId);
 
     await client.query(
       `UPDATE order_payments
