@@ -17,6 +17,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .menu import build_home_text, build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
 from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
@@ -41,6 +42,7 @@ async def handle_start(message: Message) -> None:
             t(locale, "rate_limit_wait").format(seconds=wait_seconds)
         )
         return
+    await stop_order_watch(message.from_user.id, "start")
     start_payload = None
 
     if message.text:
@@ -106,6 +108,7 @@ async def handle_home_show(callback: CallbackQuery) -> None:
             show_alert=True,
         )
         return
+    await stop_order_watch(callback.from_user.id, "home")
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await render_main_view(
         callback.message,
@@ -147,7 +150,9 @@ async def handle_language_panel(callback: CallbackQuery) -> None:
         f"{t(locale, 'language_panel_current').format(language=current)}\n\n"
         f"{t(locale, 'language_panel_choose')}"
     )
-    await callback.message.edit_text(
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
         text,
         reply_markup=build_language_keyboard(locale),
         parse_mode="HTML",

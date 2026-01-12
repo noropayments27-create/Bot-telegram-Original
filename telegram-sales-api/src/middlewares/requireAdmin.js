@@ -8,14 +8,32 @@ function requireAdmin(req, res, next) {
   const token = authHeader.startsWith("Bearer ")
     ? authHeader.slice("Bearer ".length).trim()
     : null;
+  const apiKey = req.header("x-admin-key") || "";
+  const expected =
+    process.env.ADMIN_API_KEY
+    || process.env.ADMIN_KEY
+    || process.env.ADMIN_SECRET;
 
-  const payload = verifyAdminToken(token);
-  if (!payload) {
-    return res.status(401).json({ error: "UNAUTHORIZED" });
+  if (process.env.NODE_ENV !== "production") {
+    console.log("[admin-auth] headers", {
+      has_admin_key: Boolean(apiKey),
+      has_authorization: Boolean(authHeader),
+      has_expected_key: Boolean(expected),
+    });
   }
 
-  req.admin = payload;
-  return next();
+  if (expected && apiKey && apiKey === expected) {
+    req.admin = { mode: "api_key", key_id: "env:ADMIN_API_KEY" };
+    return next();
+  }
+
+  const payload = token ? verifyAdminToken(token) : null;
+  if (payload) {
+    req.admin = { ...payload, mode: "jwt" };
+    return next();
+  }
+
+  return res.status(401).json({ error: "UNAUTHORIZED" });
 }
 
 module.exports = requireAdmin;

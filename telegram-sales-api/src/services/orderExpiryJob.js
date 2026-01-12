@@ -12,8 +12,8 @@ async function expireWaitingPaymentOrders() {
 
   const expirySeconds = Math.max(
     parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
-      || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 10) * 60
-      || 600,
+      || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 0) * 60
+      || 10,
     1
   );
   const pool = getPool();
@@ -65,6 +65,7 @@ async function expireWaitingPaymentOrders() {
       );
 
       expiredOrders.push(order);
+      console.log("[stock/hold] expired", { order_id: order.id });
     }
 
     await client.query("COMMIT");
@@ -76,14 +77,19 @@ async function expireWaitingPaymentOrders() {
     running = false;
   }
 
-  for (const order of expiredOrders) {
-    try {
-      await sendMessage(
-        order.telegram_id,
-        "⏰ Tu pedido expiró por falta de pago. El stock fue liberado."
-      );
-    } catch (error) {
-      console.error("[order-expiry] telegram notify failed:", error);
+  const notifyTelegram = String(
+    process.env.ORDER_EXPIRY_NOTIFY_TELEGRAM || ""
+  ).toLowerCase() === "true";
+  if (notifyTelegram) {
+    for (const order of expiredOrders) {
+      try {
+        await sendMessage(
+          order.telegram_id,
+          "⏰ Tu pedido expiró por falta de pago. El stock fue liberado."
+        );
+      } catch (error) {
+        console.error("[order-expiry] telegram notify failed:", error);
+      }
     }
   }
 

@@ -1,16 +1,25 @@
 const { sendMessage, sendPhoto, sendVideo, sendDocument } = require("./telegram");
 
-const DEFAULT_UNITS_TEMPLATE = `<b>{{title}}</b>
+const DEFAULT_UNITS_TEMPLATE = `━━━━━━━━━━━━━━━━━━
+🔐 <b>{{title}}</b>
+━━━━━━━━━━━━━━━━━━
 
-👤 <b>Usuario:</b> <code>{{username}}</code>
-🔑 <b>Password:</b> <code>{{password}}</code>
+👤 <b>Usuario:</b>
+<code>{{username}}</code>
+
+🔑 <b>Password:</b>
+<code>{{password}}</code>
 
 🗓 <b>Inicio:</b> <code>{{start_at}}</code>
 ⏳ <b>Expira:</b> <code>{{expires_at}}</code>
 
-📝 <b>Nota:</b> {{notes}}
+📝 <b>Notas:</b>
+{{notes}}
 
-🧾 <b>Comprador:</b> <code>{{buyer_telegram_id}}</code>{{buyer_username_line}}`;
+━━━━━━━━━━━━━━━━━━
+👤 <b>Comprador:</b>
+<code>{{buyer_telegram_id}}</code>
+━━━━━━━━━━━━━━━━━━`;
 
 function normalizeDelay(value, fallbackMs) {
   if (value === undefined || value === null || value === "") {
@@ -203,11 +212,43 @@ async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
       [orderId]
     );
 
+    let items = itemsRes.rows;
     if (itemsRes.rowCount === 0) {
-      return { delivered: false, error: "ORDER_ITEMS_NOT_FOUND" };
+      const orderRes = await dbClient.query(
+        `SELECT product_id, unit_price_at_purchase
+         FROM orders
+         WHERE id = $1`,
+        [orderId]
+      );
+      if (orderRes.rowCount === 0 || !orderRes.rows[0]?.product_id) {
+        return { delivered: false, error: "ORDER_ITEMS_NOT_FOUND" };
+      }
+      const productId = orderRes.rows[0].product_id;
+      const unitPrice = Number(orderRes.rows[0].unit_price_at_purchase || 0);
+      const qty = 1;
+      const total = Number((unitPrice * qty).toFixed(2));
+      try {
+        await dbClient.query(
+          `INSERT INTO order_items
+            (order_id, product_id, qty, unit_price_usd, total_price_usd, line_total_usd, price_usd)
+           VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+          [orderId, productId, qty, unitPrice, total, total, unitPrice]
+        );
+      } catch (error) {
+        console.warn("[order/delivery] fallback insert failed", {
+          orderId,
+          product_id: productId,
+          message: error?.message,
+        });
+      }
+      console.warn("[order/delivery] order_items missing, fallback used", {
+        orderId,
+        product_id: productId,
+      });
+      items = [{ product_id: productId, qty }];
     }
 
-    const productIds = itemsRes.rows.map((row) => row.product_id);
+    const productIds = items.map((row) => row.product_id);
     const productsRes = await dbClient.query(
       `SELECT id, name, delivery_type, delivery_payload, delivery_template, stock_mode
        FROM products
@@ -223,7 +264,7 @@ async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
 
     await sleep(DELIVERY_INITIAL_DELAY_MS);
 
-    for (const item of itemsRes.rows) {
+    for (const item of items) {
       const product = productsById.get(item.product_id);
       if (!product) {
         return { delivered: false, error: "PRODUCT_NOT_FOUND" };
@@ -258,6 +299,10 @@ async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
       });
     }
 
+    console.log("[order-delivery] sent", {
+      orderId,
+      deliveriesCount,
+    });
     return { delivered: true, deliveries_count: deliveriesCount };
   } catch (error) {
     return {

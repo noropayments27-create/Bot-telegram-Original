@@ -47,7 +47,7 @@ async function createOrder(req, res, next) {
     const user = await ensureUser(client, telegramId, username);
 
     const productRes = await client.query(
-      "SELECT * FROM products WHERE id = $1",
+      "SELECT * FROM products WHERE id = $1 FOR UPDATE",
       [productId]
     );
     if (productRes.rowCount === 0) {
@@ -61,8 +61,57 @@ async function createOrder(req, res, next) {
       return res.status(400).json({ error: "Product inactive" });
     }
 
+    if (product.stock_mode === "SIMPLE") {
+      if (product.stock_qty !== null && product.stock_qty !== undefined) {
+        const holdsRes = await client.query(
+          `SELECT COALESCE(SUM(qty), 0)::int AS held_qty
+           FROM product_stock_holds
+           WHERE product_id = $1
+             AND expires_at IS NOT NULL
+             AND expires_at > now()
+             AND status NOT IN ('CONSUMED','EXPIRED')`,
+          [product.id]
+        );
+        const heldQty = Number(holdsRes.rows[0]?.held_qty || 0);
+        const available = Math.max(Number(product.stock_qty) - heldQty, 0);
+        if (qty > available) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            ok: false,
+            error: "OUT_OF_STOCK",
+            message: `❌ Solo quedan ${available} disponibles.`,
+            available,
+          });
+        }
+      }
+    } else if (product.stock_mode === "UNITS") {
+      const unitsRes = await client.query(
+        `SELECT COUNT(*)::int AS available_units
+         FROM product_stock_units
+         WHERE product_id = $1 AND status = 'AVAILABLE'`,
+        [product.id]
+      );
+      const available = Number(unitsRes.rows[0]?.available_units || 0);
+      if (qty > available) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OUT_OF_STOCK",
+          message: `❌ Solo quedan ${available} disponibles.`,
+          available,
+        });
+      }
+    }
+
     const unitPrice = Number(product.price);
     const total = Number((unitPrice * qty).toFixed(2));
+
+    const expirySeconds = Math.max(
+      parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
+        || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 0) * 60
+        || 10,
+      1
+    );
 
     const orderRes = await client.query(
       `INSERT INTO orders
@@ -73,7 +122,165 @@ async function createOrder(req, res, next) {
         user.id,
         product.id,
         user.referred_by_affiliate_id,
-        ORDER_STATUS_PENDING,
+        ORDER_STATUS_WAITING_CONFIRMATION,
+        unitPrice,
+      ]
+    );
+
+    if (product.stock_mode === "SIMPLE") {
+      if (product.stock_qty !== null && product.stock_qty !== undefined) {
+        const existingHoldRes = await client.query(
+          `SELECT id, qty
+           FROM product_stock_holds
+           WHERE order_id = $1
+             AND product_id = $2
+             AND expires_at IS NOT NULL
+             AND expires_at > now()
+             AND status NOT IN ('CONSUMED','EXPIRED')
+           ORDER BY created_at DESC
+           LIMIT 1
+           FOR UPDATE`,
+          [orderRes.rows[0].id, product.id]
+        );
+        if (existingHoldRes.rowCount === 0) {
+          try {
+            const holdInsertRes = await client.query(
+              `INSERT INTO product_stock_holds
+                (product_id, order_id, telegram_id, qty, status, expires_at)
+               VALUES ($1, $2, $3, $4, 'HELD', now() + ($5 * interval '1 second'))
+               RETURNING id`,
+              [product.id, orderRes.rows[0].id, telegramId, qty, expirySeconds]
+            );
+            if (holdInsertRes.rowCount === 0) {
+              const error = new Error("HOLD_CREATE_FAILED");
+              error.status = 500;
+              throw error;
+            }
+            console.log("[stock/hold] inserted", {
+              hold_id: holdInsertRes.rows[0].id,
+              order_id: orderRes.rows[0].id,
+              product_id: product.id,
+              qty,
+              expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+            });
+          } catch (error) {
+            console.error("[stock/hold] insert_failed", {
+              order_id: orderRes.rows[0].id,
+              product_id: product.id,
+              qty,
+              pg_code: error.code,
+              message: error.message,
+            });
+            const wrapped = new Error("HOLD_CREATE_FAILED");
+            wrapped.status = 500;
+            throw wrapped;
+          }
+        } else if (Number(existingHoldRes.rows[0].qty) !== qty) {
+          const holdsRes = await client.query(
+            `SELECT COALESCE(SUM(qty), 0)::int AS held_qty
+             FROM product_stock_holds
+             WHERE product_id = $1
+               AND expires_at IS NOT NULL
+               AND expires_at > now()
+               AND status NOT IN ('CONSUMED','EXPIRED')
+               AND order_id <> $2`,
+            [product.id, orderRes.rows[0].id]
+          );
+          const heldQtyOther = Number(holdsRes.rows[0]?.held_qty || 0);
+          const available = Math.max(Number(product.stock_qty) - heldQtyOther, 0);
+          if (qty > available) {
+            await client.query("ROLLBACK");
+            return res.status(409).json({
+              ok: false,
+              error: "OUT_OF_STOCK",
+              message: `❌ Solo quedan ${available} disponibles.`,
+              available,
+            });
+          }
+          const updateRes = await client.query(
+            `UPDATE product_stock_holds
+             SET qty = $1,
+                 status = 'HELD',
+                 expires_at = now() + ($2 * interval '1 second'),
+                 updated_at = now()
+             WHERE id = $3
+             RETURNING id`,
+            [qty, expirySeconds, existingHoldRes.rows[0].id]
+          );
+          if (updateRes.rowCount === 0) {
+            const error = new Error("HOLD_CREATE_FAILED");
+            error.status = 500;
+            throw error;
+          }
+          console.log("[stock/hold] inserted", {
+            hold_id: updateRes.rows[0].id,
+            order_id: orderRes.rows[0].id,
+            product_id: product.id,
+            qty,
+            expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+          });
+        }
+      }
+    } else if (product.stock_mode === "UNITS") {
+      const heldRes = await client.query(
+        `SELECT COUNT(*)::int AS held_qty
+         FROM product_stock_units
+         WHERE held_by_order_id = $1
+           AND product_id = $2
+           AND status = 'HELD'`,
+        [orderRes.rows[0].id, product.id]
+      );
+      const alreadyHeld = Number(heldRes.rows[0]?.held_qty || 0);
+      if (alreadyHeld < qty) {
+        const needed = qty - alreadyHeld;
+        const holdRes = await client.query(
+          `WITH picked AS (
+             SELECT id
+             FROM product_stock_units
+             WHERE product_id = $1 AND status = 'AVAILABLE'
+             LIMIT $2
+             FOR UPDATE SKIP LOCKED
+           )
+           UPDATE product_stock_units
+           SET status = 'HELD',
+               held_by_order_id = $3,
+               held_by_telegram_id = $4,
+               held_by_username = $5,
+               held_at = now()
+           WHERE id IN (SELECT id FROM picked)
+           RETURNING id`,
+          [product.id, needed, orderRes.rows[0].id, telegramId, username]
+        );
+        if (holdRes.rowCount < needed) {
+          await client.query("ROLLBACK");
+          const available = alreadyHeld + holdRes.rowCount;
+          return res.status(409).json({
+            ok: false,
+            error: "OUT_OF_STOCK",
+            message: `❌ Solo quedan ${available} disponibles.`,
+            available,
+          });
+        }
+        console.log("[orders/create] hold_created", {
+          order_id: orderRes.rows[0].id,
+          product_id: product.id,
+          qty: alreadyHeld + holdRes.rowCount,
+          expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+        });
+      }
+    }
+
+    await client.query(
+      `INSERT INTO order_items
+        (order_id, product_id, qty, unit_price_usd, total_price_usd, line_total_usd, price_usd)
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [
+        orderRes.rows[0].id,
+        product.id,
+        qty,
+        unitPrice,
+        total,
+        total,
         unitPrice,
       ]
     );

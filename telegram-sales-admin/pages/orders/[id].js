@@ -1,7 +1,13 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
-import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
+import {
+  apiFetch,
+  apiFetchBinary,
+  clearAuthToken,
+  getApiBaseUrl,
+  getAuthToken,
+} from "../../lib/api";
 
 function cleanProductName(name) {
   if (!name) {
@@ -18,6 +24,7 @@ export default function OrderDetail() {
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [isSubmittingApprove, setIsSubmittingApprove] = useState(false);
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -67,12 +74,37 @@ export default function OrderDetail() {
   }, [id]);
 
   const handleApprove = async () => {
+    if (isSubmittingApprove) {
+      return;
+    }
+    setIsSubmittingApprove(true);
+    setError("");
     try {
-      await apiFetch(`/admin/orders/${id}/mark-paid`, { method: "POST" });
+      const baseUrl = getApiBaseUrl();
+      const token = getAuthToken();
+      const response = await fetch(`${baseUrl}/admin/orders/${id}/mark-paid`, {
+        method: "POST",
+        headers: token ? { Authorization: `Bearer ${token}` } : undefined,
+      });
+      if (response.status === 401) {
+        clearAuthToken();
+        router.replace("/login");
+        return;
+      }
+      if (response.status === 409) {
+        await loadDetail();
+        setMessage("⚠️ Este pedido ya fue procesado anteriormente");
+        return;
+      }
+      if (!response.ok) {
+        throw new Error("APPROVE_FAILED");
+      }
       setMessage("Pago aprobado.");
       await loadDetail();
     } catch (err) {
       setError("No se pudo aprobar el pago.");
+    } finally {
+      setIsSubmittingApprove(false);
     }
   };
 
@@ -120,7 +152,7 @@ export default function OrderDetail() {
 
   const { order, user, payment, commission } = detail;
   const hasProof = Boolean(payment && payment.screenshot_file_id);
-  const isPaid = order.status === "PAID";
+  const isAlreadyProcessed = order.status === "PAID" || order.status === "DELIVERED";
   const orderNumberText = order.order_number
     ? String(order.order_number).padStart(5, "0")
     : "-";
@@ -198,6 +230,13 @@ export default function OrderDetail() {
         )}
 
         <h3>Acciones</h3>
+        {isAlreadyProcessed && (
+          <div className="muted">
+            <p>✅ Pago aprobado</p>
+            <p>📦 Stock consumido</p>
+            <p>📬 Entrega realizada</p>
+          </div>
+        )}
         <div className="form">
           <label>
             Motivo (opcional)
@@ -210,7 +249,11 @@ export default function OrderDetail() {
           </label>
         </div>
         <div className="actions">
-          <button type="button" onClick={handleApprove} disabled={!hasProof || isPaid}>
+          <button
+            type="button"
+            onClick={handleApprove}
+            disabled={!hasProof || isAlreadyProcessed || isSubmittingApprove}
+          >
             Aprobar pago
           </button>
           <button type="button" onClick={() => handleReject("retry")} disabled={!hasProof}>

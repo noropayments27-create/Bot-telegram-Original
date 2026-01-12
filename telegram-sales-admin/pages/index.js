@@ -9,6 +9,7 @@ export default function Home() {
         <div className="actions">
           <Link className="link" href="/login">Login</Link>
           <Link className="link" href="/dashboard">Dashboard</Link>
+          <Link className="link" href="/inventory">Inventario</Link>
         </div>
       </section>
     </main>

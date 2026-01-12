@@ -462,8 +462,8 @@ async function checkoutCart(req, res, next) {
 
     const expirySeconds = Math.max(
       parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
-        || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 10) * 60
-        || 600,
+        || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 0) * 60
+        || 10,
       1
     );
 
@@ -498,6 +498,12 @@ async function checkoutCart(req, res, next) {
               expirySeconds,
             ]
           );
+          console.log("[stock/hold] created", {
+            order_id: orderRes.rows[0].id,
+            product_id: item.product_id,
+            qty,
+            expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+          });
         }
       } else if (item.stock_mode === "UNITS") {
         const holdRes = await client.query(
@@ -540,6 +546,12 @@ async function checkoutCart(req, res, next) {
             available,
           });
         }
+        console.log("[stock/hold] created", {
+          order_id: orderRes.rows[0].id,
+          product_id: item.product_id,
+          qty: holdRes.rowCount,
+          expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+        });
       }
     }
 

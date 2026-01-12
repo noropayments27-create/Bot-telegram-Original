@@ -40,6 +40,11 @@ from ..config import (
     PAYPAL_ACCOUNT,
 )
 from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.order_flow import (
+    guard_order_payable_or_redirect,
+    show_not_payable_and_redirect,
+)
+from ..utils.order_watch import start_order_watch, stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
@@ -1391,11 +1396,12 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         t(locale, "payment_choose_method"),
         reply_markup=build_payment_methods_keyboard(order_id, 1, 1, locale),
     )
+    await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 
 
 @router.callback_query(F.data.startswith("order:methods:"))
-async def handle_order_methods(callback: CallbackQuery) -> None:
+async def handle_order_methods(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
     locale = await get_user_locale(
@@ -1417,12 +1423,18 @@ async def handle_order_methods(callback: CallbackQuery) -> None:
     _, _, order_id, page_text, index_text = callback.data.split(":", 4)
     page = int(page_text)
     index = int(index_text)
+    if not await guard_order_payable_or_redirect(
+        api_client, order_id, callback.message, state, locale
+    ):
+        await callback.answer()
+        return
     await render_main_view(
         callback.message,
         callback.from_user.id,
         t(locale, "payment_choose_method"),
         reply_markup=build_payment_methods_keyboard(order_id, page, index, locale),
     )
+    await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 
 
@@ -1449,6 +1461,11 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
     _, _, order_id, page_text, index_text, method_key = callback.data.split(":", 5)
     page = int(page_text)
     index = int(index_text)
+    if not await guard_order_payable_or_redirect(
+        api_client, order_id, callback.message, state, locale
+    ):
+        await callback.answer()
+        return
     if method_key == "crypto":
         await render_main_view(
             callback.message,
@@ -1469,6 +1486,7 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
+    await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 
 
@@ -1562,6 +1580,7 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         text,
         reply_markup=keyboard,
     )
+    await start_order_watch(api_client, order["id"], callback.message, state, locale)
     await callback.answer()
 
 
@@ -1586,6 +1605,11 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     order_id = callback.data.split(":")[-1]
+    if not await guard_order_payable_or_redirect(
+        api_client, order_id, callback.message, state, locale
+    ):
+        await callback.answer()
+        return
     filtered_markup = None
     if callback.message.reply_markup:
         rows = []
@@ -1641,6 +1665,10 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         await message.answer(t(locale, "no_active_order"))
         await state.set_state(None)
         return
+    if not await guard_order_payable_or_redirect(
+        api_client, order_id, message, state, locale
+    ):
+        return
 
     screenshot_file_id = message.photo[-1].file_id
     payload = {
@@ -1657,6 +1685,13 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         except Exception:
             error_payload = None
         error_code = error_payload.get("error") if isinstance(error_payload, dict) else None
+        if exc.response.status_code in (404, 409):
+            print(
+                "[bot/order_guard] not_payable",
+                {"order_id": order_id, "status": exc.response.status_code},
+            )
+            await show_not_payable_and_redirect(message, state, locale)
+            return
         if error_code == "SCREENSHOT_ALREADY_SUBMITTED":
             notice = await message.answer(
                 t(locale, "screenshot_received_already")
@@ -1666,12 +1701,14 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
                 await notice.delete()
             except Exception:
                 pass
+            await stop_order_watch(message.from_user.id, "already_submitted")
             return
         raise
     _SCREENSHOTS_RECEIVED.add(order_id)
     await message.answer(t(locale, "screenshot_received"))
     await state.update_data(order_id=None)
     await state.set_state(None)
+    await stop_order_watch(message.from_user.id, "proof_submitted")
 
 
 @router.callback_query(F.data.startswith("order:status:"))
@@ -1744,6 +1781,11 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
     _, asset_key, order_id, page_text, index_text = callback.data.split(":", 4)
     page = int(page_text)
     index = int(index_text)
+    if not await guard_order_payable_or_redirect(
+        api_client, order_id, callback.message, state, locale
+    ):
+        await callback.answer()
+        return
 
     data = await state.get_data()
     total = float(data.get("current_order_total") or 0)
@@ -1829,6 +1871,7 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
+    await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 
 
