@@ -10,12 +10,13 @@ export default function Login() {
   const [error, setError] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [requestId, setRequestId] = useState("");
+  const [rememberMe, setRememberMe] = useState(false);
 
   useEffect(() => {
-    if (getAuthToken()) {
-      router.replace("/orders");
-    }
-  }, [router]);
+    return () => {
+      document.body.classList.remove("login-success");
+    };
+  }, []);
 
   useEffect(() => {
     if (!waiting || !requestId) {
@@ -30,7 +31,10 @@ export default function Login() {
         const data = await response.json();
         if (data.status === "APPROVED" && data.token) {
           setAuthToken(data.token);
-          router.replace("/orders");
+          document.body.classList.add('login-success');
+          setTimeout(() => {
+            router.replace("/dashboard");
+          }, 1000);
           return;
         }
         if (data.status === "DENIED") {
@@ -71,6 +75,7 @@ export default function Login() {
         body: JSON.stringify({
           username: username.trim(),
           password: password.trim(),
+          remember_me: rememberMe,
         }),
       });
       if (response.status === 401) {
@@ -90,42 +95,46 @@ export default function Login() {
   };
 
   return (
-    <main className="page">
-      <section className="card">
-        <h1>Inicio de Sesión Admin</h1>
-        <p className="muted">
-          Ingresa usuario y clave, luego confirma en Telegram.
-        </p>
-        {error && <p className="error">{error}</p>}
-        <form className="form" onSubmit={handleSubmit}>
-          <label>
-            Usuario
+    <>
+      <div className="title-container">
+        <h1>Admin Bot</h1>
+        <p>Noropayments.shop</p>
+      </div>
+      <main className="page page-login">
+        <div className="login-container">
+          <div className="user-icon-bg">
+            <img src="https://i.ibb.co/356LrnLr/bot.png" alt="User Icon" />
+          </div>
+          <form className="login-form" onSubmit={handleSubmit}>
             <input
               type="text"
               value={username}
               onChange={(event) => setUsername(event.target.value)}
-              placeholder="Usuario"
+              placeholder="USUARIO"
               disabled={waiting}
+              required
             />
-          </label>
-          <label>
-            Clave
             <input
               type="password"
               value={password}
               onChange={(event) => setPassword(event.target.value)}
-              placeholder="Clave"
+              placeholder="CONTRASEÑA"
               disabled={waiting}
+              required
             />
-          </label>
-          {waiting && (
-            <p className="muted">Esperando confirmacion en Telegram...</p>
-          )}
-          <button type="submit" disabled={waiting}>
-            Ingresar
-          </button>
-        </form>
-      </section>
-    </main>
+            <label className="remember-me">
+              <input
+                type="checkbox"
+                checked={rememberMe}
+                onChange={(event) => setRememberMe(event.target.checked)}
+                disabled={waiting}
+              />
+              Recuerdame
+            </label>
+            <button type="submit" disabled={waiting}>Inicio</button>
+          </form>
+        </div>
+      </main>
+    </>
   );
 }

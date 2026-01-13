@@ -23,11 +23,35 @@ app.use(helmet());
 // - Permite llamadas desde http://localhost:3000
 // - Permite header Authorization (para endpoints /admin/*)
 // - Expone Content-Disposition (para descarga de screenshot)
+const allowedOrigins = new Set([
+  "http://localhost:3000",
+  "http://127.0.0.1:3000",
+]);
+
 const corsOptions = {
-  origin: ['http://localhost:3000', 'http://127.0.0.1:3000'],
-  methods: ['GET', 'POST', 'PUT', 'PATCH', 'DELETE', 'OPTIONS'],
-  allowedHeaders: ['Content-Type', 'Authorization', 'x-admin-key'],
-  exposedHeaders: ['Content-Disposition'],
+  origin(origin, callback) {
+    if (!origin) {
+      return callback(null, true);
+    }
+    if (allowedOrigins.has(origin)) {
+      return callback(null, true);
+    }
+    try {
+      const url = new URL(origin);
+      const isLocalhost =
+        (url.hostname === "localhost" || url.hostname === "127.0.0.1")
+        && url.protocol === "http:";
+      if (isLocalhost) {
+        return callback(null, true);
+      }
+    } catch (error) {
+      // Ignore invalid origins and reject below.
+    }
+    return callback(new Error("Not allowed by CORS"));
+  },
+  methods: ["GET", "POST", "PUT", "PATCH", "DELETE", "OPTIONS"],
+  allowedHeaders: ["Content-Type", "Authorization", "x-admin-key"],
+  exposedHeaders: ["Content-Disposition"],
   credentials: false,
 };
 

@@ -12,6 +12,7 @@ function cleanProductName(name) {
 }
 
 const STATUS_OPTIONS = [
+  { value: "RECENT", label: "Nuevos" },
   { value: "", label: "Todos" },
   { value: "WAITING_PAYMENT", label: "Esperando Pago" },
   { value: "CREATED", label: "Creado" },
@@ -23,10 +24,21 @@ const STATUS_OPTIONS = [
 export default function OrdersPage() {
   const router = useRouter();
   const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("");
+  const [status, setStatus] = useState("RECENT");
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
+
+  const filterRecent = (orders) => {
+    const cutoff = Date.now() - 5 * 60 * 1000;
+    return orders.filter((order) => {
+      if (order.status === "WAITING_PAYMENT") {
+        return true;
+      }
+      const createdAt = new Date(order.created_at).getTime();
+      return Number.isFinite(createdAt) && createdAt >= cutoff;
+    });
+  };
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -37,17 +49,20 @@ export default function OrdersPage() {
   useEffect(() => {
     const loadOrders = async () => {
       try {
+        const isRecent = status === "RECENT";
         const params = new URLSearchParams({
-          page: String(page),
+          page: String(isRecent ? 1 : page),
           page_size: "20",
         });
-        if (status) {
+        if (status && !isRecent) {
           params.set("status", status);
         }
 
         const data = await apiFetch(`/admin/orders?${params.toString()}`);
-        setItems(data.items || []);
-        setTotalPages(data.total_pages || 1);
+        const fetchedItems = data.items || [];
+        const nextItems = isRecent ? filterRecent(fetchedItems) : fetchedItems;
+        setItems(nextItems);
+        setTotalPages(isRecent ? 1 : data.total_pages || 1);
         setError("");
       } catch (err) {
         setError("No se pudo cargar las ordenes.");
@@ -55,6 +70,11 @@ export default function OrdersPage() {
     };
 
     loadOrders();
+    if (status !== "RECENT") {
+      return undefined;
+    }
+    const interval = setInterval(loadOrders, 30 * 1000);
+    return () => clearInterval(interval);
   }, [page, status]);
 
   const handleStatusChange = (event) => {
@@ -91,7 +111,31 @@ export default function OrdersPage() {
             </tr>
           </thead>
           <tbody>
-            {items.map((order) => (
+            {items.length === 0 && status === "RECENT" ? (
+              <>
+                <tr>
+                  <td>—</td>
+                  <td>0000000000</td>
+                  <td>Producto de ejemplo</td>
+                  <td>CREATED</td>
+                  <td>Hace 2 min</td>
+                  <td>
+                    <span className="muted">Ver</span>
+                  </td>
+                </tr>
+                <tr>
+                  <td>—</td>
+                  <td>0000000001</td>
+                  <td>Producto de ejemplo</td>
+                  <td>WAITING_PAYMENT</td>
+                  <td>Hace 4 min</td>
+                  <td>
+                    <span className="muted">Ver</span>
+                  </td>
+                </tr>
+              </>
+            ) : (
+              items.map((order) => (
               <tr key={order.id}>
                 <td>
                   {order.order_number
@@ -114,25 +158,28 @@ export default function OrdersPage() {
                   </Link>
                 </td>
               </tr>
-            ))}
+              ))
+            )}
           </tbody>
         </table>
-        <div className="actions" style={{ marginTop: "16px" }}>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-            disabled={page <= 1}
-          >
-            Anterior
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
-            disabled={page >= totalPages}
-          >
-            Siguiente
-          </button>
-        </div>
+        {!(status === "RECENT" && items.length === 0) && (
+          <div className="actions" style={{ marginTop: "16px" }}>
+            <button
+              type="button"
+              onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
+              disabled={page <= 1}
+            >
+              Anterior
+            </button>
+            <button
+              type="button"
+              onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
+              disabled={page >= totalPages}
+            >
+              Siguiente
+            </button>
+          </div>
+        )}
       </section>
     </main>
   );

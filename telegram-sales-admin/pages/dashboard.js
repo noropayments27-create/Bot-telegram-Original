@@ -1,40 +1,45 @@
-import { useEffect, useState } from "react";
+import Link from "next/link";
 
 export default function Dashboard() {
-  const [health, setHealth] = useState(null);
-  const [error, setError] = useState(null);
+  const navCards = [
+    { href: "/orders", label: "Ordenes" },
+    { href: "/inventory", label: "Inventario" },
+    { href: "/tickets", label: "Tickets" },
+    { href: "/broadcasts", label: "Difusiones" },
+    { href: "/payouts", label: "Pagos" },
+    { href: "/affiliates", label: "Afiliados" },
+  ];
 
-  // ✅ Define baseUrl en el scope del componente (ya existe siempre aquí)
-  const baseUrl = process.env.NEXT_PUBLIC_API_BASE_URL;
-
-  useEffect(() => {
-    console.log("BASE URL:", JSON.stringify(baseUrl));
-
-    const loadHealth = async () => {
-      try {
-        const response = await fetch(`${baseUrl}/health`);
-        if (!response.ok) throw new Error("Health check failed");
-        const data = await response.json();
-        setHealth(data);
-      } catch (err) {
-        setError("No se pudo obtener el estado de la API");
-      }
-    };
-
-    if (baseUrl) {
-      loadHealth();
-    } else {
-      setError("NEXT_PUBLIC_API_BASE_URL no está configurado");
-    }
-  }, [baseUrl]);
+  const stats = [
+    { label: "Clientes", value: "128" },
+    { label: "Ventas totales", value: "42" },
+    { label: "Total vendido", value: "$3,580" },
+    { label: "Afiliados", value: "19" },
+  ];
 
   return (
     <main className="page">
       <section className="card">
-        <h1>Dashboard</h1>
-        <p className="muted">Estado del servicio</p>
-        {error && <p className="error">{error}</p>}
-        {health && <pre className="code">{JSON.stringify(health, null, 2)}</pre>}
+        <h1>Panel Principal</h1>
+        <p className="muted">Accesos directos</p>
+        <div className="dashboard-grid">
+          {navCards.map((item) => (
+            <Link key={item.href} href={item.href} className="nav-card">
+              {item.label}
+            </Link>
+          ))}
+        </div>
+      </section>
+      <section className="card" style={{ marginTop: "24px" }}>
+        <h2>Resumen</h2>
+        <div className="stats-grid">
+          {stats.map((stat) => (
+            <div key={stat.label} className="stat-card">
+              <div className="stat-value">{stat.value}</div>
+              <div className="stat-label">{stat.label}</div>
+            </div>
+          ))}
+        </div>
       </section>
     </main>
   );

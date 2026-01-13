@@ -1,4 +1,7 @@
 const DEFAULT_BASE_URL = "http://localhost:3001";
+const AUTH_TOKEN_KEY = "ADMIN_TOKEN";
+const AUTH_TOKEN_EXPIRES_KEY = "ADMIN_TOKEN_EXPIRES_AT";
+const AUTH_TOKEN_TTL_MS = 10 * 60 * 1000;
 
 export function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;
@@ -8,21 +11,35 @@ export function getAuthToken() {
   if (typeof window === "undefined") {
     return null;
   }
-  return window.localStorage.getItem("ADMIN_TOKEN");
+  const storage = window.sessionStorage;
+  const token = storage.getItem(AUTH_TOKEN_KEY);
+  const expiresAt = Number(storage.getItem(AUTH_TOKEN_EXPIRES_KEY) || 0);
+  if (!token || !expiresAt || Date.now() >= expiresAt) {
+    clearAuthToken();
+    return null;
+  }
+  return token;
 }
 
 export function setAuthToken(value) {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.setItem("ADMIN_TOKEN", value);
+  const storage = window.sessionStorage;
+  storage.setItem(AUTH_TOKEN_KEY, value);
+  storage.setItem(
+    AUTH_TOKEN_EXPIRES_KEY,
+    String(Date.now() + AUTH_TOKEN_TTL_MS)
+  );
 }
 
 export function clearAuthToken() {
   if (typeof window === "undefined") {
     return;
   }
-  window.localStorage.removeItem("ADMIN_TOKEN");
+  const storage = window.sessionStorage;
+  storage.removeItem(AUTH_TOKEN_KEY);
+  storage.removeItem(AUTH_TOKEN_EXPIRES_KEY);
 }
 
 export async function apiFetch(path, options = {}) {
@@ -52,11 +69,18 @@ export async function apiFetch(path, options = {}) {
   }
 
   const contentType = response.headers.get("content-type") || "";
-  if (contentType.includes("application/json")) {
-    return response.json();
+  const payload = contentType.includes("application/json")
+    ? await response.json()
+    : await response.text();
+
+  if (!response.ok) {
+    const error = new Error("REQUEST_FAILED");
+    error.status = response.status;
+    error.payload = payload;
+    throw error;
   }
 
-  return response.text();
+  return payload;
 }
 
 export async function apiFetchBinary(path, options = {}) {

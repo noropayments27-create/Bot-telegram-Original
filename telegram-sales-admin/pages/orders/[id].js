@@ -151,6 +151,25 @@ export default function OrderDetail() {
   }
 
   const { order, user, payment, commission } = detail;
+  const totals = detail.totals || {};
+  const subtotalUsd =
+    totals.subtotal_usd !== undefined && totals.subtotal_usd !== null
+      ? totals.subtotal_usd
+      : order.unit_price_at_purchase;
+  const localTotal = detail.local_total;
+
+  const formatLocalTotal = (value, currency) => {
+    if (!currency) {
+      return value;
+    }
+    if (currency === "BTC" || currency === "LTC") {
+      return Number(value).toFixed(8);
+    }
+    if (currency === "USDT") {
+      return Number(value).toFixed(2);
+    }
+    return Number(value).toLocaleString();
+  };
   const hasProof = Boolean(payment && payment.screenshot_file_id);
   const isAlreadyProcessed = order.status === "PAID" || order.status === "DELIVERED";
   const orderNumberText = order.order_number
@@ -159,23 +178,35 @@ export default function OrderDetail() {
   const items = detail.items || [];
 
   return (
-    <main className="page">
-      <section className="card">
-        <h1>Número de orden: {orderNumberText}</h1>
+    <main className="page order-detail-page">
+      <section className="card order-detail">
+        <h1>🧾 Orden {orderNumberText}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 
-        <h3>Detalle</h3>
-        <p>Estado: {order.status}</p>
-        <p>Precio: {order.unit_price_at_purchase}</p>
-        <p>Creada: {new Date(order.created_at).toLocaleString()}</p>
-        {order.paid_at && <p>Pagada: {new Date(order.paid_at).toLocaleString()}</p>}
+        <div className="detail-section">
+          <h3>📌 Detalle</h3>
+          <p>Estado: {order.status}</p>
+          <p>Precio (USD): {subtotalUsd}</p>
+          {localTotal && (
+            <p>
+              Total {localTotal.currency}:{" "}
+              {formatLocalTotal(localTotal.amount, localTotal.currency)}{" "}
+              {localTotal.currency}
+            </p>
+          )}
+          <p>Creada: {new Date(order.created_at).toLocaleString()}</p>
+          {order.paid_at && <p>Pagada: {new Date(order.paid_at).toLocaleString()}</p>}
+        </div>
 
-        <h3>Usuario</h3>
-        <p>Telegram ID: {user.telegram_id}</p>
-        <p>Username: {user.telegram_username || "-"}</p>
+        <div className="detail-section">
+          <h3>👤 Usuario</h3>
+          <p>Telegram ID: {user.telegram_id}</p>
+          <p>Username: {user.telegram_username || "-"}</p>
+        </div>
 
-        <h3>Productos</h3>
+        <div className="detail-section">
+          <h3>🛒 Productos</h3>
         {items.length > 0 ? (
           <>
             {items.map((item) => {
@@ -185,29 +216,33 @@ export default function OrderDetail() {
                 qty > 1 ? `${displayName} x${qty}` : displayName;
               return (
                 <p key={`${item.product_id}-${item.name}`}>
-                  {nameText}: {item.line_total_usd}
+                  {nameText}: ${item.line_total_usd}
                 </p>
               );
             })}
-            <p>Total: {order.unit_price_at_purchase}</p>
+            <p>Total: ${subtotalUsd}</p>
           </>
         ) : (
           <p>No hay productos registrados.</p>
         )}
+        </div>
 
-        <h3>Pago</h3>
+        <div className="detail-section">
+        <h3>💳 Pago</h3>
         {payment ? (
           <>
             <p>Método: {payment.payment_method || "No especificado"}</p>
-            <p>File ID: {payment.screenshot_file_id}</p>
-            <p>Estado revision: {payment.review_status}</p>
+            <p>ID de archivo: {payment.screenshot_file_id}</p>
+            <p>Estado de revisión: {payment.review_status}</p>
             <p>Enviado: {new Date(payment.submitted_at).toLocaleString()}</p>
           </>
         ) : (
           <p>No hay pago registrado.</p>
         )}
+        </div>
 
-        <h3>Comision</h3>
+        <div className="detail-section">
+        <h3>💸 Comisión</h3>
         {commission ? (
           <>
             <p>ID: {commission.id}</p>
@@ -217,20 +252,28 @@ export default function OrderDetail() {
         ) : (
           <p>No aplica.</p>
         )}
+        </div>
 
-        <h3>Screenshot</h3>
+        <div className="detail-section">
+        <h3>🖼️ Captura</h3>
         {hasProof && proofUrl ? (
           <>
-            <img src={proofUrl} alt="Proof" style={{ width: "100%" }} />
+            <img
+              src={proofUrl}
+              alt="Captura de pago"
+              className="payment-proof"
+            />
             <button type="button" onClick={handleDownload}>
               Descargar
             </button>
           </>
         ) : (
-          <p>No hay screenshot.</p>
+          <p>No hay captura.</p>
         )}
+        </div>
 
-        <h3>Acciones</h3>
+        <div className="detail-section">
+        <h3>✅ Acciones</h3>
         {isAlreadyProcessed && (
           <div className="muted">
             <p>✅ Pago aprobado</p>
@@ -258,11 +301,12 @@ export default function OrderDetail() {
             Aprobar pago
           </button>
           <button type="button" onClick={() => handleReject("retry")} disabled={!hasProof}>
-            Rechazar (retry)
+            Rechazar (reintentar)
           </button>
           <button type="button" onClick={() => handleReject("cancel")} disabled={!hasProof}>
-            Rechazar (cancel)
+            Rechazar (cancelar)
           </button>
+        </div>
         </div>
       </section>
     </main>

@@ -22,7 +22,7 @@ const MESSAGES = {
     payment_received: "🎉 Felicidades, hemos recibido tu pago 🎉 🥳",
   },
   en: {
-    payment_received: "🎉 Congratulations, we have received your payment 🎉 🥳",
+    payment_received: "🎉 Congratulations, we’ve received your payment 🎉 🥳",
   },
 };
 
@@ -60,39 +60,70 @@ async function getCryptoRate(symbol) {
 }
 
 // Function to calculate local amount
+function normalizePaymentMethod(paymentMethod) {
+  const raw = String(paymentMethod || "").trim().toUpperCase();
+  if (!raw) {
+    return "";
+  }
+  if (raw === "MP") {
+    return "MERCADO_PAGO";
+  }
+  if (raw === "BTC") {
+    return "BITCOIN";
+  }
+  if (raw === "USDT_BSC" || raw === "USDT_TRON") {
+    return "USDT";
+  }
+  return raw;
+}
+
+function applyRateMarkup(rate, markup = 0.02) {
+  if (!Number.isFinite(rate)) {
+    return rate;
+  }
+  return rate * (1 + markup);
+}
+
+function applyUsdMarkup(amount, markup = 0.02) {
+  if (!Number.isFinite(amount)) {
+    return amount;
+  }
+  return amount * (1 + markup);
+}
+
 async function calculateLocalAmount(usdAmount, paymentMethod) {
+  const method = normalizePaymentMethod(paymentMethod);
+  const usdBase = Number(usdAmount) || 0;
+  const usdWithMarkup = applyUsdMarkup(usdBase);
   let currency = null;
   let rate = null;
 
-  if (paymentMethod === "NEQUI") {
+  if (method === "NEQUI") {
     currency = "COP";
     rate = await getFiatRate("COP");
     if (rate) {
-      return { currency, amount: usdAmount * rate };
+      return { currency, amount: usdWithMarkup * applyRateMarkup(rate) };
     }
-  } else if (paymentMethod === "MERCADO_PAGO") {
+  } else if (method === "MERCADO_PAGO") {
     currency = "MXN";
     rate = await getFiatRate("MXN");
     if (rate) {
-      return { currency, amount: usdAmount * rate };
+      return { currency, amount: usdWithMarkup * applyRateMarkup(rate) };
     }
-  } else if (paymentMethod === "BITCOIN") {
+  } else if (method === "BITCOIN") {
     currency = "BTC";
     rate = await getCryptoRate("bitcoin");
     if (rate) {
-      return { currency, amount: usdAmount / rate };
+      return { currency, amount: usdBase / rate };
     }
-  } else if (paymentMethod === "USDT") {
+  } else if (method === "USDT") {
     currency = "USDT";
-    rate = await getCryptoRate("tether");
-    if (rate) {
-      return { currency, amount: usdAmount / rate };
-    }
-  } else if (paymentMethod === "LTC") {
+    return { currency, amount: usdBase };
+  } else if (method === "LTC") {
     currency = "LTC";
     rate = await getCryptoRate("litecoin");
     if (rate) {
-      return { currency, amount: usdAmount / rate };
+      return { currency, amount: usdBase / rate };
     }
   }
 
@@ -152,9 +183,12 @@ const RECEIPT_TRANSLATIONS = {
   },
 };
 
-function buildReceiptMessage(order, paymentProof, locale = "es") {
+function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd) {
   const translations = RECEIPT_TRANSLATIONS[locale] || RECEIPT_TRANSLATIONS.es;
-  const price = order.unit_price_at_purchase || order.product_price;
+  const price =
+    subtotalUsd !== undefined && subtotalUsd !== null
+      ? subtotalUsd
+      : order.unit_price_at_purchase || order.product_price;
   const createdAt = order.paid_at || new Date();
   const createdAtText = new Date(createdAt).toLocaleString();
   const lines = [
@@ -950,6 +984,7 @@ router.post(
     const skuKey = req.query.sku_key;
     const pool = getPool();
 
+    let receipt = "";
     try {
       const contentType = req.headers["content-type"] || "";
       let csvText = "";
@@ -1220,6 +1255,8 @@ router.get("/orders", async (req, res, next) => {
   const filters = [];
   const values = [];
 
+  filters.push("op.id IS NOT NULL");
+
   if (status) {
     values.push(status);
     filters.push(`o.status = $${values.length}`);
@@ -1229,7 +1266,10 @@ router.get("/orders", async (req, res, next) => {
 
   try {
     const countRes = await pool.query(
-      `SELECT COUNT(*)::int AS total FROM orders o ${whereClause}`,
+      `SELECT COUNT(*)::int AS total
+       FROM orders o
+       LEFT JOIN order_payments op ON op.order_id = o.id
+       ${whereClause}`,
       values
     );
     const total = countRes.rows[0].total;
@@ -1308,6 +1348,45 @@ router.get("/orders/:id", async (req, res, next) => {
     );
 
     const order = orderRes.rows[0];
+    const items = itemsRes.rows.map((row) => ({
+      product_id: row.product_id,
+      code: row.code,
+      name: row.name,
+      qty: row.qty,
+      unit_price_usd: row.unit_price_usd,
+      line_total_usd: row.line_total_usd,
+    }));
+
+    let subtotalUsd = 0;
+    if (items.length > 0) {
+      subtotalUsd = items.reduce((sum, item) => {
+        const lineTotal =
+          item.line_total_usd != null
+            ? Number(item.line_total_usd)
+            : Number(item.unit_price_usd || 0) * Number(item.qty || 0);
+        return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
+      }, 0);
+      subtotalUsd = Number(subtotalUsd.toFixed(2));
+    } else {
+      subtotalUsd = Number(order.unit_price_at_purchase || order.product_price || 0);
+    }
+
+    let localTotal = null;
+    const paymentMethod =
+      paymentRes.rows[0]?.payment_method || order.payment_method;
+    if (paymentMethod) {
+      try {
+        const localData = await calculateLocalAmount(subtotalUsd, paymentMethod);
+        if (localData) {
+          localTotal = {
+            currency: localData.currency,
+            amount: localData.amount,
+          };
+        }
+      } catch (error) {
+        console.error("Failed to calculate local total", error);
+      }
+    }
 
     return res.json({
       order: {
@@ -1328,16 +1407,13 @@ router.get("/orders/:id", async (req, res, next) => {
         name: order.product_name,
         price: order.product_price,
       },
-      items: itemsRes.rows.map((row) => ({
-        product_id: row.product_id,
-        code: row.code,
-        name: row.name,
-        qty: row.qty,
-        unit_price_usd: row.unit_price_usd,
-        line_total_usd: row.line_total_usd,
-      })),
+      items,
       payment: paymentRes.rows[0] || null,
       commission: commissionRes.rows[0] || null,
+      totals: {
+        subtotal_usd: subtotalUsd,
+      },
+      local_total: localTotal,
     });
   } catch (error) {
     next(error);
@@ -1503,16 +1579,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     const telegramId = order.telegram_id;
     order.paid_at = updatedOrderRes.rows[0].paid_at;
 
-    try {
-      await sendMessage(
-        telegramId,
-        MESSAGES[userLocale]?.payment_received || MESSAGES.es.payment_received
-      );
-    } catch (err) {
-      console.error("Telegram congratulations failed", err);
-    }
-
-    // Get user locale for receipt
+    // Get user locale for receipt and notifications
     let userLocale = "es";
     try {
       const userRes = await pool.query(
@@ -1526,10 +1593,18 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       console.error("Failed to get user locale", err);
     }
 
-    const receipt = buildReceiptMessage(order, paymentRes.rows[0], userLocale);
+    try {
+      await sendMessage(
+        telegramId,
+        MESSAGES[userLocale]?.payment_received || MESSAGES.es.payment_received
+      );
+    } catch (err) {
+      console.error("Telegram congratulations failed", err);
+    }
+
     try {
       let items = [];
-      const subtotal = order.unit_price_at_purchase;
+      let subtotal = Number(order.unit_price_at_purchase || 0);
       try {
         const itemsRes = await pool.query(
           `SELECT
@@ -1544,13 +1619,20 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
           [orderId]
         );
         if (itemsRes.rowCount > 0) {
+          subtotal = 0;
           items = itemsRes.rows.map((row) => {
             const itemName = row.qty > 1 ? `${row.name} x${row.qty}` : row.name;
+            const lineTotal =
+              row.line_total_usd != null
+                ? Number(row.line_total_usd)
+                : Number(row.unit_price_usd || 0) * Number(row.qty || 0);
+            subtotal += Number.isFinite(lineTotal) ? lineTotal : 0;
             return {
               name: itemName,
               price: row.line_total_usd,
             };
           });
+          subtotal = Number(subtotal.toFixed(2));
         }
       } catch (err) {
         console.error("Receipt items query failed", err);
@@ -1558,6 +1640,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
       if (items.length === 0) {
         items = [{ name: order.product_name, price: order.product_price }];
+        subtotal = Number(order.unit_price_at_purchase || order.product_price || 0);
       }
 
       const orderNumberText = order.order_number
@@ -1577,6 +1660,13 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       } catch (err) {
         console.error("Failed to calculate local total", err);
       }
+
+      receipt = buildReceiptMessage(
+        order,
+        paymentRes.rows[0],
+        userLocale,
+        subtotal
+      );
 
       const receiptPng = await renderReceiptPng({
         orderId: order.id,
@@ -1610,7 +1700,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     try {
       await sendMessage(
         telegramId,
-        "⌚️ En breve momento estarás recibiendo tu contenido."
+        "⌚️ You will receive your content shortly."
       );
     } catch (err) {
       console.error("Telegram content notice failed", err);
