@@ -77,24 +77,9 @@ function normalizePaymentMethod(paymentMethod) {
   return raw;
 }
 
-function applyRateMarkup(rate, markup = 0.02) {
-  if (!Number.isFinite(rate)) {
-    return rate;
-  }
-  return rate * (1 + markup);
-}
-
-function applyUsdMarkup(amount, markup = 0.02) {
-  if (!Number.isFinite(amount)) {
-    return amount;
-  }
-  return amount * (1 + markup);
-}
-
 async function calculateLocalAmount(usdAmount, paymentMethod) {
   const method = normalizePaymentMethod(paymentMethod);
   const usdBase = Number(usdAmount) || 0;
-  const usdWithMarkup = applyUsdMarkup(usdBase);
   let currency = null;
   let rate = null;
 
@@ -102,13 +87,13 @@ async function calculateLocalAmount(usdAmount, paymentMethod) {
     currency = "COP";
     rate = await getFiatRate("COP");
     if (rate) {
-      return { currency, amount: usdWithMarkup * applyRateMarkup(rate) };
+      return { currency, amount: usdBase * rate };
     }
   } else if (method === "MERCADO_PAGO") {
     currency = "MXN";
     rate = await getFiatRate("MXN");
     if (rate) {
-      return { currency, amount: usdWithMarkup * applyRateMarkup(rate) };
+      return { currency, amount: usdBase * rate };
     }
   } else if (method === "BITCOIN") {
     currency = "BTC";
@@ -396,17 +381,25 @@ router.post("/auth/start", async (req, res) => {
     ],
   };
 
-  await Promise.all(
-    admins.map((adminId) =>
-      sendMessage(
-        adminId,
-        "¿Estas intentando Ingresar en el panel del Bot?",
-        { reply_markup: replyMarkup }
-      ).catch((error) => {
-        console.error("Telegram 2FA notification failed", error);
-      })
-    )
-  );
+  const notifyAdmins = async () => {
+    await Promise.all(
+      admins.map((adminId) =>
+        sendMessage(
+          adminId,
+          "¿Estas intentando Ingresar en el panel del Bot?",
+          { reply_markup: replyMarkup }
+        ).catch((error) => {
+          console.error("Telegram 2FA notification failed", error);
+        })
+      )
+    );
+  };
+
+  setImmediate(() => {
+    notifyAdmins().catch((error) => {
+      console.error("Telegram 2FA notification failed", error);
+    });
+  });
 
   return res.json({ request_id: requestId, expires_in: REQUEST_TTL_SECONDS });
 });
@@ -1460,6 +1453,45 @@ router.get("/orders/:id/payment-proof/download", async (req, res, next) => {
   await handlePaymentProof(req, res, next, true);
 });
 
+router.get("/summary", async (req, res, next) => {
+  const pool = getPool();
+
+  try {
+    const customersRes = await pool.query(
+      `SELECT COUNT(DISTINCT o.user_id)::int AS count
+       FROM orders o
+       WHERE o.status IN ('PAID', 'DELIVERED')`
+    );
+
+    const salesRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM orders o
+       WHERE o.status IN ('PAID', 'DELIVERED')`
+    );
+
+    const revenueRes = await pool.query(
+      `SELECT COALESCE(SUM(oi.line_total_usd), 0)::numeric AS total
+       FROM order_items oi
+       JOIN orders o ON o.id = oi.order_id
+       WHERE o.status IN ('PAID', 'DELIVERED')`
+    );
+
+    const affiliatesRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM affiliates`
+    );
+
+    return res.json({
+      customers: customersRes.rows[0]?.count || 0,
+      total_sales: salesRes.rows[0]?.count || 0,
+      total_revenue_usd: Number(revenueRes.rows[0]?.total || 0).toFixed(2),
+      affiliates: affiliatesRes.rows[0]?.count || 0,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post("/orders/:id/mark-paid", async (req, res, next) => {
   const orderId = req.params.id;
   const pool = getPool();
@@ -1698,10 +1730,11 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     }
 
     try {
-      await sendMessage(
-        telegramId,
-        "⌚️ You will receive your content shortly."
-      );
+      const notice =
+        userLocale === "en"
+          ? "⌚️ You will receive your content shortly."
+          : "⌚️ En breve momento estarás recibiendo tu contenido.";
+      await sendMessage(telegramId, notice);
     } catch (err) {
       console.error("Telegram content notice failed", err);
     }

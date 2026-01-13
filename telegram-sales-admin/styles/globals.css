@@ -18,7 +18,7 @@ body {
   margin: 0;
   font-family: Arial, sans-serif;
   color: var(--text-color);
-  cursor: url("https://i.ibb.co/jvLdXc3S/puntero.png") 6 6, auto;
+  cursor: url("https://i.ibb.co/67HTFn5q/puntero-1.png") 6 6, auto;
   transition: all 0.5s ease;
 }
 
@@ -226,6 +226,7 @@ body.login-success {
   box-shadow:
     6px 6px 16px var(--shadow-dark),
     -4px -4px 10px var(--shadow-light);
+  position: relative;
 }
 
 .nav-card:hover {
@@ -234,6 +235,37 @@ body.login-success {
   box-shadow:
     8px 8px 20px var(--shadow-dark),
     -6px -6px 12px var(--shadow-light);
+}
+
+.nav-card__badge {
+  position: absolute;
+  top: 10px;
+  right: 10px;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--scarlet-red);
+  color: #fff;
+  font-size: 11px;
+  font-weight: 700;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-shadow: 0 0 12px rgba(255, 36, 0, 0.8);
+}
+
+.nav-card--alert {
+  animation: nav-card-shake 1s infinite;
+}
+
+@keyframes nav-card-shake {
+  0% { transform: translateX(0); }
+  20% { transform: translateX(-2px); }
+  40% { transform: translateX(2px); }
+  60% { transform: translateX(-2px); }
+  80% { transform: translateX(2px); }
+  100% { transform: translateX(0); }
 }
 
 .stats-grid {
@@ -274,6 +306,10 @@ body.login-success {
   color: #cfcfcf;
   text-transform: uppercase;
   letter-spacing: 0.08em;
+}
+
+.orders-placeholder {
+  opacity: 0.18;
 }
 
 @media (max-width: 1200px) {

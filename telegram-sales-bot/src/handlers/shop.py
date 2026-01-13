@@ -19,7 +19,7 @@ from aiogram.types import (
 
 from ..services.api_client import ApiClient
 from ..services.crypto_rates import usd_to_btc_rate, usd_to_ltc_rate
-from ..services.fx import apply_markup, usd_to_cop, usd_to_mxn
+from ..services.fx import usd_to_cop, usd_to_mxn
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from ..config import (
@@ -220,7 +220,6 @@ async def _build_payment_instructions(
         )
         try:
             rate = await usd_to_cop()
-            rate = apply_markup(rate, 0.02)
             cop_amount = total * rate
             instructions.append(
                 t(locale, "payment_send_label").format(
@@ -282,7 +281,6 @@ async def _build_payment_instructions(
         )
         try:
             rate = await usd_to_mxn()
-            rate = apply_markup(rate, 0.02)
             mxn_amount = total * rate
             instructions.append(
                 t(locale, "payment_send_label").format(
@@ -1157,6 +1155,20 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
             add_result = t(locale, "add_to_cart_success")
     except httpx.HTTPError:
         add_result = t(locale, "add_to_cart_failed")
+    total_qty = None
+    try:
+        items = result.get("items", []) if isinstance(result, dict) else []
+        for cart_item in items:
+            if cart_item.get("product_id") == product["id"]:
+                total_qty = cart_item.get("qty")
+                break
+    except Exception:
+        total_qty = None
+    total_line = ""
+    if total_qty:
+        total_qty_int = int(total_qty)
+        suffix = "añadido" if total_qty_int == 1 else "añadidos"
+        total_line = f"🧺 {total_qty_int} {suffix} al carrito"
     text = (
         f"{product['display_name']}\n\n"
         f"{_format_code_line(product, locale)}"
@@ -1164,7 +1176,8 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         f"{_format_description(product['description'], locale)}\n\n"
         f"{_format_stock_block(product)}"
         f"{t(locale, 'product_price_label').format(price=int(product['price']))}\n\n"
-        f"{add_result}"
+        f"{add_result}\n"
+        f"{total_line}"
     )
     keyboard = build_product_detail_keyboard(page, index, locale)
     await render_main_view(
@@ -1224,6 +1237,20 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
             add_result = t(locale, "add_to_cart_success")
     except httpx.HTTPError:
         add_result = t(locale, "add_to_cart_failed")
+    total_qty = None
+    try:
+        items = result.get("items", []) if isinstance(result, dict) else []
+        for cart_item in items:
+            if cart_item.get("product_id") == item["id"]:
+                total_qty = cart_item.get("qty")
+                break
+    except Exception:
+        total_qty = None
+    total_line = ""
+    if total_qty:
+        total_qty_int = int(total_qty)
+        suffix = "añadido" if total_qty_int == 1 else "añadidos"
+        total_line = f"🧺 {total_qty_int} {suffix} al carrito"
     text = (
         f"{item['display_name']}\n\n"
         f"{_format_code_line(item, locale)}"
@@ -1231,7 +1258,8 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         f"{_format_description(item['description'], locale)}\n\n"
         f"{_format_stock_block(item)}"
         f"{t(locale, 'product_price_label').format(price=int(item['price']))}\n\n"
-        f"{add_result}"
+        f"{add_result}\n"
+        f"{total_line}"
     )
     keyboard = build_category_detail_keyboard(category_key, index, locale)
     await render_main_view(
@@ -1613,21 +1641,8 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         return
     filtered_markup = None
     if callback.message.reply_markup:
-        rows = []
-        for row in callback.message.reply_markup.inline_keyboard:
-            filtered = [
-                button
-                for button in row
-                if not (button.callback_data or "").startswith("order:pay:")
-            ]
-            if filtered:
-                rows.append(filtered)
-        if rows:
-            filtered_markup = InlineKeyboardMarkup(inline_keyboard=rows)
         try:
-            await callback.message.edit_reply_markup(
-                reply_markup=filtered_markup
-            )
+            await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
     await state.update_data(order_id=order_id, current_order_id=order_id)
@@ -1636,7 +1651,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         callback.message,
         callback.from_user.id,
         t(locale, "payment_screenshot_request"),
-        reply_markup=filtered_markup,
+        reply_markup=None,
     )
     await callback.answer()
 

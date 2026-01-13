@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 
 const NAV_LINKS = [
+  { href: "/dashboard", label: "Principal" },
   { href: "/orders", label: "Ordenes" },
   { href: "/inventory", label: "Inventario" },
   { href: "/tickets", label: "Tickets" },
@@ -37,7 +38,7 @@ export default function Header() {
   return (
     <header className="app-header" ref={headerRef}>
       <div className="app-header__content">
-        <Link className="app-header__logo" href="/orders" aria-label="Inicio">
+        <Link className="app-header__logo" href="/dashboard" aria-label="Inicio">
           <img
             src="https://i.ibb.co/BHjWqgf5/No3.png"
             alt="Logo"

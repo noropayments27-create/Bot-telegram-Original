@@ -28,6 +28,8 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
+  const storageKey = "admin_last_seen_order_id";
+  const alertCountKey = "admin_orders_alert_count";
 
   const filterRecent = (orders) => {
     const cutoff = Date.now() - 5 * 60 * 1000;
@@ -64,6 +66,12 @@ export default function OrdersPage() {
         setItems(nextItems);
         setTotalPages(isRecent ? 1 : data.total_pages || 1);
         setError("");
+
+        if (fetchedItems.length > 0 && typeof window !== "undefined") {
+          const latestId = fetchedItems[0].id;
+          window.localStorage.setItem(storageKey, String(latestId));
+          window.localStorage.setItem(alertCountKey, "0");
+        }
       } catch (err) {
         setError("No se pudo cargar las ordenes.");
       }
@@ -73,7 +81,7 @@ export default function OrdersPage() {
     if (status !== "RECENT") {
       return undefined;
     }
-    const interval = setInterval(loadOrders, 30 * 1000);
+    const interval = setInterval(loadOrders, 10 * 1000);
     return () => clearInterval(interval);
   }, [page, status]);
 
@@ -113,7 +121,7 @@ export default function OrdersPage() {
           <tbody>
             {items.length === 0 && status === "RECENT" ? (
               <>
-                <tr>
+                <tr className="orders-placeholder">
                   <td>—</td>
                   <td>0000000000</td>
                   <td>Producto de ejemplo</td>
@@ -123,7 +131,7 @@ export default function OrdersPage() {
                     <span className="muted">Ver</span>
                   </td>
                 </tr>
-                <tr>
+                <tr className="orders-placeholder">
                   <td>—</td>
                   <td>0000000001</td>
                   <td>Producto de ejemplo</td>

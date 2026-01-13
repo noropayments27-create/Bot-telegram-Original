@@ -27,8 +27,6 @@ def _log_once(key: str, msg: str) -> None:
         _LAST_LOG[key] = now
 
 
-def apply_markup(rate: float, markup: float = 0.02) -> float:
-    return rate * (1.0 + markup)
 
 
 async def usd_to(currency: str) -> float:
