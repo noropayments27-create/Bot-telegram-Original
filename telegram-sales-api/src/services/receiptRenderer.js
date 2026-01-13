@@ -10,6 +10,41 @@ try {
   playwright = null;
 }
 
+const RECEIPT_LABELS = {
+  es: {
+    receipt_title: "RECIBO DE PAGO",
+    order_number: "Número de orden:",
+    telegram_id: "Telegram ID:",
+    username: "Username:",
+    whatsapp: "Whatsapp:",
+    date: "Fecha:",
+    description: "Descripción",
+    value: "Valor",
+    subtotal: "Sub-total",
+    commission: "Comisión",
+    total: "Total",
+    referred_by: "Referido de:",
+    thank_you: "Gracias<br>Por Tu Compra",
+    total_in: "Total en",
+  },
+  en: {
+    receipt_title: "RECEIPT",
+    order_number: "Order Number:",
+    telegram_id: "Telegram ID:",
+    username: "Username:",
+    whatsapp: "Whatsapp:",
+    date: "Date:",
+    description: "Description",
+    value: "Value",
+    subtotal: "Sub-total",
+    commission: "Commission",
+    total: "Total",
+    referred_by: "Referred by:",
+    thank_you: "Thank you<br>For Your Purchase",
+    total_in: "Total in",
+  },
+};
+
 async function loadTemplate() {
   const templatePath = path.join(__dirname, "..", "templates", "recibo.html");
   return fs.readFile(templatePath, "utf-8");
@@ -51,7 +86,7 @@ function cleanProductName(name) {
 
 function buildItemRowsHtml(items) {
   if (!Array.isArray(items) || items.length === 0) {
-    return `<tr><td>${escapeHtml("Producto")}</td><td>${escapeHtml("0")}</td></tr>`;
+    return `<tr><td>${escapeHtml("Producto")}</td><td>${escapeHtml("0 USD")}</td></tr>`;
   }
   return items
     .map((it) => {
@@ -59,7 +94,7 @@ function buildItemRowsHtml(items) {
       const qty = Number(it.qty ?? 0);
       const nameText = qty > 1 ? `${rawName} x${qty}` : rawName;
       const name = escapeHtml(nameText);
-      const price = escapeHtml(formatMoney(it.price ?? it.unit_price ?? it.product_price ?? 0));
+      const price = escapeHtml(`${formatMoney(it.price ?? it.unit_price ?? it.product_price ?? 0)} USD`);
       return `<tr><td>${name}</td><td>${price}</td></tr>`;
     })
     .join("");
@@ -86,6 +121,8 @@ function applyTokens(template, tokens) {
  * @param {string|number} data.total
  * @param {string} data.referredBy
  * @param {string} data.orderNumber
+ * @param {Object} data.localTotal  {currency, amount}
+ * @param {string} data.locale
  */
 async function renderReceiptPng(data) {
   if (!playwright) {
@@ -93,18 +130,46 @@ async function renderReceiptPng(data) {
   }
 
   const template = await loadTemplate();
+  const locale = data.locale || "es";
+  const labels = RECEIPT_LABELS[locale] || RECEIPT_LABELS.es;
+
+  let localTotalLine = "";
+  if (data.localTotal && data.localTotal.currency && data.localTotal.amount != null) {
+    const currency = data.localTotal.currency;
+    let amountStr = "";
+    if (currency === "COP" || currency === "MXN") {
+      amountStr = Math.floor(data.localTotal.amount).toLocaleString(locale === "es" ? "es-CO" : "en-US");
+    } else {
+      // Crypto: trim decimals
+      amountStr = data.localTotal.amount.toFixed(currency === "BTC" || currency === "LTC" ? 8 : 2).replace(/\.?0+$/, "");
+    }
+    localTotalLine = `<div><span>${labels.total_in} ${currency}</span> <span>${amountStr} ${currency}</span></div>`;
+  }
 
   const html = applyTokens(template, {
-    ORDER_ID: escapeHtml(data.orderId),
+    RECEIPT_TITLE: labels.receipt_title,
+    ORDER_NUMBER_LABEL: labels.order_number,
     ORDER_NUMBER: escapeHtml(data.orderNumber || "-"),
+    TELEGRAM_ID_LABEL: labels.telegram_id,
     TELEGRAM_ID: escapeHtml(data.telegramId),
+    USERNAME_LABEL: labels.username,
     USERNAME: escapeHtml(data.username || "N/A"),
+    WHATSAPP_LABEL: labels.whatsapp,
+    DATE_LABEL: labels.date,
     DATE_TIME: escapeHtml(data.dateTime || new Date().toLocaleString()),
-    REFERRED_BY: escapeHtml(data.referredBy || "N/A"),
+    DESCRIPTION_LABEL: labels.description,
+    VALUE_LABEL: labels.value,
     ITEM_ROWS_HTML: buildItemRowsHtml(data.items || []),
-    SUBTOTAL: escapeHtml(formatMoney(data.subtotal)),
-    COMMISSION: escapeHtml(formatMoney(data.commission ?? 0)),
-    TOTAL: escapeHtml(formatMoney(data.total)),
+    SUBTOTAL_LABEL: labels.subtotal,
+    SUBTOTAL: escapeHtml(`${formatMoney(data.subtotal)} USD`),
+    COMMISSION_LABEL: labels.commission,
+    COMMISSION: escapeHtml(`${formatMoney(data.commission ?? 0)} USD`),
+    TOTAL_LABEL: labels.total,
+    TOTAL: escapeHtml(`${formatMoney(data.total)} USD`),
+    LOCAL_TOTAL_LINE: localTotalLine,
+    REFERRED_BY_LABEL: labels.referred_by,
+    REFERRED_BY: escapeHtml(data.referredBy || "N/A"),
+    THANK_YOU: labels.thank_you,
   });
 
   const tmpName = `receipt-${crypto.randomBytes(8).toString("hex")}.png`;

@@ -17,12 +17,87 @@ const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
 const { deliverOrderToTelegram } = require("../services/delivery");
 
+const MESSAGES = {
+  es: {
+    payment_received: "🎉 Felicidades, hemos recibido tu pago 🎉 🥳",
+  },
+  en: {
+    payment_received: "🎉 Congratulations, we have received your payment 🎉 🥳",
+  },
+};
+
 const router = express.Router();
 
 const DELIVERY_START_DELAY_MS = Math.max(
   Number(process.env.DELIVERY_START_DELAY_MS || 10000) || 10000,
   0
 );
+
+// Function to get fiat rate (COP/MXN to USD)
+async function getFiatRate(currency) {
+  try {
+    const response = await fetch(`https://open.er-api.com/v6/latest/USD`);
+    const data = await response.json();
+    if (data.result === "success") {
+      return data.rates[currency] || null;
+    }
+  } catch (err) {
+    console.error("Failed to get fiat rate", err);
+  }
+  return null;
+}
+
+// Function to get crypto rate (to USD)
+async function getCryptoRate(symbol) {
+  try {
+    const response = await fetch(`https://api.coingecko.com/api/v3/simple/price?ids=${symbol}&vs_currencies=usd`);
+    const data = await response.json();
+    return data[symbol]?.usd || null;
+  } catch (err) {
+    console.error("Failed to get crypto rate", err);
+  }
+  return null;
+}
+
+// Function to calculate local amount
+async function calculateLocalAmount(usdAmount, paymentMethod) {
+  let currency = null;
+  let rate = null;
+
+  if (paymentMethod === "NEQUI") {
+    currency = "COP";
+    rate = await getFiatRate("COP");
+    if (rate) {
+      return { currency, amount: usdAmount * rate };
+    }
+  } else if (paymentMethod === "MERCADO_PAGO") {
+    currency = "MXN";
+    rate = await getFiatRate("MXN");
+    if (rate) {
+      return { currency, amount: usdAmount * rate };
+    }
+  } else if (paymentMethod === "BITCOIN") {
+    currency = "BTC";
+    rate = await getCryptoRate("bitcoin");
+    if (rate) {
+      return { currency, amount: usdAmount / rate };
+    }
+  } else if (paymentMethod === "USDT") {
+    currency = "USDT";
+    rate = await getCryptoRate("tether");
+    if (rate) {
+      return { currency, amount: usdAmount / rate };
+    }
+  } else if (paymentMethod === "LTC") {
+    currency = "LTC";
+    rate = await getCryptoRate("litecoin");
+    if (rate) {
+      return { currency, amount: usdAmount / rate };
+    }
+  }
+
+  return null;
+}
 
 function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
@@ -50,21 +125,52 @@ function mapBroadcastSegment(segment, hasCustomRecipients) {
   return segment;
 }
 
-function buildReceiptMessage(order, paymentProof) {
+const RECEIPT_TRANSLATIONS = {
+  es: {
+    title: "🧾 Recibo de pago",
+    order_id: "🆔 ID de orden",
+    product: "📦 Producto",
+    price: "💰 Precio",
+    date: "📅 Fecha",
+    status: "📊 Estado",
+    paid: "✅ PAGADO",
+    reference: "🔗 Referencia",
+    total: "💵 Total",
+    total_in: "💵 Total en",
+  },
+  en: {
+    title: "🧾 Receipt",
+    order_id: "🆔 Order ID",
+    product: "📦 Product",
+    price: "💰 Price",
+    date: "📅 Date",
+    status: "📊 Status",
+    paid: "✅ PAID",
+    reference: "🔗 Reference",
+    total: "💵 Total",
+    total_in: "💵 Total in",
+  },
+};
+
+function buildReceiptMessage(order, paymentProof, locale = "es") {
+  const translations = RECEIPT_TRANSLATIONS[locale] || RECEIPT_TRANSLATIONS.es;
   const price = order.unit_price_at_purchase || order.product_price;
   const createdAt = order.paid_at || new Date();
   const createdAtText = new Date(createdAt).toLocaleString();
   const lines = [
-    "Recibo de pago",
-    `ID de orden: ${order.id}`,
-    `Producto: ${order.product_name || order.product_id}`,
-    `Precio: $${price}`,
-    `Fecha: ${createdAtText}`,
-    "Estado: PAGADO",
+    `🎉 ${translations.title} 🎉`,
+    "",
+    `${translations.order_id}: ${order.id}`,
+    `${translations.product}: ${order.product_name || order.product_id}`,
+    `${translations.price}: $${price} USD`,
+    `${translations.date}: ${createdAtText}`,
+    `${translations.status}: ${translations.paid}`,
   ];
   if (paymentProof && paymentProof.screenshot_file_id) {
-    lines.push(`Referencia: ${paymentProof.screenshot_file_id}`);
+    lines.push(`${translations.reference}: ${paymentProof.screenshot_file_id}`);
   }
+  lines.push("");
+  lines.push("✅ ¡Gracias por tu compra!");
   return lines.join("\n");
 }
 
@@ -1292,10 +1398,12 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
               p.delivery_type,
               p.delivery_payload,
               p.delivery_template,
-              p.stock_mode
+              p.stock_mode,
+              op.payment_method
        FROM orders o
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
+       LEFT JOIN order_payments op ON op.order_id = o.id
        WHERE o.id = $1
        FOR UPDATE OF o`,
       [orderId]
@@ -1398,13 +1506,27 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     try {
       await sendMessage(
         telegramId,
-        "🎉 Felicidades, hemos recibido tu pago 🎉 🥳"
+        MESSAGES[userLocale]?.payment_received || MESSAGES.es.payment_received
       );
     } catch (err) {
       console.error("Telegram congratulations failed", err);
     }
 
-    const receipt = buildReceiptMessage(order, paymentRes.rows[0]);
+    // Get user locale for receipt
+    let userLocale = "es";
+    try {
+      const userRes = await pool.query(
+        "SELECT locale FROM users WHERE telegram_id = $1",
+        [telegramId]
+      );
+      if (userRes.rowCount > 0) {
+        userLocale = userRes.rows[0].locale || "es";
+      }
+    } catch (err) {
+      console.error("Failed to get user locale", err);
+    }
+
+    const receipt = buildReceiptMessage(order, paymentRes.rows[0], userLocale);
     try {
       let items = [];
       const subtotal = order.unit_price_at_purchase;
@@ -1442,6 +1564,20 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         ? String(order.order_number).padStart(5, "0")
         : "-";
 
+      // Calculate local amount for receipt
+      let localTotal = null;
+      try {
+        const localData = await calculateLocalAmount(subtotal, order.payment_method);
+        if (localData) {
+          localTotal = {
+            currency: localData.currency,
+            amount: localData.amount,
+          };
+        }
+      } catch (err) {
+        console.error("Failed to calculate local total", err);
+      }
+
       const receiptPng = await renderReceiptPng({
         orderId: order.id,
         orderNumber: orderNumberText,
@@ -1453,6 +1589,8 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         commission: 0,
         total: subtotal,
         referredBy: "N/A",
+        localTotal,
+        locale: userLocale,
       });
 
       try {

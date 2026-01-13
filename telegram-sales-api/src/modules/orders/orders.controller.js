@@ -340,6 +340,9 @@ async function submitPaymentProof(req, res, next) {
   const orderId = req.params.id;
   const telegramId = Number(req.body.telegram_id);
   const screenshotFileId = req.body.screenshot_file_id;
+  const paymentMethod = req.body.payment_method;
+
+  console.log(`[submitPaymentProof] orderId=${orderId}, paymentMethod=${paymentMethod}`);
 
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });
@@ -400,15 +403,16 @@ async function submitPaymentProof(req, res, next) {
     }
 
     const paymentRes = await client.query(
-      `INSERT INTO order_payments (order_id, screenshot_file_id, review_status)
-       VALUES ($1, $2, 'PENDING')
+      `INSERT INTO order_payments (order_id, screenshot_file_id, review_status, payment_method)
+       VALUES ($1, $2, 'PENDING', $3)
        ON CONFLICT (order_id)
        DO UPDATE SET screenshot_file_id = EXCLUDED.screenshot_file_id,
                      submitted_at = now(),
                      review_status = 'PENDING',
-                     reviewed_by_admin_at = NULL
+                     reviewed_by_admin_at = NULL,
+                     payment_method = EXCLUDED.payment_method
        RETURNING *`,
-      [orderId, screenshotFileId]
+      [orderId, screenshotFileId, paymentMethod]
     );
 
     const updatedOrderRes = await client.query(

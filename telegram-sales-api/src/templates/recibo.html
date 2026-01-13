@@ -69,20 +69,20 @@
 
 <div class="receipt">
     <div class="header">
-        <h2><strong>RECIBO DE PAGO</strong></h2>
+        <h2><strong>{{RECEIPT_TITLE}}</strong></h2>
     </div>
 
     <div class="details">
-        <div><span>Número de orden:</span> <span>{{ORDER_NUMBER}}</span></div>
-        <div><span>Telegram ID:</span> <span>{{TELEGRAM_ID}}</span></div>
-        <div><span>Username:</span> <span>{{USERNAME}}</span></div>
-        <div><span>Whatsapp:</span> <span>N/A</span></div>
+        <div><span>{{ORDER_NUMBER_LABEL}}</span> <span>{{ORDER_NUMBER}}</span></div>
+        <div><span>{{TELEGRAM_ID_LABEL}}</span> <span>{{TELEGRAM_ID}}</span></div>
+        <div><span>{{USERNAME_LABEL}}</span> <span>{{USERNAME}}</span></div>
+        <div><span>{{WHATSAPP_LABEL}}</span> <span>N/A</span></div>
     </div>
 
     <div class="divider"></div>
 
     <div class="details">
-        <div><span>Fecha:</span> <span>{{DATE_TIME}}</span></div>
+        <div><span>{{DATE_LABEL}}</span> <span>{{DATE_TIME}}</span></div>
     </div>
 
     <div class="divider"></div>
@@ -91,8 +91,8 @@
         <table>
             <thead>
                 <tr>
-                    <th>Descripción</th>
-                    <th>Valor</th>
+                    <th>{{DESCRIPTION_LABEL}}</th>
+                    <th>{{VALUE_LABEL}}</th>
                 </tr>
             </thead>
             <tbody>
@@ -108,20 +108,21 @@
     <div class="divider"></div>
 
     <div class="totals">
-        <div><span>Sub-total</span> <span>{{SUBTOTAL}}</span></div>
-        <div><span>Comisión</span> <span>{{COMMISSION}}</span></div>
-        <div><span><strong>Total</strong></span> <span><strong>{{TOTAL}}</strong></span></div>
-        <div><span>Referido de:</span> <span>{{REFERRED_BY}}</span></div>
+        <div><span>{{SUBTOTAL_LABEL}}</span> <span>{{SUBTOTAL}}</span></div>
+        <div><span>{{COMMISSION_LABEL}}</span> <span>{{COMMISSION}}</span></div>
+        <div><span><strong>{{TOTAL_LABEL}}</strong></span> <span><strong>{{TOTAL}}</strong></span></div>
+        {{LOCAL_TOTAL_LINE}}
+        <div><span>{{REFERRED_BY_LABEL}}</span> <span>{{REFERRED_BY}}</span></div>
     </div>
 
     <div class="divider"></div>
 
-    <div style="font-size: 13px;">Telegram: @Noropapayments</div>
+    <div style="font-size: 13px;">Telegram: @Noropayments</div>
 
     <div class="divider"></div>
 
     <div class="footer">
-        <div class="thank-you">Gracias<br>Por Tu Compra<br></div>
+        <div class="thank-you">{{THANK_YOU}}</div>
         <div class="barcode">
             ||||||||||||||||||||||||||||||
             <!-- Representación visual del código de barras (placeholder) -->
