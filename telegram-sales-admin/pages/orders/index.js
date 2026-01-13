@@ -13,11 +13,11 @@ function cleanProductName(name) {
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
-  { value: "WAITING_PAYMENT", label: "WAITING_PAYMENT" },
-  { value: "CREATED", label: "CREATED" },
-  { value: "PAID", label: "PAID" },
-  { value: "CANCELLED", label: "CANCELLED" },
-  { value: "DELIVERED", label: "DELIVERED" },
+  { value: "WAITING_PAYMENT", label: "Esperando Pago" },
+  { value: "CREATED", label: "Creado" },
+  { value: "PAID", label: "Pagado" },
+  { value: "CANCELLED", label: "Cancelado" },
+  { value: "DELIVERED", label: "Entregado" },
 ];
 
 export default function OrdersPage() {

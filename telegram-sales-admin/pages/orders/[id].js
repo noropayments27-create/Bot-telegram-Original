@@ -198,6 +198,7 @@ export default function OrderDetail() {
         <h3>Pago</h3>
         {payment ? (
           <>
+            <p>Método: {payment.payment_method || "No especificado"}</p>
             <p>File ID: {payment.screenshot_file_id}</p>
             <p>Estado revision: {payment.review_status}</p>
             <p>Enviado: {new Date(payment.submitted_at).toLocaleString()}</p>

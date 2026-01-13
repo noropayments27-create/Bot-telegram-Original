@@ -5,7 +5,7 @@ import { apiFetch, getAuthToken } from "../../lib/api";
 
 const SEGMENT_OPTIONS = [
   { value: "ALL_USERS", label: "Todos" },
-  { value: "CUSTOM", label: "Custom" },
+  { value: "CUSTOM", label: "Personalizado" },
 ];
 
 function parseTelegramIds(value) {
@@ -65,7 +65,7 @@ export default function NewBroadcastPage() {
   return (
     <main className="page">
       <section className="card" style={{ width: "min(700px, 100%)" }}>
-        <h1>Nuevo broadcast</h1>
+        <h1>Nueva Difusión</h1>
         {error && <p className="error">{error}</p>}
         <form className="form" onSubmit={handleSubmit}>
           <label>

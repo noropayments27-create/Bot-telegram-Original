@@ -94,6 +94,7 @@ MESSAGES = {
         "payment_after_pay_short": "📸 Cuando pagues, envía la captura aquí mismo para confirmar. ✅",
         "payment_choose_crypto": "🪙 Elige la criptomoneda con la que vas a pagar:",
         "payment_choose_method": "💳 Elige tu método de pago:",
+        "select_payment_method_first": "⚠️ Primero elige un método de pago antes de enviar la captura.",
         "payment_code_label": "Código: {code}",
         "payment_mp_clabe": "🔑 CLABE:",
         "payment_mp_title": "🧾 <b>Mercado Pago</b>",
@@ -150,6 +151,7 @@ MESSAGES = {
         "screenshot_received": "✅ ¡Recibido! Estamos verificando tu pago ahora mismo 🔎⏳",
         "screenshot_received_already": "❌ No se pudo enviar, espera confirmación de tu primera imagen.",
         "wait_products_empty": "No hay mas productos disponibles.",
+        "order_expired_notice": "⛔️ La orden actual ya no está disponible (expiró o fue cancelada) te redirijo al menú principal ⏳",
     },
     "en": {
         "access_restricted": "⛔️ Access restricted.\n\nIf you think this is a mistake, contact support and we'll help you. 🤝",
@@ -244,6 +246,7 @@ MESSAGES = {
         "payment_after_pay_short": "📸 When you pay, send the screenshot here to confirm. ✅",
         "payment_choose_crypto": "🪙 Choose the cryptocurrency you will pay with:",
         "payment_choose_method": "💳 Choose your payment method:",
+        "select_payment_method_first": "⚠️ First choose a payment method before sending the screenshot.",
         "payment_code_label": "Code: {code}",
         "payment_mp_clabe": "🔑 CLABE:",
         "payment_mp_title": "🧾 <b>Mercado Pago</b>",
@@ -300,6 +303,7 @@ MESSAGES = {
         "screenshot_received": "✅ Received! We're verifying your payment now 🔎⏳",
         "screenshot_received_already": "❌ Could not send. Please wait for confirmation of your first image.",
         "wait_products_empty": "No more products available.",
+        "order_expired_notice": "⛔️ The current order is no longer available (expired or canceled) redirecting to main menu ⏳",
     },
 }
 

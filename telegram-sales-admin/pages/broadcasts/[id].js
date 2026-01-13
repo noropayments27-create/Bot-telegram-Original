@@ -71,7 +71,7 @@ export default function BroadcastDetailPage() {
   return (
     <main className="page">
       <section className="card" style={{ width: "min(800px, 100%)" }}>
-        <h1>Detalle broadcast</h1>
+        <h1>Detalle de Difusión</h1>
         {error && <p className="error">{error}</p>}
         {!broadcast && !error && <p className="muted">Cargando...</p>}
         {broadcast && (
@@ -121,7 +121,7 @@ export default function BroadcastDetailPage() {
               <label>
                 Resultado
                 <textarea
-                  value={`Target: ${result.target_count}\nSent: ${result.sent_count}\nFailed: ${result.failed_count}`}
+                  value={`Objetivo: ${result.target_count}\nEnviados: ${result.sent_count}\nFallidos: ${result.failed_count}`}
                   readOnly
                 />
               </label>

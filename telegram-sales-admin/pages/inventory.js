@@ -296,7 +296,7 @@ export default function InventoryPage() {
 
         <div className="form">
           <label>
-            SKU Key
+            Clave SKU
             <input
               type="text"
               value={skuKey}
@@ -305,7 +305,7 @@ export default function InventoryPage() {
             />
           </label>
           <label>
-            Product ID
+            ID de Producto
             <input
               type="text"
               value={productId}
@@ -328,11 +328,11 @@ export default function InventoryPage() {
             <p>Disponible: {detail.available_stock ?? "-"}</p>
             <div className="actions" style={{ marginTop: "8px" }}>
               <button type="button" onClick={() => copyText(detail.product.id)}>
-                Copiar product_id
+                Copiar ID de producto
               </button>
               {detail.product.sku_key && (
                 <button type="button" onClick={() => copyText(detail.product.sku_key)}>
-                  Copiar sku_key
+                  Copiar clave SKU
                 </button>
               )}
             </div>
@@ -366,7 +366,7 @@ export default function InventoryPage() {
                 <h3>Template de entrega</h3>
                 <div className="form">
                   <label>
-                    Template
+                    Plantilla
                     <textarea
                       rows={10}
                       value={template}
@@ -425,9 +425,9 @@ export default function InventoryPage() {
                     Estado
                     <select value={unitsStatus} onChange={handleUnitsStatusChange}>
                       <option value="">Todos</option>
-                      <option value="AVAILABLE">AVAILABLE</option>
-                      <option value="HELD">HELD</option>
-                      <option value="DELIVERED">DELIVERED</option>
+                      <option value="AVAILABLE">DISPONIBLE</option>
+                      <option value="HELD">RETENIDO</option>
+                      <option value="DELIVERED">ENTREGADO</option>
                     </select>
                   </label>
                 </div>
@@ -436,13 +436,13 @@ export default function InventoryPage() {
                     <tr>
                       <th align="left">ID</th>
                       <th align="left">Estado</th>
-                      <th align="left">External ID</th>
+                      <th align="left">ID Externo</th>
                       <th align="left">Usuario</th>
-                      <th align="left">Password</th>
+                      <th align="left">Contraseña</th>
                       <th align="left">Inicio</th>
                       <th align="left">Expira</th>
                       <th align="left">Creada</th>
-                      <th align="left">Payload</th>
+                      <th align="left">Carga útil</th>
                     </tr>
                   </thead>
                   <tbody>
@@ -490,16 +490,16 @@ export default function InventoryPage() {
                 <p>No hay holds activos.</p>
               ) : (
                 <>
-                  <p>Held qty: {holdsHeldQty}</p>
+                  <p>Cantidad retenida: {holdsHeldQty}</p>
                   <table style={{ width: "100%", marginTop: "12px" }}>
                     <thead>
                       <tr>
-                        <th align="left">Order</th>
-                        <th align="left">Qty</th>
+                        <th align="left">Pedido</th>
+                        <th align="left">Cant.</th>
                         <th align="left">Expira</th>
                         <th align="left">Restante</th>
                         <th align="left">Creado</th>
-                        <th align="left">Status</th>
+                        <th align="left">Estado</th>
                         <th></th>
                       </tr>
                     </thead>
@@ -568,7 +568,7 @@ export default function InventoryPage() {
           </p>
           <div className="form">
             <label>
-              Confirmacion
+              Confirmación
               <input
                 type="text"
                 value={releaseConfirm}

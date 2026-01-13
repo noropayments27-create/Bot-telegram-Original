@@ -41,7 +41,7 @@ export default function BroadcastsPage() {
     <main className="page">
       <section className="card" style={{ width: "min(900px, 100%)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h1>Broadcasts</h1>
+          <h1>Difusiones</h1>
           <Link className="link" href="/broadcasts/new">
             Crear
           </Link>

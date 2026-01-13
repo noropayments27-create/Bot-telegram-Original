@@ -1486,6 +1486,7 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
+    await state.update_data(payment_method=method_key)
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 
@@ -1670,10 +1671,17 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     ):
         return
 
+    data = await state.get_data()
+    payment_method = data.get("payment_method")
+    if not payment_method:
+        await message.answer(t(locale, "select_payment_method_first"))
+        return
+
     screenshot_file_id = message.photo[-1].file_id
     payload = {
         "telegram_id": message.from_user.id,
         "screenshot_file_id": screenshot_file_id,
+        "payment_method": payment_method,
     }
 
     try:
@@ -1871,6 +1879,7 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
+    await state.update_data(payment_method=asset_key)
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 

@@ -75,22 +75,22 @@ export default function PayoutDetail() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Payout {payout.id}</h1>
+        <h1>Pago {payout.id}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 
         <h3>Detalle</h3>
-        <p>Status: {payout.status}</p>
-        <p>Amount: {payout.amount}</p>
-        <p>Method: {payout.method}</p>
-        <p>Destination: {payout.destination}</p>
-        <p>Created: {new Date(payout.created_at).toLocaleString()}</p>
-        {payout.sent_at && <p>Sent: {new Date(payout.sent_at).toLocaleString()}</p>}
+        <p>Estado: {payout.status}</p>
+        <p>Monto: {payout.amount}</p>
+        <p>Método: {payout.method}</p>
+        <p>Destino: {payout.destination}</p>
+        <p>Creado: {new Date(payout.created_at).toLocaleString()}</p>
+        {payout.sent_at && <p>Enviado: {new Date(payout.sent_at).toLocaleString()}</p>}
 
         <h3>Afiliado</h3>
         <p>ID: {affiliate.id}</p>
-        <p>Status: {affiliate.status}</p>
-        <p>Rate: {affiliate.commission_rate}</p>
+        <p>Estado: {affiliate.status}</p>
+        <p>Tasa: {affiliate.commission_rate}</p>
         <p>Balance disponible: {available_balance}</p>
 
         <h3>Usuario</h3>

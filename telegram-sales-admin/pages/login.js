@@ -92,7 +92,7 @@ export default function Login() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Admin Login</h1>
+        <h1>Inicio de Sesión Admin</h1>
         <p className="muted">
           Ingresa usuario y clave, luego confirma en Telegram.
         </p>

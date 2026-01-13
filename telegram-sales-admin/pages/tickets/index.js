@@ -6,8 +6,8 @@ import { apiFetch, getAuthToken } from "../../lib/api";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
-  { value: "OPEN", label: "OPEN" },
-  { value: "CLOSED", label: "CLOSED" },
+  { value: "OPEN", label: "ABIERTO" },
+  { value: "CLOSED", label: "CERRADO" },
 ];
 
 export default function TicketsPage() {
@@ -75,8 +75,8 @@ export default function TicketsPage() {
               <th align="left">Ticket</th>
               <th align="left">Estado</th>
               <th align="left">Telegram</th>
-              <th align="left">Ultimo mensaje</th>
-              <th align="left">Admin respondio</th>
+              <th align="left">Último mensaje</th>
+              <th align="left">Admin respondió</th>
               <th></th>
             </tr>
           </thead>

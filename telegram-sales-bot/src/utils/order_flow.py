@@ -4,13 +4,9 @@ from uuid import uuid4
 
 from aiogram.types import Message
 
+from ..services.i18n import t
 from ..handlers.menu import build_home_text, build_main_keyboard
 from ..utils.main_view import render_main_view, set_main_message_id
-
-_NOTICE_TEXT = (
-    "⛔️ La orden actual ya no está disponible (expiró o fue cancelada) "
-    "te redirijo al menú principal ⏳"
-)
 
 
 def is_order_payable(order: Optional[Dict[str, Any]]) -> bool:
@@ -26,6 +22,7 @@ async def show_not_payable_and_redirect(
     *,
     delay_seconds: int = 5,
 ) -> None:
+    notice_text = t(locale, "order_expired_notice")
     token = str(uuid4())
     user_id = message.from_user.id
     set_main_message_id(user_id, message.message_id)
@@ -36,15 +33,13 @@ async def show_not_payable_and_redirect(
         await render_main_view(
             message,
             user_id,
-            _NOTICE_TEXT,
+            notice_text,
             reply_markup=None,
             parse_mode="HTML",
         )
     except Exception as exc:
         print("[bot/order_guard] notice_edit_failed", {"error": str(exc)})
         return
-
-    async def _return_home(current_token: str) -> None:
         await asyncio.sleep(delay_seconds)
         data = await state.get_data()
         if data.get("order_guard_token") != current_token:

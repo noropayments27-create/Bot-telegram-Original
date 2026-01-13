@@ -6,14 +6,14 @@ import { apiFetch, getAuthToken } from "../../lib/api";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
-  { value: "PENDING", label: "PENDING" },
-  { value: "APPROVED", label: "APPROVED" },
-  { value: "REJECTED", label: "REJECTED" },
+  { value: "PENDING", label: "PENDIENTE" },
+  { value: "APPROVED", label: "APROBADO" },
+  { value: "REJECTED", label: "RECHAZADO" },
 ];
 
 const METHOD_OPTIONS = [
-  { value: "USDT_BSC", label: "USDT_BSC" },
-  { value: "BINANCE_ID", label: "BINANCE_ID" },
+  { value: "USDT_BSC", label: "USDT BSC" },
+  { value: "BINANCE_ID", label: "ID de Binance" },
 ];
 
 export default function AffiliatesPage() {
@@ -139,12 +139,12 @@ export default function AffiliatesPage() {
         <table style={{ width: "100%", marginTop: "16px" }}>
           <thead>
             <tr>
-              <th align="left">Affiliate ID</th>
+              <th align="left">ID de Afiliado</th>
               <th align="left">Telegram</th>
-              <th align="left">Status</th>
+              <th align="left">Estado</th>
               <th align="left">Balance</th>
-              <th align="left">Rate</th>
-              <th align="left">Crear payout</th>
+              <th align="left">Tasa</th>
+              <th align="left">Crear pago</th>
             </tr>
           </thead>
           <tbody>

@@ -6,9 +6,9 @@ import { apiFetch, getAuthToken } from "../../lib/api";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
-  { value: "REQUESTED", label: "REQUESTED" },
-  { value: "SENT", label: "SENT" },
-  { value: "CANCELLED", label: "CANCELLED" },
+  { value: "REQUESTED", label: "SOLICITADO" },
+  { value: "SENT", label: "ENVIADO" },
+  { value: "CANCELLED", label: "CANCELADO" },
 ];
 
 export default function PayoutsPage() {
@@ -56,7 +56,7 @@ export default function PayoutsPage() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Payouts</h1>
+        <h1>Pagos</h1>
         {error && <p className="error">{error}</p>}
         <div className="form">
           <label>
@@ -73,14 +73,14 @@ export default function PayoutsPage() {
         <table style={{ width: "100%", marginTop: "16px" }}>
           <thead>
             <tr>
-              <th align="left">Payout ID</th>
-              <th align="left">Affiliate</th>
-              <th align="left">Amount</th>
-              <th align="left">Method</th>
-              <th align="left">Destination</th>
-              <th align="left">Status</th>
-              <th align="left">Created</th>
-              <th align="left">Sent</th>
+              <th align="left">ID de Pago</th>
+              <th align="left">Afiliado</th>
+              <th align="left">Monto</th>
+              <th align="left">Método</th>
+              <th align="left">Destino</th>
+              <th align="left">Estado</th>
+              <th align="left">Creado</th>
+              <th align="left">Enviado</th>
               <th></th>
             </tr>
           </thead>
