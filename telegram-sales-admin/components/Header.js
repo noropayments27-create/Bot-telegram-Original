@@ -2,6 +2,8 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
+import { clearAuthToken } from "../lib/api";
+
 const NAV_LINKS = [
   { href: "/dashboard", label: "Principal" },
   { href: "/orders", label: "Ordenes" },
@@ -72,6 +74,16 @@ export default function Header() {
             {item.label}
           </Link>
         ))}
+        <button
+          type="button"
+          className="app-header__logout"
+          onClick={() => {
+            clearAuthToken();
+            router.replace("/login");
+          }}
+        >
+          Cerrar sesion
+        </button>
       </div>
       {open && (
         <button

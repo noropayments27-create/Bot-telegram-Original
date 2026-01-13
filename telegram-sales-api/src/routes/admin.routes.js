@@ -1457,6 +1457,14 @@ router.get("/summary", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    const newOrdersRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM orders o
+       JOIN order_payments op ON op.order_id = o.id
+       WHERE o.status = 'WAITING_PAYMENT'
+         AND op.review_status = 'PENDING'`
+    );
+
     const customersRes = await pool.query(
       `SELECT COUNT(DISTINCT o.user_id)::int AS count
        FROM orders o
@@ -1476,15 +1484,34 @@ router.get("/summary", async (req, res, next) => {
        WHERE o.status IN ('PAID', 'DELIVERED')`
     );
 
+    const productsRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM products
+       WHERE is_active = true`
+    );
+
+    const unreadTicketsRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM tickets t
+       WHERE t.status = 'OPEN'
+         AND NOT EXISTS (
+           SELECT 1 FROM ticket_messages tm
+           WHERE tm.ticket_id = t.id AND tm.sender = 'ADMIN'
+         )`
+    );
+
     const affiliatesRes = await pool.query(
       `SELECT COUNT(*)::int AS count
        FROM affiliates`
     );
 
     return res.json({
+      new_orders: newOrdersRes.rows[0]?.count || 0,
       customers: customersRes.rows[0]?.count || 0,
       total_sales: salesRes.rows[0]?.count || 0,
       total_revenue_usd: Number(revenueRes.rows[0]?.total || 0).toFixed(2),
+      active_products: productsRes.rows[0]?.count || 0,
+      unread_tickets: unreadTicketsRes.rows[0]?.count || 0,
       affiliates: affiliatesRes.rows[0]?.count || 0,
     });
   } catch (error) {

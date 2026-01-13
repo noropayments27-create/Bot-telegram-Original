@@ -28,8 +28,6 @@ export default function OrdersPage() {
   const [page, setPage] = useState(1);
   const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
-  const storageKey = "admin_last_seen_order_id";
-  const alertCountKey = "admin_orders_alert_count";
 
   const filterRecent = (orders) => {
     const cutoff = Date.now() - 5 * 60 * 1000;
@@ -67,11 +65,6 @@ export default function OrdersPage() {
         setTotalPages(isRecent ? 1 : data.total_pages || 1);
         setError("");
 
-        if (fetchedItems.length > 0 && typeof window !== "undefined") {
-          const latestId = fetchedItems[0].id;
-          window.localStorage.setItem(storageKey, String(latestId));
-          window.localStorage.setItem(alertCountKey, "0");
-        }
       } catch (err) {
         setError("No se pudo cargar las ordenes.");
       }

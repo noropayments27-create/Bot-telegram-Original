@@ -181,6 +181,22 @@ body.login-success {
   color: var(--scarlet-red);
 }
 
+.app-header__logout {
+  margin-top: 8px;
+  background: #b00020;
+  color: #fff;
+  border: none;
+  border-radius: 12px;
+  padding: 10px 14px;
+  font-weight: 700;
+  cursor: pointer;
+  text-align: center;
+}
+
+.app-header__logout:hover {
+  background: #d00025;
+}
+
 .app-header__backdrop {
   position: fixed;
   inset: 0;
@@ -227,6 +243,8 @@ body.login-success {
     6px 6px 16px var(--shadow-dark),
     -4px -4px 10px var(--shadow-light);
   position: relative;
+  flex-direction: column;
+  gap: 6px;
 }
 
 .nav-card:hover {
@@ -253,6 +271,20 @@ body.login-success {
   align-items: center;
   justify-content: center;
   box-shadow: 0 0 12px rgba(255, 36, 0, 0.8);
+}
+
+.nav-card__count {
+  font-size: 28px;
+  font-weight: 800;
+  color: var(--scarlet-red);
+  line-height: 1;
+}
+
+.nav-card__label {
+  font-size: 13px;
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: #d5d5d5;
 }
 
 .nav-card--alert {
