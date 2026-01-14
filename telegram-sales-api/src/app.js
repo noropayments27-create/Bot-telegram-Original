@@ -62,7 +62,9 @@ app.options('*', cors(corsOptions));
 
 // Body + logs
 app.use(express.json());
-app.use(morgan('dev'));
+if (process.env.API_LOG_REQUESTS !== "false") {
+  app.use(morgan('dev'));
+}
 
 // Rutas
 app.use('/health', healthRoutes);

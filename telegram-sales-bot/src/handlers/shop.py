@@ -571,6 +571,7 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
         "available_stock": product.get("available_stock"),
         "stock_is_unlimited": product.get("stock_is_unlimited"),
         "show_stock": product.get("show_stock"),
+        "created_at": product.get("created_at"),
     }
 
 
@@ -626,7 +627,9 @@ async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
         for product in products
         if str(product.get("name") or "").startswith(prefix)
     ]
-    filtered.sort(key=lambda item: item["name"])
+    filtered.sort(
+        key=lambda item: item.get("code") or item.get("created_at") or ""
+    )
     return filtered
 
 
@@ -1146,11 +1149,24 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
                 "username": callback.from_user.username,
             }
         )
-        if result.get("ok") is False and result.get("error") == "OUT_OF_STOCK":
-            backend_msg = result.get("message")
-            add_result = backend_msg or t(locale, "add_to_cart_failed")
-            if backend_msg:
-                await callback.answer(backend_msg, show_alert=True)
+        if result.get("ok") is False:
+            error_code = result.get("error")
+            if error_code == "OUT_OF_STOCK":
+                backend_msg = result.get("message")
+                add_result = backend_msg or t(locale, "add_to_cart_failed")
+                if backend_msg:
+                    await callback.answer(backend_msg, show_alert=True)
+            elif error_code == "UNIQUE_ALREADY_PURCHASED":
+                add_result = t(locale, "unique_already_purchased")
+                await callback.answer(add_result, show_alert=True)
+            elif error_code == "UNIQUE_IN_CART":
+                add_result = t(locale, "unique_in_cart")
+                await callback.answer(add_result, show_alert=True)
+            elif error_code == "UNIQUE_LIMIT":
+                add_result = t(locale, "unique_limit")
+                await callback.answer(add_result, show_alert=True)
+            else:
+                add_result = t(locale, "add_to_cart_failed")
         else:
             add_result = t(locale, "add_to_cart_success")
     except httpx.HTTPError:
@@ -1228,11 +1244,24 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
                 "username": callback.from_user.username,
             }
         )
-        if result.get("ok") is False and result.get("error") == "OUT_OF_STOCK":
-            backend_msg = result.get("message")
-            add_result = backend_msg or t(locale, "add_to_cart_failed")
-            if backend_msg:
-                await callback.answer(backend_msg, show_alert=True)
+        if result.get("ok") is False:
+            error_code = result.get("error")
+            if error_code == "OUT_OF_STOCK":
+                backend_msg = result.get("message")
+                add_result = backend_msg or t(locale, "add_to_cart_failed")
+                if backend_msg:
+                    await callback.answer(backend_msg, show_alert=True)
+            elif error_code == "UNIQUE_ALREADY_PURCHASED":
+                add_result = t(locale, "unique_already_purchased")
+                await callback.answer(add_result, show_alert=True)
+            elif error_code == "UNIQUE_IN_CART":
+                add_result = t(locale, "unique_in_cart")
+                await callback.answer(add_result, show_alert=True)
+            elif error_code == "UNIQUE_LIMIT":
+                add_result = t(locale, "unique_limit")
+                await callback.answer(add_result, show_alert=True)
+            else:
+                add_result = t(locale, "add_to_cart_failed")
         else:
             add_result = t(locale, "add_to_cart_success")
     except httpx.HTTPError:
@@ -1392,15 +1421,35 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         await callback.answer()
         return
 
-    if result.get("ok") is False and result.get("error") == "OUT_OF_STOCK":
-        backend_msg = result.get("message") or t(locale, "cart_checkout_error")
-        await render_main_view(
-            callback.message,
-            callback.from_user.id,
-            backend_msg,
-        )
-        await callback.answer(backend_msg, show_alert=True)
-        return
+    if result.get("ok") is False:
+        error_code = result.get("error")
+        if error_code == "OUT_OF_STOCK":
+            backend_msg = result.get("message") or t(locale, "cart_checkout_error")
+            await render_main_view(
+                callback.message,
+                callback.from_user.id,
+                backend_msg,
+            )
+            await callback.answer(backend_msg, show_alert=True)
+            return
+        if error_code == "UNIQUE_ALREADY_PURCHASED":
+            msg = t(locale, "unique_already_purchased")
+            await render_main_view(
+                callback.message,
+                callback.from_user.id,
+                msg,
+            )
+            await callback.answer(msg, show_alert=True)
+            return
+        if error_code == "UNIQUE_LIMIT":
+            msg = t(locale, "unique_limit")
+            await render_main_view(
+                callback.message,
+                callback.from_user.id,
+                msg,
+            )
+            await callback.answer(msg, show_alert=True)
+            return
 
     order_id = result.get("order_id")
     cart_total = float(result.get("total_usd", cart_total))

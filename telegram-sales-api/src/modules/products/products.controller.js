@@ -50,6 +50,7 @@ async function listProducts(req, res, next) {
               p.stock_mode,
               p.stock_qty,
               p.show_stock,
+              p.unique_purchase,
               CASE
                 WHEN p.stock_mode = 'SIMPLE' AND p.stock_qty IS NULL THEN true
                 ELSE false
@@ -78,7 +79,7 @@ async function listProducts(req, res, next) {
          GROUP BY product_id
        ) psh ON psh.product_id = p.id
        ${whereClause}
-       ORDER BY p.name ASC
+       ORDER BY p.created_at ASC, p.name ASC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
     );

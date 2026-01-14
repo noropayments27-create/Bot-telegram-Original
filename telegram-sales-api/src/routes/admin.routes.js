@@ -121,6 +121,69 @@ function parsePagination(query) {
   return { page, pageSize, offset: (page - 1) * pageSize };
 }
 
+const CODE_PREFIX_MAP = {
+  TIENDA: "T",
+  METODOS: "M",
+  VIP: "V",
+  PROGRAMAS: "W",
+};
+
+async function recalcProductCodes(client, options = {}) {
+  const { lastId = null, lastPrefix = null } = options;
+  await client.query(
+    "UPDATE products SET code = NULL WHERE code ~ '^[TMVW][0-9]{5}$'"
+  );
+  await client.query(
+    `WITH base AS (
+       SELECT
+         id,
+         CASE
+           WHEN name ILIKE 'SHOP %' THEN 'T'
+           WHEN name ILIKE 'METODOS %' THEN 'M'
+           WHEN name ILIKE 'VIP %' THEN 'V'
+           WHEN name ILIKE 'WEB %' THEN 'W'
+           ELSE NULL
+         END AS prefix,
+         created_at
+       FROM products
+       WHERE is_active = true
+         AND (
+           name ILIKE 'SHOP %'
+           OR name ILIKE 'METODOS %'
+           OR name ILIKE 'VIP %'
+           OR name ILIKE 'WEB %'
+         )
+     ),
+     categorized AS (
+       SELECT
+         id,
+         prefix,
+         created_at,
+         CASE
+           WHEN $1::uuid IS NOT NULL AND id = $1 AND prefix = $2 THEN 1
+           ELSE 0
+         END AS is_last
+       FROM base
+     ),
+     ranked AS (
+       SELECT
+         id,
+         prefix,
+         row_number() OVER (
+           PARTITION BY prefix
+           ORDER BY is_last ASC, created_at, id
+         ) AS rn
+       FROM categorized
+       WHERE prefix IS NOT NULL
+     )
+     UPDATE products p
+     SET code = ranked.prefix || lpad(ranked.rn::text, 5, '0')
+     FROM ranked
+     WHERE p.id = ranked.id`,
+    [lastId, lastPrefix]
+  );
+}
+
 function normalizeTelegramIds(input) {
   if (!Array.isArray(input)) {
     return [];
@@ -444,6 +507,387 @@ router.post("/auth/decision", (req, res) => {
 
 router.use(requireAdmin);
 
+router.post("/products/:id/name", async (req, res, next) => {
+  const productId = req.params.id;
+  const name = req.body && typeof req.body.name === "string"
+    ? req.body.name.trim()
+    : "";
+  const pool = getPool();
+
+  if (!productId) {
+    return res.status(400).json({ error: "PRODUCT_ID_REQUIRED" });
+  }
+  if (!name) {
+    return res.status(400).json({ error: "NAME_REQUIRED" });
+  }
+
+  try {
+    const updateRes = await pool.query(
+      `UPDATE products
+       SET name = $2, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [productId, name]
+    );
+
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+    }
+
+    await pool.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "PRODUCT_NAME_UPDATE",
+        "product",
+        productId,
+        JSON.stringify({ name }),
+      ]
+    );
+
+    return res.json({ product: updateRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/products", async (req, res, next) => {
+  const pool = getPool();
+  const allowedDeliveryTypes = [
+    "FILE",
+    "TEXT",
+    "IMAGE",
+    "VIDEO",
+    "LINK",
+    "EXPIRING_LINK",
+  ];
+  const allowedStockModes = ["SIMPLE", "UNITS"];
+
+  const categoryKey = String(req.body?.category_key || "").toUpperCase();
+  const displayName = typeof req.body?.display_name === "string"
+    ? req.body.display_name.trim()
+    : "";
+  const rawName = typeof req.body?.name === "string"
+    ? req.body.name.trim()
+    : "";
+  const baseName = rawName || displayName;
+
+  if (!baseName) {
+    return res.status(400).json({ error: "NAME_REQUIRED" });
+  }
+
+  const categoryPrefixMap = {
+    TIENDA: "SHOP",
+    METODOS: "METODOS",
+    VIP: "VIP",
+    PROGRAMAS: "WEB",
+  };
+  const prefix = categoryPrefixMap[categoryKey];
+  const name = prefix ? `${prefix} - ${baseName}` : baseName;
+
+  const priceValue = req.body?.price;
+  const parsedPrice = Number(priceValue ?? 0);
+  if (!Number.isFinite(parsedPrice) || parsedPrice < 0) {
+    return res.status(400).json({ error: "PRICE_INVALID" });
+  }
+
+  const deliveryType = String(req.body?.delivery_type || "TEXT").toUpperCase();
+  if (!allowedDeliveryTypes.includes(deliveryType)) {
+    return res.status(400).json({ error: "DELIVERY_TYPE_INVALID" });
+  }
+
+  const stockMode = String(req.body?.stock_mode || "SIMPLE").toUpperCase();
+  if (!allowedStockModes.includes(stockMode)) {
+    return res.status(400).json({ error: "STOCK_MODE_INVALID" });
+  }
+
+  const stockQtyRaw = req.body?.stock_qty;
+  const stockQty = stockMode === "UNITS"
+    ? null
+    : stockQtyRaw === "" || stockQtyRaw === null || stockQtyRaw === undefined
+      ? null
+      : Number(stockQtyRaw);
+  if (stockMode === "SIMPLE" && stockQty !== null) {
+    if (!Number.isFinite(stockQty) || stockQty < 0) {
+      return res.status(400).json({ error: "STOCK_INVALID" });
+    }
+  }
+
+  const showStock = req.body?.show_stock === undefined
+    ? true
+    : Boolean(req.body?.show_stock);
+  const uniquePurchase = Boolean(req.body?.unique_purchase);
+  const skuKey = typeof req.body?.sku_key === "string" && req.body.sku_key.trim()
+    ? req.body.sku_key.trim()
+    : null;
+  const description = typeof req.body?.description === "string"
+    ? req.body.description.trim()
+    : "";
+  const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
+    ? req.body.delivery_payload
+    : {};
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const insertRes = await client.query(
+        `INSERT INTO products
+          (sku_key, name, description, price, is_active, delivery_type, delivery_payload,
+           stock_mode, stock_qty, show_stock, unique_purchase)
+         VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10)
+         RETURNING *`,
+        [
+          skuKey,
+          name,
+          description,
+          parsedPrice,
+          deliveryType,
+          deliveryPayload,
+          stockMode,
+          stockQty,
+          showStock,
+          uniquePurchase,
+        ]
+      );
+
+      const created = insertRes.rows[0];
+      const lastPrefix = CODE_PREFIX_MAP[categoryKey] || null;
+      if (lastPrefix) {
+        await recalcProductCodes(client, { lastId: created.id, lastPrefix });
+      }
+      await client.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "PRODUCT_CREATE",
+          "product",
+          created.id,
+          JSON.stringify({ name: created.name }),
+        ]
+      );
+      await client.query("COMMIT");
+      return res.status(201).json({ product: created });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/products/:id/update", async (req, res, next) => {
+  const productId = req.params.id;
+  const pool = getPool();
+  const allowedDeliveryTypes = [
+    "FILE",
+    "TEXT",
+    "IMAGE",
+    "VIDEO",
+    "LINK",
+    "EXPIRING_LINK",
+  ];
+  const allowedStockModes = ["SIMPLE", "UNITS"];
+
+  if (!productId) {
+    return res.status(400).json({ error: "PRODUCT_ID_REQUIRED" });
+  }
+
+  const displayName = typeof req.body?.display_name === "string"
+    ? req.body.display_name.trim()
+    : "";
+  const categoryKey = String(req.body?.category_key || "").toUpperCase();
+  if (!displayName) {
+    return res.status(400).json({ error: "NAME_REQUIRED" });
+  }
+
+  const categoryPrefixMap = {
+    TIENDA: "SHOP",
+    METODOS: "METODOS",
+    VIP: "VIP",
+    PROGRAMAS: "WEB",
+  };
+  const prefix = categoryPrefixMap[categoryKey];
+  const name = prefix ? `${prefix} - ${displayName}` : displayName;
+
+  const priceValue = req.body?.price;
+  const parsedPrice = Number(priceValue ?? 0);
+  if (!Number.isFinite(parsedPrice) || parsedPrice < 0) {
+    return res.status(400).json({ error: "PRICE_INVALID" });
+  }
+
+  const description = typeof req.body?.description === "string"
+    ? req.body.description.trim()
+    : "";
+
+  const showStock = req.body?.show_stock === undefined
+    ? true
+    : Boolean(req.body?.show_stock);
+  const uniquePurchase = Boolean(req.body?.unique_purchase);
+
+  const stockMode = String(req.body?.stock_mode || "").toUpperCase();
+  if (!allowedStockModes.includes(stockMode)) {
+    return res.status(400).json({ error: "STOCK_MODE_INVALID" });
+  }
+
+  const deliveryType = req.body?.delivery_type
+    ? String(req.body.delivery_type).toUpperCase()
+    : null;
+  if (deliveryType && !allowedDeliveryTypes.includes(deliveryType)) {
+    return res.status(400).json({ error: "DELIVERY_TYPE_INVALID" });
+  }
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const currentRes = await client.query(
+        "SELECT name FROM products WHERE id = $1",
+        [productId]
+      );
+      if (currentRes.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+      }
+      const currentName = String(currentRes.rows[0].name || "");
+      const currentPrefix = currentName.toUpperCase().startsWith("SHOP ")
+        ? "TIENDA"
+        : currentName.toUpperCase().startsWith("METODOS ")
+          ? "METODOS"
+          : currentName.toUpperCase().startsWith("VIP ")
+            ? "VIP"
+            : currentName.toUpperCase().startsWith("WEB ")
+              ? "PROGRAMAS"
+              : null;
+      const categoryChanged = Boolean(categoryKey) && categoryKey !== currentPrefix;
+
+      const updateRes = await client.query(
+        `UPDATE products
+         SET name = $2,
+             description = $3,
+             price = $4,
+             show_stock = $5,
+             unique_purchase = $6,
+             stock_mode = $7::stock_mode_enum,
+             stock_qty = CASE WHEN $7::stock_mode_enum = 'UNITS' THEN NULL ELSE stock_qty END,
+             delivery_type = COALESCE($8, delivery_type),
+             updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [
+          productId,
+          name,
+          description,
+          parsedPrice,
+          showStock,
+          uniquePurchase,
+          stockMode,
+          deliveryType,
+        ]
+      );
+
+      if (updateRes.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+      }
+
+      if (categoryChanged && ["TIENDA", "METODOS", "VIP", "PROGRAMAS"].includes(categoryKey)) {
+        const lastPrefix = CODE_PREFIX_MAP[categoryKey] || null;
+        await recalcProductCodes(client, { lastId: productId, lastPrefix });
+      }
+
+      try {
+        await client.query(
+          `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [
+            "PRODUCT_UPDATE",
+            "product",
+            productId,
+            JSON.stringify({
+              name,
+              price: parsedPrice,
+              show_stock: showStock,
+              unique_purchase: uniquePurchase,
+              stock_mode: stockMode,
+            }),
+          ]
+        );
+      } catch (error) {
+        if (process.env.NODE_ENV !== "test") {
+          console.warn("Audit log insert failed:", error?.message || error);
+        }
+      }
+
+      await client.query("COMMIT");
+      return res.json({ product: updateRes.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/products/:id/deactivate", async (req, res, next) => {
+  const productId = req.params.id;
+  const pool = getPool();
+
+  if (!productId) {
+    return res.status(400).json({ error: "PRODUCT_ID_REQUIRED" });
+  }
+
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      const updateRes = await client.query(
+        `UPDATE products
+         SET is_active = false,
+             code = NULL,
+             updated_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [productId]
+      );
+
+      if (updateRes.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+      }
+
+      await recalcProductCodes(client);
+      await client.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "PRODUCT_DEACTIVATE",
+          "product",
+          productId,
+          JSON.stringify({ is_active: false }),
+        ]
+      );
+
+      await client.query("COMMIT");
+      return res.json({ product: updateRes.rows[0] });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/stock/holds/active", async (req, res, next) => {
   const productId = req.query.product_id;
   const skuKey = req.query.sku_key;
@@ -606,10 +1050,16 @@ router.get("/stock/inspect", async (req, res, next) => {
     return res.json({
       product: {
         id: product.id,
+        code: product.code,
         sku_key: product.sku_key,
         name: product.name,
+        description: product.description,
+        price: product.price,
+        show_stock: product.show_stock,
         stock_mode: product.stock_mode,
         stock_qty: product.stock_qty,
+        unique_purchase: product.unique_purchase,
+        delivery_template: product.delivery_template,
       },
       available_stock: availableStock,
       held_qty: activeHolds.heldQty,
@@ -1152,15 +1602,24 @@ router.post("/stock/simple/set", async (req, res, next) => {
   const productId = req.body && req.body.product_id;
   const skuKey = req.body && req.body.sku_key;
   const simpleStock = req.body && req.body.stock_qty;
+  const unlimited = Boolean(req.body && req.body.unlimited);
+  const hasUniquePurchase = req.body
+    && Object.prototype.hasOwnProperty.call(req.body, "unique_purchase");
+  const uniquePurchase = hasUniquePurchase
+    ? Boolean(req.body && req.body.unique_purchase)
+    : null;
   const pool = getPool();
 
-  if (simpleStock === undefined || simpleStock === null || simpleStock === "") {
+  if (!unlimited && (simpleStock === undefined || simpleStock === null || simpleStock === "")) {
     return res.status(400).json({ error: "STOCK_REQUIRED" });
   }
 
-  const parsedStock = Number(simpleStock);
-  if (!Number.isFinite(parsedStock) || parsedStock < 0) {
-    return res.status(400).json({ error: "STOCK_INVALID" });
+  let parsedStock = null;
+  if (!unlimited) {
+    parsedStock = Number(simpleStock);
+    if (!Number.isFinite(parsedStock) || parsedStock < 0) {
+      return res.status(400).json({ error: "STOCK_INVALID" });
+    }
   }
 
   try {
@@ -1174,10 +1633,12 @@ router.post("/stock/simple/set", async (req, res, next) => {
 
     const updateRes = await pool.query(
       `UPDATE products
-       SET stock_qty = $2, updated_at = now()
+       SET stock_qty = $2,
+           unique_purchase = COALESCE($3, unique_purchase),
+           updated_at = now()
        WHERE id = $1
        RETURNING *`,
-      [product.id, parsedStock]
+      [product.id, parsedStock, uniquePurchase]
     );
 
     await pool.query(
@@ -1187,10 +1648,53 @@ router.post("/stock/simple/set", async (req, res, next) => {
         "STOCK_SIMPLE_SET",
         "product",
         product.id,
-        JSON.stringify({ stock_qty: parsedStock, sku_key: product.sku_key }),
+        JSON.stringify({
+          stock_qty: parsedStock,
+          sku_key: product.sku_key,
+          unique_purchase: updateRes.rows[0].unique_purchase,
+        }),
       ]
     );
 
+    return res.json({ product: updateRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/products/:id/stock-mode", async (req, res, next) => {
+  const productId = req.params.id;
+  const mode = String(req.body?.stock_mode || "").toUpperCase();
+  const pool = getPool();
+
+  if (!productId) {
+    return res.status(400).json({ error: "PRODUCT_ID_REQUIRED" });
+  }
+  if (mode !== "SIMPLE" && mode !== "UNITS") {
+    return res.status(400).json({ error: "INVALID_STOCK_MODE" });
+  }
+
+  try {
+    const updateRes = await pool.query(
+      `UPDATE products
+       SET stock_mode = $2, updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [productId, mode]
+    );
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+    }
+    await pool.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "PRODUCT_STOCK_MODE_UPDATE",
+        "product",
+        productId,
+        JSON.stringify({ stock_mode: mode }),
+      ]
+    );
     return res.json({ product: updateRes.rows[0] });
   } catch (error) {
     return next(error);

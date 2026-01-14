@@ -97,6 +97,7 @@ CREATE TABLE IF NOT EXISTS products (
   description text,
   price numeric(12,2) NOT NULL CHECK (price >= 0),
   is_active boolean NOT NULL DEFAULT true,
+  unique_purchase boolean NOT NULL DEFAULT false,
   delivery_type delivery_type NOT NULL,
   delivery_payload jsonb NOT NULL DEFAULT '{}'::jsonb,
   created_at timestamptz NOT NULL DEFAULT now(),

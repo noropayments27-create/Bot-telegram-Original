@@ -31,7 +31,6 @@ export default function Login() {
         const data = await response.json();
         if (data.status === "APPROVED" && data.token) {
           setAuthToken(data.token);
-          document.body.classList.add('login-success');
           setTimeout(() => {
             router.replace("/dashboard");
           }, 1000);

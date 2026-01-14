@@ -14,7 +14,7 @@ function requireAdmin(req, res, next) {
     || process.env.ADMIN_KEY
     || process.env.ADMIN_SECRET;
 
-  if (process.env.NODE_ENV !== "production") {
+  if (process.env.ADMIN_AUTH_LOG === "true") {
     console.log("[admin-auth] headers", {
       has_admin_key: Boolean(apiKey),
       has_authorization: Boolean(authHeader),

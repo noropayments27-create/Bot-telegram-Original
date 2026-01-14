@@ -7,6 +7,23 @@ function normalizeTelegramId(value) {
   return String(value).trim();
 }
 
+function parseAdminTelegramIds() {
+  const value = process.env.ADMIN_TELEGRAM_IDS || "";
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && /^[0-9]+$/.test(item))
+    .map((item) => Number(item));
+}
+
+function isAdminTelegramId(telegramId) {
+  if (!telegramId) {
+    return false;
+  }
+  const admins = parseAdminTelegramIds();
+  return admins.includes(Number(telegramId));
+}
+
 async function ensureUser(client, telegramId, username) {
   const userRes = await client.query(
     "SELECT * FROM users WHERE telegram_id = $1",
@@ -154,7 +171,7 @@ async function addToCart(req, res, next) {
 
   try {
     await client.query("BEGIN");
-    await ensureUser(client, telegramId, username);
+    const user = await ensureUser(client, telegramId, username);
     const cart = await getOrCreateActiveCart(client, telegramId);
     if (!cart) {
       await client.query("ROLLBACK");
@@ -167,6 +184,7 @@ async function addToCart(req, res, next) {
               p.price,
               p.stock_mode,
               p.stock_qty,
+              p.unique_purchase,
               COALESCE(psu.available_units, 0) AS available_units,
               COALESCE(psh.held_qty, 0) AS held_qty
        FROM products p
@@ -201,6 +219,42 @@ async function addToCart(req, res, next) {
       ? Number(cartItemRes.rows[0].qty)
       : 0;
     const nextQty = currentQty + qty;
+
+    if (product.unique_purchase && product.stock_mode === "SIMPLE" && !isAdminTelegramId(telegramId)) {
+      if (qty > 1) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "UNIQUE_LIMIT",
+          message: "❌ Este producto solo permite 1 compra por cliente.",
+        });
+      }
+      if (currentQty >= 1) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "UNIQUE_IN_CART",
+          message: "⚠️ Este producto ya está en tu carrito.",
+        });
+      }
+      const alreadyPurchasedRes = await client.query(
+        `SELECT 1
+         FROM orders o
+         WHERE o.user_id = $1
+           AND o.product_id = $2
+           AND o.status IN ('PAID', 'DELIVERED')
+         LIMIT 1`,
+        [user.id, product.id]
+      );
+      if (alreadyPurchasedRes.rowCount > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "UNIQUE_ALREADY_PURCHASED",
+          message: "❌ Ya adquiriste este producto.",
+        });
+      }
+    }
 
     let availableStock = null;
     let isUnlimited = false;
@@ -363,7 +417,8 @@ async function checkoutCart(req, res, next) {
               p.name,
               p.price,
               p.stock_mode,
-              p.stock_qty
+              p.stock_qty,
+              p.unique_purchase
        FROM cart_items ci
        JOIN products p ON p.id = ci.product_id
        WHERE ci.cart_id = $1
@@ -383,6 +438,43 @@ async function checkoutCart(req, res, next) {
     const productIds = Array.from(
       new Set(itemsRes.rows.map((item) => item.product_id))
     );
+    const isAdmin = isAdminTelegramId(telegramId);
+
+    if (!isAdmin) {
+      const uniqueItems = itemsRes.rows.filter(
+        (item) => item.unique_purchase && item.stock_mode === "SIMPLE"
+      );
+      for (const item of uniqueItems) {
+        if (Number(item.qty) > 1) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            ok: false,
+            error: "UNIQUE_LIMIT",
+            message: "❌ Este producto solo permite 1 compra por cliente.",
+          });
+        }
+      }
+      if (uniqueItems.length > 0) {
+        const uniqueProductIds = uniqueItems.map((item) => item.product_id);
+        const purchasedRes = await client.query(
+          `SELECT 1
+           FROM orders o
+           WHERE o.user_id = $1
+             AND o.product_id = ANY($2)
+             AND o.status IN ('PAID', 'DELIVERED')
+           LIMIT 1`,
+          [user.id, uniqueProductIds]
+        );
+        if (purchasedRes.rowCount > 0) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            ok: false,
+            error: "UNIQUE_ALREADY_PURCHASED",
+            message: "❌ Ya adquiriste este producto.",
+          });
+        }
+      }
+    }
     const holdsMap = new Map();
     const unitsMap = new Map();
 
