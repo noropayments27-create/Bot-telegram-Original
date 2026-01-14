@@ -67,6 +67,8 @@ class ApiClient:
             response = await client.post(
                 url, json=payload, headers=self._headers(), timeout=5
             )
+            if response.status_code == 409:
+                return {"status_code": 409, "data": response.json()}
             response.raise_for_status()
             return response.json()
 

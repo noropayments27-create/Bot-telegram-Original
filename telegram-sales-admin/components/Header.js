@@ -113,7 +113,27 @@ export default function Header() {
             aria-label="Notificaciones"
             onClick={() => setBellOpen((prev) => !prev)}
           >
-            🔔
+            <svg
+              className="app-header__bell-icon"
+              viewBox="0 0 24 24"
+              aria-hidden="true"
+            >
+              <path
+                d="M12 3a5 5 0 0 0-5 5v2.2c0 .9-.3 1.8-.9 2.5L4.5 15.5c-.4.6 0 1.5.8 1.5h13.4c.8 0 1.2-.9.8-1.5l-1.6-2.8c-.6-.7-.9-1.6-.9-2.5V8a5 5 0 0 0-5-5z"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+                strokeLinejoin="round"
+              />
+              <path
+                d="M9.5 19a2.5 2.5 0 0 0 5 0"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
             {notificationCount > 0 && (
               <span className="app-header__bell-badge">
                 {notificationCount > 99 ? "99+" : notificationCount}

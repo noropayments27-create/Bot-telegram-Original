@@ -1,0 +1,21 @@
+.layout {
+  min-height: 100vh;
+}
+
+.main {
+  margin-left: 260px;
+}
+
+.overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.35);
+  z-index: 110;
+}
+
+@media (max-width: 960px) {
+  .main {
+    margin-left: 0;
+    padding-top: 70px;
+  }
+}

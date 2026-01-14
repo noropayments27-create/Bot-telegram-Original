@@ -131,36 +131,27 @@ const CODE_PREFIX_MAP = {
 async function recalcProductCodes(client, options = {}) {
   const { lastId = null, lastPrefix = null } = options;
   await client.query(
-    "UPDATE products SET code = NULL WHERE code ~ '^[TMVW][0-9]{5}$'"
-  );
-  await client.query(
     `WITH base AS (
        SELECT
          id,
          CASE
-           WHEN name ILIKE 'SHOP %' THEN 'T'
-           WHEN name ILIKE 'METODOS %' THEN 'M'
-           WHEN name ILIKE 'VIP %' THEN 'V'
-           WHEN name ILIKE 'WEB %' THEN 'W'
+           WHEN code ~ '^[TMVW][0-9]{5}$' THEN substring(code FROM 1 FOR 1)
            ELSE NULL
          END AS prefix,
          created_at
        FROM products
        WHERE is_active = true
-         AND (
-           name ILIKE 'SHOP %'
-           OR name ILIKE 'METODOS %'
-           OR name ILIKE 'VIP %'
-           OR name ILIKE 'WEB %'
-         )
      ),
      categorized AS (
        SELECT
          id,
-         prefix,
+         CASE
+           WHEN $1::uuid IS NOT NULL AND id = $1 THEN $2
+           ELSE prefix
+         END AS prefix,
          created_at,
          CASE
-           WHEN $1::uuid IS NOT NULL AND id = $1 AND prefix = $2 THEN 1
+           WHEN $1::uuid IS NOT NULL AND id = $1 THEN 1
            ELSE 0
          END AS is_last
        FROM base
@@ -175,6 +166,12 @@ async function recalcProductCodes(client, options = {}) {
          ) AS rn
        FROM categorized
        WHERE prefix IS NOT NULL
+     ),
+     reset AS (
+       UPDATE products
+       SET code = NULL
+       WHERE code ~ '^[TMVW][0-9]{5}$'
+       RETURNING id
      )
      UPDATE products p
      SET code = ranked.prefix || lpad(ranked.rn::text, 5, '0')
@@ -182,6 +179,17 @@ async function recalcProductCodes(client, options = {}) {
      WHERE p.id = ranked.id`,
     [lastId, lastPrefix]
   );
+}
+
+async function getNextSkuKey(client) {
+  await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
+  await client.query(
+    "GRANT USAGE, SELECT ON SEQUENCE products_sku_key_seq TO PUBLIC"
+  );
+  const res = await client.query(
+    "SELECT nextval('products_sku_key_seq') AS value"
+  );
+  return String(res.rows[0].value).padStart(6, "0");
 }
 
 function normalizeTelegramIds(input) {
@@ -208,6 +216,7 @@ const RECEIPT_TRANSLATIONS = {
   es: {
     title: "🧾 Recibo de pago",
     order_id: "🆔 ID de orden",
+    order_number: "🧾 Número de orden",
     product: "📦 Producto",
     price: "💰 Precio",
     date: "📅 Fecha",
@@ -216,10 +225,12 @@ const RECEIPT_TRANSLATIONS = {
     reference: "🔗 Referencia",
     total: "💵 Total",
     total_in: "💵 Total en",
+    rate: "💱 Tasa aplicada",
   },
   en: {
     title: "🧾 Receipt",
     order_id: "🆔 Order ID",
+    order_number: "🧾 Order number",
     product: "📦 Product",
     price: "💰 Price",
     date: "📅 Date",
@@ -228,10 +239,11 @@ const RECEIPT_TRANSLATIONS = {
     reference: "🔗 Reference",
     total: "💵 Total",
     total_in: "💵 Total in",
+    rate: "💱 Applied rate",
   },
 };
 
-function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd) {
+function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd, localTotal) {
   const translations = RECEIPT_TRANSLATIONS[locale] || RECEIPT_TRANSLATIONS.es;
   const price =
     subtotalUsd !== undefined && subtotalUsd !== null
@@ -239,17 +251,49 @@ function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd) {
       : order.unit_price_at_purchase || order.product_price;
   const createdAt = order.paid_at || new Date();
   const createdAtText = new Date(createdAt).toLocaleString();
+  const orderNumberText = order.order_number
+    ? String(order.order_number).padStart(5, "0")
+    : "-";
+  const priceText = Number(price || 0) <= 0 ? "Gratis" : `$${price} USD`;
   const lines = [
     `🎉 ${translations.title} 🎉`,
     "",
+    `${translations.order_number}: ${orderNumberText}`,
+    "",
     `${translations.order_id}: ${order.id}`,
+    "",
     `${translations.product}: ${order.product_name || order.product_id}`,
-    `${translations.price}: $${price} USD`,
+    "",
+    `${translations.price}: ${priceText}`,
+    "",
     `${translations.date}: ${createdAtText}`,
+    "",
     `${translations.status}: ${translations.paid}`,
   ];
   if (paymentProof && paymentProof.screenshot_file_id) {
+    lines.push("");
     lines.push(`${translations.reference}: ${paymentProof.screenshot_file_id}`);
+  }
+  if (localTotal && localTotal.currency && localTotal.amount != null) {
+    const currency = localTotal.currency;
+    const amount =
+      currency === "COP" || currency === "MXN"
+        ? Math.floor(localTotal.amount).toLocaleString(locale === "es" ? "es-CO" : "en-US")
+        : Number(localTotal.amount).toFixed(currency === "BTC" || currency === "LTC" ? 8 : 2)
+            .replace(/\.?0+$/, "");
+    lines.push("");
+    lines.push(`${translations.total_in} ${currency}: ${amount} ${currency}`);
+    const rateBase = Number(price) || 0;
+    if (rateBase > 0) {
+      const rateValue = Number(localTotal.amount) / rateBase;
+      if (Number.isFinite(rateValue) && rateValue > 0) {
+        const rateText =
+          currency === "BTC" || currency === "LTC"
+            ? rateValue.toFixed(8)
+            : rateValue.toFixed(2);
+        lines.push(`${translations.rate}: 1 USD = ${rateText} ${currency}`);
+      }
+    }
   }
   lines.push("");
   lines.push("✅ ¡Gracias por tu compra!");
@@ -576,14 +620,7 @@ router.post("/products", async (req, res, next) => {
     return res.status(400).json({ error: "NAME_REQUIRED" });
   }
 
-  const categoryPrefixMap = {
-    TIENDA: "SHOP",
-    METODOS: "METODOS",
-    VIP: "VIP",
-    PROGRAMAS: "WEB",
-  };
-  const prefix = categoryPrefixMap[categoryKey];
-  const name = prefix ? `${prefix} - ${baseName}` : baseName;
+  const name = baseName;
 
   const priceValue = req.body?.price;
   const parsedPrice = Number(priceValue ?? 0);
@@ -617,9 +654,12 @@ router.post("/products", async (req, res, next) => {
     ? true
     : Boolean(req.body?.show_stock);
   const uniquePurchase = Boolean(req.body?.unique_purchase);
-  const skuKey = typeof req.body?.sku_key === "string" && req.body.sku_key.trim()
+  let skuKey = typeof req.body?.sku_key === "string" && req.body.sku_key.trim()
     ? req.body.sku_key.trim()
-    : null;
+    : "";
+  if (skuKey && !/^\d+$/.test(skuKey)) {
+    skuKey = "";
+  }
   const description = typeof req.body?.description === "string"
     ? req.body.description.trim()
     : "";
@@ -631,6 +671,9 @@ router.post("/products", async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      if (!skuKey) {
+        skuKey = await getNextSkuKey(client);
+      }
       const insertRes = await client.query(
         `INSERT INTO products
           (sku_key, name, description, price, is_active, delivery_type, delivery_payload,
@@ -704,14 +747,7 @@ router.post("/products/:id/update", async (req, res, next) => {
     return res.status(400).json({ error: "NAME_REQUIRED" });
   }
 
-  const categoryPrefixMap = {
-    TIENDA: "SHOP",
-    METODOS: "METODOS",
-    VIP: "VIP",
-    PROGRAMAS: "WEB",
-  };
-  const prefix = categoryPrefixMap[categoryKey];
-  const name = prefix ? `${prefix} - ${displayName}` : displayName;
+  const name = displayName;
 
   const priceValue = req.body?.price;
   const parsedPrice = Number(priceValue ?? 0);
@@ -736,6 +772,9 @@ router.post("/products/:id/update", async (req, res, next) => {
   const deliveryType = req.body?.delivery_type
     ? String(req.body.delivery_type).toUpperCase()
     : null;
+  const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
+    ? req.body.delivery_payload
+    : null;
   if (deliveryType && !allowedDeliveryTypes.includes(deliveryType)) {
     return res.status(400).json({ error: "DELIVERY_TYPE_INVALID" });
   }
@@ -745,21 +784,21 @@ router.post("/products/:id/update", async (req, res, next) => {
     try {
       await client.query("BEGIN");
       const currentRes = await client.query(
-        "SELECT name FROM products WHERE id = $1",
+        "SELECT name, code FROM products WHERE id = $1",
         [productId]
       );
       if (currentRes.rowCount === 0) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
       }
-      const currentName = String(currentRes.rows[0].name || "");
-      const currentPrefix = currentName.toUpperCase().startsWith("SHOP ")
+      const currentCode = String(currentRes.rows[0].code || "").toUpperCase();
+      const currentPrefix = currentCode.startsWith("T")
         ? "TIENDA"
-        : currentName.toUpperCase().startsWith("METODOS ")
+        : currentCode.startsWith("M")
           ? "METODOS"
-          : currentName.toUpperCase().startsWith("VIP ")
+          : currentCode.startsWith("V")
             ? "VIP"
-            : currentName.toUpperCase().startsWith("WEB ")
+            : currentCode.startsWith("W")
               ? "PROGRAMAS"
               : null;
       const categoryChanged = Boolean(categoryKey) && categoryKey !== currentPrefix;
@@ -774,6 +813,7 @@ router.post("/products/:id/update", async (req, res, next) => {
              stock_mode = $7::stock_mode_enum,
              stock_qty = CASE WHEN $7::stock_mode_enum = 'UNITS' THEN NULL ELSE stock_qty END,
              delivery_type = COALESCE($8, delivery_type),
+             delivery_payload = COALESCE($9::jsonb, delivery_payload),
              updated_at = now()
          WHERE id = $1
          RETURNING *`,
@@ -786,6 +826,7 @@ router.post("/products/:id/update", async (req, res, next) => {
           uniquePurchase,
           stockMode,
           deliveryType,
+          deliveryPayload ? JSON.stringify(deliveryPayload) : null,
         ]
       );
 
@@ -1598,6 +1639,97 @@ router.post(
   }
 );
 
+router.post("/stock/units/add", async (req, res, next) => {
+  const productId = req.body?.product_id;
+  const skuKey = req.body?.sku_key;
+  const pool = getPool();
+
+  try {
+    const product = await resolveProductByIdentifier(pool, productId, skuKey);
+    if (!product) {
+      return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+    }
+    if (product.stock_mode !== "UNITS") {
+      return res.status(400).json({ error: "PRODUCT_NOT_UNITS" });
+    }
+
+    let payload = {};
+    if (req.body?.payload) {
+      if (typeof req.body.payload === "string") {
+        try {
+          payload = JSON.parse(req.body.payload);
+        } catch (error) {
+          return res.status(400).json({ error: "PAYLOAD_INVALID_JSON" });
+        }
+      } else if (typeof req.body.payload === "object") {
+        payload = req.body.payload;
+      }
+    }
+
+    const normalizedPayload = {
+      title: req.body?.title || payload.title,
+      username: req.body?.username || payload.username,
+      password: req.body?.password || payload.password,
+      start_at: req.body?.start_at || req.body?.starts_at || payload.start_at,
+      starts_at: req.body?.starts_at || req.body?.start_at || payload.starts_at,
+      expires_at: req.body?.expires_at || payload.expires_at,
+      notes: req.body?.notes || payload.notes,
+      external_id: req.body?.external_id || payload.external_id,
+      ...payload,
+    };
+
+    if (normalizedPayload.external_id) {
+      const extRes = await pool.query(
+        `SELECT 1
+         FROM product_stock_units
+         WHERE product_id = $1
+           AND payload->>'external_id' = $2
+         LIMIT 1`,
+        [product.id, String(normalizedPayload.external_id)]
+      );
+      if (extRes.rowCount > 0) {
+        return res.status(409).json({ error: "EXTERNAL_ID_DUPLICATE" });
+      }
+    }
+
+    const payloadKey = stableStringify(normalizedPayload);
+    const existingRes = await pool.query(
+      `SELECT 1 FROM product_stock_units
+       WHERE product_id = $1 AND payload = $2::jsonb
+       LIMIT 1`,
+      [product.id, normalizedPayload]
+    );
+    if (existingRes.rowCount > 0) {
+      return res.status(409).json({ error: "DUPLICATE_IN_DB" });
+    }
+
+    const insertRes = await pool.query(
+      `INSERT INTO product_stock_units (product_id, payload, status)
+       VALUES ($1, $2::jsonb, 'AVAILABLE')
+       RETURNING *`,
+      [product.id, normalizedPayload]
+    );
+
+    await pool.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "STOCK_UNITS_ADD",
+        "product",
+        product.id,
+        JSON.stringify({
+          sku_key: product.sku_key,
+          payload_key: payloadKey,
+        }),
+      ]
+    );
+
+    return res.json({ unit: insertRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.post("/stock/simple/set", async (req, res, next) => {
   const productId = req.body && req.body.product_id;
   const skuKey = req.body && req.body.sku_key;
@@ -1620,6 +1752,9 @@ router.post("/stock/simple/set", async (req, res, next) => {
     if (!Number.isFinite(parsedStock) || parsedStock < 0) {
       return res.status(400).json({ error: "STOCK_INVALID" });
     }
+  }
+  if (uniquePurchase && !unlimited) {
+    parsedStock = 1;
   }
 
   try {
@@ -2228,7 +2363,8 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         order,
         paymentRes.rows[0],
         userLocale,
-        subtotal
+        subtotal,
+        localTotal
       );
 
       const receiptPng = await renderReceiptPng({
@@ -2253,6 +2389,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       }
     } catch (err) {
       console.error("Telegram receipt failed", err);
+      if (err && err.message === "playwright_not_installed") {
+        console.error("Playwright browsers missing. Run: npx playwright install");
+      }
       try {
         await sendMessage(telegramId, receipt);
       } catch (fallbackError) {

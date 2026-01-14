@@ -1,0 +1,45 @@
+.topBar {
+  position: fixed;
+  top: 0;
+  left: 0;
+  right: 0;
+  height: 60px;
+  display: none;
+  align-items: center;
+  justify-content: space-between;
+  padding: 0 18px;
+  background: rgba(0, 0, 0, 0.7);
+  border-bottom: 1px solid rgba(255, 36, 0, 0.2);
+  z-index: 140;
+}
+
+.menuButton {
+  width: 42px;
+  height: 42px;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 255, 255, 0.35);
+  background: transparent;
+  color: #FFFFFF;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  cursor: pointer;
+}
+
+.menuButton svg {
+  width: 20px;
+  height: 20px;
+}
+
+.title {
+  font-weight: 700;
+  font-size: 16px;
+  color: #FFFFFF;
+}
+
+
+@media (max-width: 960px) {
+  .topBar {
+    display: flex;
+  }
+}

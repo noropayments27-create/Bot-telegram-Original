@@ -1,16 +1,19 @@
 import { useRouter } from "next/router";
 
-import Header from "../components/Header";
+import Layout from "../components/Layout";
 import "../styles/globals.css";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
-  const showHeader = router.pathname !== "/login";
+  const useLayout = router.pathname !== "/login";
+
+  if (!useLayout) {
+    return <Component {...pageProps} />;
+  }
 
   return (
-    <>
-      {showHeader && <Header />}
+    <Layout>
       <Component {...pageProps} />
-    </>
+    </Layout>
   );
 }

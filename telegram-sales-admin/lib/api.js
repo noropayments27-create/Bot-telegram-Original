@@ -1,7 +1,7 @@
 const DEFAULT_BASE_URL = "http://localhost:3001";
 const AUTH_TOKEN_KEY = "ADMIN_TOKEN";
 const AUTH_TOKEN_EXPIRES_KEY = "ADMIN_TOKEN_EXPIRES_AT";
-const AUTH_TOKEN_TTL_MS = 10 * 60 * 1000;
+const AUTH_TOKEN_TTL_MS = 60 * 60 * 1000;
 
 export function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;

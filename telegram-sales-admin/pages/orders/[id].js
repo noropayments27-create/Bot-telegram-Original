@@ -93,7 +93,7 @@ export default function OrderDetail() {
       }
       if (response.status === 409) {
         await loadDetail();
-        setMessage("⚠️ Este pedido ya fue procesado anteriormente");
+        setMessage("Este pedido ya fue procesado anteriormente");
         return;
       }
       if (!response.ok) {
@@ -180,12 +180,12 @@ export default function OrderDetail() {
   return (
     <main className="page order-detail-page">
       <section className="card order-detail">
-        <h1>🧾 Orden {orderNumberText}</h1>
+        <h1>Orden {orderNumberText}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 
         <div className="detail-section">
-          <h3>📌 Detalle</h3>
+          <h3>Detalle</h3>
           <p>Estado: {order.status}</p>
           <p>Precio (USD): {subtotalUsd}</p>
           {localTotal && (
@@ -200,13 +200,13 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-          <h3>👤 Usuario</h3>
+          <h3>Usuario</h3>
           <p>Telegram ID: {user.telegram_id}</p>
           <p>Username: {user.telegram_username || "-"}</p>
         </div>
 
         <div className="detail-section">
-          <h3>🛒 Productos</h3>
+          <h3>Productos</h3>
         {items.length > 0 ? (
           <>
             {items.map((item) => {
@@ -228,7 +228,7 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>💳 Pago</h3>
+        <h3>Pago</h3>
         {payment ? (
           <>
             <p>Método: {payment.payment_method || "No especificado"}</p>
@@ -242,7 +242,7 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>💸 Comisión</h3>
+        <h3>Comisión</h3>
         {commission ? (
           <>
             <p>ID: {commission.id}</p>
@@ -255,7 +255,7 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>🖼️ Captura</h3>
+        <h3>Captura</h3>
         {hasProof && proofUrl ? (
           <>
             <img
@@ -273,12 +273,12 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>✅ Acciones</h3>
+        <h3>Acciones</h3>
         {isAlreadyProcessed && (
           <div className="muted">
-            <p>✅ Pago aprobado</p>
-            <p>📦 Stock consumido</p>
-            <p>📬 Entrega realizada</p>
+            <p>Pago aprobado</p>
+            <p>Stock consumido</p>
+            <p>Entrega realizada</p>
           </div>
         )}
         <div className="form">

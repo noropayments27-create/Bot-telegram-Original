@@ -109,7 +109,7 @@ async function createOrder(req, res, next) {
     const expirySeconds = Math.max(
       parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
         || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 0) * 60
-        || 10,
+        || 900,
       1
     );
 
@@ -421,6 +421,16 @@ async function submitPaymentProof(req, res, next) {
        WHERE id = $1
        RETURNING *`,
       [orderId, ORDER_STATUS_WAITING_CONFIRMATION]
+    );
+
+    await client.query(
+      `UPDATE product_stock_holds
+       SET expires_at = now() + interval '365 days',
+           updated_at = now()
+       WHERE order_id = $1
+         AND status = 'HELD'
+         AND (expires_at IS NULL OR expires_at > now())`,
+      [orderId]
     );
 
     await client.query("COMMIT");

@@ -220,13 +220,16 @@ async function addToCart(req, res, next) {
       : 0;
     const nextQty = currentQty + qty;
 
-    if (product.unique_purchase && product.stock_mode === "SIMPLE" && !isAdminTelegramId(telegramId)) {
+    const isFreeProduct = Number(product.price || 0) <= 0;
+    const enforceUnique =
+      product.stock_mode === "SIMPLE" && (product.unique_purchase || isFreeProduct);
+    if (enforceUnique && !isAdminTelegramId(telegramId)) {
       if (qty > 1) {
         await client.query("ROLLBACK");
         return res.status(409).json({
           ok: false,
           error: "UNIQUE_LIMIT",
-          message: "❌ Este producto solo permite 1 compra por cliente.",
+          message: "❌ Este producto solo lo puedes reclamar una vez.",
         });
       }
       if (currentQty >= 1) {
@@ -234,7 +237,7 @@ async function addToCart(req, res, next) {
         return res.status(409).json({
           ok: false,
           error: "UNIQUE_IN_CART",
-          message: "⚠️ Este producto ya está en tu carrito.",
+          message: "❌ Este producto solo lo puedes reclamar una vez.",
         });
       }
       const alreadyPurchasedRes = await client.query(
@@ -251,7 +254,7 @@ async function addToCart(req, res, next) {
         return res.status(409).json({
           ok: false,
           error: "UNIQUE_ALREADY_PURCHASED",
-          message: "❌ Ya adquiriste este producto.",
+          message: "❌ Este producto solo lo puedes reclamar una vez.",
         });
       }
     }
@@ -441,16 +444,17 @@ async function checkoutCart(req, res, next) {
     const isAdmin = isAdminTelegramId(telegramId);
 
     if (!isAdmin) {
-      const uniqueItems = itemsRes.rows.filter(
-        (item) => item.unique_purchase && item.stock_mode === "SIMPLE"
-      );
+      const uniqueItems = itemsRes.rows.filter((item) => {
+        const isFreeItem = Number(item.price || 0) <= 0;
+        return item.stock_mode === "SIMPLE" && (item.unique_purchase || isFreeItem);
+      });
       for (const item of uniqueItems) {
         if (Number(item.qty) > 1) {
           await client.query("ROLLBACK");
           return res.status(409).json({
             ok: false,
             error: "UNIQUE_LIMIT",
-            message: "❌ Este producto solo permite 1 compra por cliente.",
+            message: "❌ Este producto solo lo puedes reclamar una vez.",
           });
         }
       }
@@ -470,7 +474,7 @@ async function checkoutCart(req, res, next) {
           return res.status(409).json({
             ok: false,
             error: "UNIQUE_ALREADY_PURCHASED",
-            message: "❌ Ya adquiriste este producto.",
+            message: "❌ Este producto solo lo puedes reclamar una vez.",
           });
         }
       }
@@ -555,8 +559,16 @@ async function checkoutCart(req, res, next) {
     const expirySeconds = Math.max(
       parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
         || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 0) * 60
-        || 10,
+        || 900,
       1
+    );
+
+    await client.query(
+      `SELECT setval(
+         'orders_order_number_seq',
+         COALESCE((SELECT MAX(order_number) FROM orders), 1),
+         true
+       )`
     );
 
     const orderRes = await client.query(

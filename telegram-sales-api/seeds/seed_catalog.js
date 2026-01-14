@@ -97,14 +97,9 @@ function normalizeItem(item) {
   }
 
   const skuKey = String(item.sku_key || "").trim();
-  if (!skuKey) throw new Error("sku_key is required.");
-  const expectedPrefix = CATEGORY_PREFIXES[category];
-  if (!skuKey.startsWith(expectedPrefix)) {
-    throw new Error(`sku_key ${skuKey} must start with ${expectedPrefix}`);
-  }
 
   const name = String(item.name || "").trim();
-  if (!name) throw new Error(`name is required for ${skuKey}`);
+  if (!name) throw new Error(`name is required for ${skuKey || "item"}`);
 
   const priceUsd = Number(item.price_usd);
   if (!Number.isFinite(priceUsd) || priceUsd < 0) {
@@ -137,10 +132,12 @@ async function seedCatalog() {
   const skuKeySet = new Set();
   const items = rawItems.map((item) => {
     const normalized = normalizeItem(item);
-    if (skuKeySet.has(normalized.sku_key)) {
+    if (normalized.sku_key && skuKeySet.has(normalized.sku_key)) {
       throw new Error(`Duplicate sku_key in catalog: ${normalized.sku_key}`);
     }
-    skuKeySet.add(normalized.sku_key);
+    if (normalized.sku_key) {
+      skuKeySet.add(normalized.sku_key);
+    }
     return normalized;
   });
 
@@ -150,18 +147,24 @@ async function seedCatalog() {
   try {
     await client.query("BEGIN");
 
+    await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
+    await client.query(
+      "GRANT USAGE, SELECT ON SEQUENCE products_sku_key_seq TO PUBLIC"
+    );
     await client.query(
       `UPDATE products
        SET is_active = false, updated_at = now()
-       WHERE sku_key IS NOT NULL AND (
-         lower(sku_key) LIKE 'shop_%'
-         OR lower(sku_key) LIKE 'metodos_%'
-         OR lower(sku_key) LIKE 'vip_%'
-         OR lower(sku_key) LIKE 'web_%'
-       )`
+       WHERE sku_key ~ '^[0-9]+$'`
     );
 
     for (const item of items) {
+      let nextSkuKey = item.sku_key;
+      if (!nextSkuKey || !/^\d+$/.test(nextSkuKey)) {
+        const skuRes = await client.query(
+          "SELECT nextval('products_sku_key_seq') AS value"
+        );
+        nextSkuKey = String(skuRes.rows[0].value).padStart(6, "0");
+      }
       await client.query(
         `INSERT INTO products
           (sku_key, code, name, description, price, is_active, delivery_type, delivery_payload, updated_at)
@@ -177,7 +180,7 @@ async function seedCatalog() {
           code = COALESCE(NULLIF(products.code, ''), EXCLUDED.code),
           updated_at = now()`,
         [
-          item.sku_key,
+          nextSkuKey,
           null,
           item.name,
           item.description,

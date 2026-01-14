@@ -53,10 +53,10 @@ _SCREENSHOTS_RECEIVED: Set[str] = set()
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 
 _PAGE_SIZE = 9
-_PREFIX_SHOP = "SHOP "
-_PREFIX_METODOS = "METODOS "
-_PREFIX_VIP = "VIP "
-_PREFIX_WEB = "WEB "
+_PREFIX_SHOP = "T"
+_PREFIX_METODOS = "M"
+_PREFIX_VIP = "V"
+_PREFIX_WEB = "W"
 _CATEGORY_PREFIXES = {
     "metodos": _PREFIX_METODOS,
     "vip": _PREFIX_VIP,
@@ -74,7 +74,9 @@ class PaymentStates(StatesGroup):
 
 
 def _format_usd(amount: float) -> str:
-    return f"{amount:.2f}"
+    if amount <= 0:
+        return "Gratis"
+    return f"${amount:.2f} USD"
 
 
 def _build_cart_text(
@@ -594,6 +596,8 @@ def _build_stock_line(product: Dict[str, Any]) -> str:
         available_int = int(available)
     except (TypeError, ValueError):
         return ""
+    if available_int <= 0:
+        return "📦 Sin Stock ❌"
     return f"📦 Disponibles: {available_int}"
 
 
@@ -602,6 +606,16 @@ def _format_stock_block(product: Dict[str, Any]) -> str:
     if not line:
         return ""
     return f"{line}\n\n"
+
+
+def _format_price_label(price: float | int | None, locale: str | None = None) -> str:
+    try:
+        price_value = float(price or 0)
+    except (TypeError, ValueError):
+        price_value = 0.0
+    if price_value <= 0:
+        return t(locale, "product_price_free_label")
+    return t(locale, "product_price_label").format(price=int(price_value))
 
 
 def _format_description(raw: Optional[str], locale: str | None = None) -> str:
@@ -625,7 +639,7 @@ async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
     filtered = [
         _normalize_product(product, prefix)
         for product in products
-        if str(product.get("name") or "").startswith(prefix)
+        if str(product.get("code") or "").startswith(prefix)
     ]
     filtered.sort(
         key=lambda item: item.get("code") or item.get("created_at") or ""
@@ -690,6 +704,16 @@ def build_payment_methods_keyboard(
                     text=t(locale, "btn_method_paypal"),
                     callback_data=f"order:method:{order_id}:{page}:{index}:paypal",
                 )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="home:cart",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
@@ -905,7 +929,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(product['description'], locale)}\n\n"
         f"{_format_stock_block(product)}"
-        f"{t(locale, 'product_price_label').format(price=int(product['price']))}"
+        f"{_format_price_label(product['price'], locale)}"
     )
     keyboard = build_product_detail_keyboard(page, index, locale)
     await render_main_view(
@@ -951,7 +975,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(item['description'], locale)}\n\n"
         f"{_format_stock_block(item)}"
-        f"{t(locale, 'product_price_label').format(price=int(item['price']))}"
+        f"{_format_price_label(item['price'], locale)}"
     )
     keyboard = build_category_detail_keyboard(category_key, index, locale)
     await render_main_view(
@@ -1010,6 +1034,9 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     }
 
     result = await api_client.create_order(order_payload)
+    if result.get("status_code") == 409:
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        return
     order = result.get("order")
     if not order:
         await render_main_view(
@@ -1081,6 +1108,9 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     }
 
     result = await api_client.create_order(order_payload)
+    if result.get("status_code") == 409:
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        return
     order = result.get("order")
     if not order:
         await render_main_view(
@@ -1191,7 +1221,7 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(product['description'], locale)}\n\n"
         f"{_format_stock_block(product)}"
-        f"{t(locale, 'product_price_label').format(price=int(product['price']))}\n\n"
+        f"{_format_price_label(product['price'], locale)}\n\n"
         f"{add_result}\n"
         f"{total_line}"
     )
@@ -1286,7 +1316,7 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         f"{t(locale, 'product_description_label')}\n\n"
         f"{_format_description(item['description'], locale)}\n\n"
         f"{_format_stock_block(item)}"
-        f"{t(locale, 'product_price_label').format(price=int(item['price']))}\n\n"
+        f"{_format_price_label(item['price'], locale)}\n\n"
         f"{add_result}\n"
         f"{total_line}"
     )
@@ -1600,6 +1630,9 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     }
 
     result = await api_client.create_order(order_payload)
+    if result.get("status_code") == 409:
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        return
     order = result.get("order")
     instructions = result.get("payment_instructions", {})
 

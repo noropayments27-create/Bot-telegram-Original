@@ -66,6 +66,14 @@ function formatMoney(value) {
   return String(value);
 }
 
+function formatUsdLabel(value, allowFree = false) {
+  const numeric = Number(value ?? 0);
+  if (allowFree && Number.isFinite(numeric) && numeric <= 0) {
+    return "Gratis";
+  }
+  return `${formatMoney(value)} USD`;
+}
+
 function cleanProductName(name) {
   let s = String(name ?? "");
   // Quitar prefijo "SHOP 02 - " / "shop 2 - "
@@ -94,7 +102,7 @@ function buildItemRowsHtml(items) {
       const qty = Number(it.qty ?? 0);
       const nameText = qty > 1 ? `${rawName} x${qty}` : rawName;
       const name = escapeHtml(nameText);
-      const price = escapeHtml(`${formatMoney(it.price ?? it.unit_price ?? it.product_price ?? 0)} USD`);
+      const price = escapeHtml(formatUsdLabel(it.price ?? it.unit_price ?? it.product_price ?? 0, true));
       return `<tr><td>${name}</td><td>${price}</td></tr>`;
     })
     .join("");
@@ -161,11 +169,11 @@ async function renderReceiptPng(data) {
     VALUE_LABEL: labels.value,
     ITEM_ROWS_HTML: buildItemRowsHtml(data.items || []),
     SUBTOTAL_LABEL: labels.subtotal,
-    SUBTOTAL: escapeHtml(`${formatMoney(data.subtotal)} USD`),
+    SUBTOTAL: escapeHtml(formatUsdLabel(data.subtotal, true)),
     COMMISSION_LABEL: labels.commission,
     COMMISSION: escapeHtml(`${formatMoney(data.commission ?? 0)} USD`),
     TOTAL_LABEL: labels.total,
-    TOTAL: escapeHtml(`${formatMoney(data.total)} USD`),
+    TOTAL: escapeHtml(formatUsdLabel(data.total, true)),
     LOCAL_TOTAL_LINE: localTotalLine,
     REFERRED_BY_LABEL: labels.referred_by,
     REFERRED_BY: escapeHtml(data.referredBy || "N/A"),
@@ -177,7 +185,9 @@ async function renderReceiptPng(data) {
 
   let browser;
   try {
-    browser = await playwright.chromium.launch();
+    browser = await playwright.chromium.launch({
+      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+    });
     const page = await browser.newPage({
       viewport: { width: 420, height: 800 },
       deviceScaleFactor: 2,
