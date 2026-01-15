@@ -1,4 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import {
+  IconDashboard,
+  IconInventory,
+  IconOrders,
+} from "../components/PanelIcons";
 import { useRouter } from "next/router";
 
 import {
@@ -1017,7 +1022,7 @@ export default function InventoryPage() {
       <main className="page inventory-page">
 
       <section className="card inventory-search inventory-card">
-        <h2>Selecciona</h2>
+        <h2 className="icon-inline"><IconInventory className="panel-icon" /> Selecciona</h2>
         {productsError && <p className="error">{productsError}</p>}
         <div className="mode-grid">
           <button
@@ -1063,7 +1068,7 @@ export default function InventoryPage() {
         <section className="card inventory-list inventory-card">
           <div className="inventory-header">
             <div>
-              <h2>Categorías</h2>
+              <h2 className="icon-inline"><IconInventory className="panel-icon" /> Categorías</h2>
               <p className="muted">Selecciona una categoría o crea un producto nuevo.</p>
             </div>
             <button type="button" onClick={() => setCreateOpen((prev) => !prev)}>
@@ -1486,7 +1491,7 @@ export default function InventoryPage() {
           <div className="inventory-detail-grid">
             <div className="inventory-column">
               <section className="card inventory-summary inventory-card">
-                <h2>Resumen rápido</h2>
+                <h2 className="icon-inline"><IconDashboard className="panel-icon" /> Resumen rápido</h2>
                 <div className="summary-grid">
                   <div className="summary-card">
                     <div className="summary-value">{detail.available_stock ?? "—"}</div>
@@ -1512,7 +1517,7 @@ export default function InventoryPage() {
               <section className="card inventory-holds inventory-card">
                 <div className="inventory-header">
                   <div>
-                    <h2>Holds activos</h2>
+                    <h2 className="icon-inline"><IconOrders className="panel-icon" /> Holds activos</h2>
                     <p className="muted">Retenciones de stock en tiempo real.</p>
                   </div>
                   <span className="pill pill-highlight">Retenidos: {holdsHeldQty}</span>
@@ -1587,7 +1592,7 @@ export default function InventoryPage() {
                 )}
                 {releaseTarget && (
                   <section className="card emergency-panel inventory-card">
-                    <h3>Liberar hold (EMERGENCIA)</h3>
+                    <h3 className="icon-inline"><IconOrders className="panel-icon" /> Liberar hold (EMERGENCIA)</h3>
                     <p>
                       Esto es una accion de emergencia. Escribe <strong>LIBERAR</strong> para
                       confirmar.
@@ -1622,7 +1627,7 @@ export default function InventoryPage() {
 
               {editStockMode === "UNITS" && (
                 <section className="card inner-card units-summary-card">
-                  <h3>Resumen UNITS</h3>
+                  <h3 className="icon-inline"><IconInventory className="panel-icon" /> Resumen UNITS</h3>
                   <div className="pill-grid">
                     {unitsSummaryList.length > 0 ? (
                       unitsSummaryList.map((row) => (
@@ -1697,7 +1702,7 @@ export default function InventoryPage() {
               <section className="card inventory-product inventory-card">
                 <div className="inventory-header">
                   <div>
-                    <h2>Producto</h2>
+                    <h2 className="icon-inline"><IconInventory className="panel-icon" /> Producto</h2>
                   </div>
                   <div className="actions">
                     <button type="button" onClick={() => copyText(detail.product.id, "ID")}>
@@ -1720,7 +1725,7 @@ export default function InventoryPage() {
                   </div>
                 </div>
                 <div className="product-edit">
-                  <h3>Editar producto</h3>
+                  <h3 className="icon-inline"><IconInventory className="panel-icon" /> Editar producto</h3>
                   <div className="product-edit__grid">
                     <label>
                       Nombre
@@ -1963,7 +1968,7 @@ export default function InventoryPage() {
                     <div className="product-edit__description">
                       <span>Entrega (UNITS)</span>
                       <div className="card inner-card manual-units-card">
-                        <h3>Unidad manual</h3>
+                        <h3 className="icon-inline"><IconInventory className="panel-icon" /> Unidad manual</h3>
                         <div className="form">
                           <div className="manual-units__grid">
                             <label>
@@ -2058,7 +2063,7 @@ export default function InventoryPage() {
                       </div>
                       <div className="split-grid">
                         <div className="card inner-card">
-                          <h3>Template de entrega</h3>
+                          <h3 className="icon-inline"><IconInventory className="panel-icon" /> Template de entrega</h3>
                           <div className="form">
                             <label>
                               Plantillas rápidas
@@ -2107,7 +2112,7 @@ export default function InventoryPage() {
                           </div>
                         </div>
                         <div className="card inner-card">
-                          <h3>Carga de UNITS (CSV)</h3>
+                          <h3 className="icon-inline"><IconInventory className="panel-icon" /> Carga de UNITS (CSV)</h3>
                           <div className="form">
                             <label>
                               Plantillas CSV

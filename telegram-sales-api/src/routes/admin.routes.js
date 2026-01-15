@@ -254,7 +254,13 @@ function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd, lo
   const orderNumberText = order.order_number
     ? String(order.order_number).padStart(5, "0")
     : "-";
-  const priceText = Number(price || 0) <= 0 ? "Gratis" : `$${price} USD`;
+  const priceNumber = Number(price || 0);
+  const priceText =
+    Number.isFinite(priceNumber) && priceNumber <= 0
+      ? "Gratis"
+      : `$${priceNumber.toLocaleString(locale === "es" ? "es-CO" : "en-US", {
+          maximumFractionDigits: 0,
+        })} USD`;
   const lines = [
     `🎉 ${translations.title} 🎉`,
     "",
@@ -1963,6 +1969,22 @@ router.get("/orders/:id", async (req, res, next) => {
       "SELECT * FROM commissions WHERE order_id = $1",
       [orderId]
     );
+    let commission = commissionRes.rows[0] || null;
+    if (commission?.affiliate_id) {
+      const affiliateRes = await pool.query(
+        `SELECT u.telegram_id, u.telegram_username
+         FROM affiliates a
+         JOIN users u ON u.id = a.user_id
+         WHERE a.id = $1`,
+        [commission.affiliate_id]
+      );
+      const affiliateUser = affiliateRes.rows[0] || null;
+      commission = {
+        ...commission,
+        affiliate_telegram_id: affiliateUser?.telegram_id || null,
+        affiliate_username: affiliateUser?.telegram_username || null,
+      };
+    }
 
     const itemsRes = await pool.query(
       `SELECT
@@ -2041,7 +2063,7 @@ router.get("/orders/:id", async (req, res, next) => {
       },
       items,
       payment: paymentRes.rows[0] || null,
-      commission: commissionRes.rows[0] || null,
+      commission,
       totals: {
         subtotal_usd: subtotalUsd,
       },

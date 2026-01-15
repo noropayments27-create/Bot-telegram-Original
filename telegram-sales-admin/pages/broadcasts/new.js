@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconBroadcasts } from "../../components/PanelIcons";
 
 const SEGMENT_OPTIONS = [
   { value: "ALL_USERS", label: "Todos" },
@@ -65,7 +66,7 @@ export default function NewBroadcastPage() {
   return (
     <main className="page">
       <section className="card" style={{ width: "min(700px, 100%)" }}>
-        <h1>Nueva Difusión</h1>
+        <h1 className="icon-inline"><IconBroadcasts className="panel-icon" /> Nueva Difusión</h1>
         {error && <p className="error">{error}</p>}
         <form className="form" onSubmit={handleSubmit}>
           <label>

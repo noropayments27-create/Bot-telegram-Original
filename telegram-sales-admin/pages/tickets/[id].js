@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconTickets } from "../../components/PanelIcons";
 
 export default function TicketDetail() {
   const router = useRouter();
@@ -76,7 +77,7 @@ export default function TicketDetail() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Ticket {ticket.id}</h1>
+        <h1 className="icon-inline"><IconTickets className="panel-icon" /> Ticket {ticket.id}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 

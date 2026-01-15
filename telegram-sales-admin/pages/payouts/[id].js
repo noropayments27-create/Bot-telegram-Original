@@ -2,6 +2,10 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import {
+  IconPayouts,
+  IconAffiliates,
+} from "../../components/PanelIcons";
 
 export default function PayoutDetail() {
   const router = useRouter();
@@ -75,11 +79,11 @@ export default function PayoutDetail() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Pago {payout.id}</h1>
+        <h1 className="icon-inline"><IconPayouts className="panel-icon" /> Pago {payout.id}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 
-        <h3>Detalle</h3>
+        <h3 className="icon-inline"><IconPayouts className="panel-icon" /> Detalle</h3>
         <p>Estado: {payout.status}</p>
         <p>Monto: {payout.amount}</p>
         <p>Método: {payout.method}</p>
@@ -87,17 +91,17 @@ export default function PayoutDetail() {
         <p>Creado: {new Date(payout.created_at).toLocaleString()}</p>
         {payout.sent_at && <p>Enviado: {new Date(payout.sent_at).toLocaleString()}</p>}
 
-        <h3>Afiliado</h3>
+        <h3 className="icon-inline"><IconAffiliates className="panel-icon" /> Afiliado</h3>
         <p>ID: {affiliate.id}</p>
         <p>Estado: {affiliate.status}</p>
         <p>Tasa: {affiliate.commission_rate}</p>
         <p>Balance disponible: {available_balance}</p>
 
-        <h3>Usuario</h3>
+        <h3 className="icon-inline"><IconAffiliates className="panel-icon" /> Usuario</h3>
         <p>Telegram ID: {user.telegram_id}</p>
         <p>Username: {user.telegram_username || "-"}</p>
 
-        <h3>Acciones</h3>
+        <h3 className="icon-inline"><IconPayouts className="panel-icon" /> Acciones</h3>
         <div className="form">
           <label>
             Motivo (opcional)

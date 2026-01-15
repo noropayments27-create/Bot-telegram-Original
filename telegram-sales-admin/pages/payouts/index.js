@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconPayouts } from "../../components/PanelIcons";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
@@ -56,7 +57,7 @@ export default function PayoutsPage() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Pagos</h1>
+        <h1 className="icon-inline"><IconPayouts className="panel-icon" /> Pagos</h1>
         {error && <p className="error">{error}</p>}
         <div className="form">
           <label>

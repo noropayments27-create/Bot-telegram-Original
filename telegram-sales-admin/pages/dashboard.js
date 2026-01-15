@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { apiFetch } from "../lib/api";
+import { IconDashboard } from "../components/PanelIcons";
 
 function useCountUp(value, options = {}) {
   const {
@@ -182,7 +183,7 @@ export default function Dashboard() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Panel Principal</h1>
+        <h1 className="icon-inline"><IconDashboard className="panel-icon" /> Panel Principal</h1>
         <p className="muted">Accesos directos</p>
         <div className="dashboard-grid">
           {navCards.map((item) => {
@@ -222,7 +223,7 @@ export default function Dashboard() {
         </div>
       </section>
       <section className="card" style={{ marginTop: "24px" }}>
-        <h2>Resumen</h2>
+        <h2 className="icon-inline"><IconDashboard className="panel-icon" /> Resumen</h2>
         {statsError && <p className="error">{statsError}</p>}
         <div className="stats-grid">
           <div className="stat-card">

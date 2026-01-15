@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconAffiliates } from "../../components/PanelIcons";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
@@ -121,7 +122,7 @@ export default function AffiliatesPage() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Afiliados</h1>
+        <h1 className="icon-inline"><IconAffiliates className="panel-icon" /> Afiliados</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
         <div className="form">

@@ -8,6 +8,12 @@ import {
   getApiBaseUrl,
   getAuthToken,
 } from "../../lib/api";
+import {
+  IconAffiliates,
+  IconOrders,
+  IconPayouts,
+  IconInventory,
+} from "../../components/PanelIcons";
 
 function cleanProductName(name) {
   if (!name) {
@@ -158,6 +164,19 @@ export default function OrderDetail() {
       : order.unit_price_at_purchase;
   const localTotal = detail.local_total;
 
+  const formatUsdValue = (value) => {
+    if (value === undefined || value === null) {
+      return "-";
+    }
+    const numericValue = Number(value);
+    if (!Number.isFinite(numericValue)) {
+      return String(value);
+    }
+    return numericValue.toLocaleString("en-US", {
+      maximumFractionDigits: 0,
+    });
+  };
+
   const formatLocalTotal = (value, currency) => {
     if (!currency) {
       return value;
@@ -170,6 +189,26 @@ export default function OrderDetail() {
     }
     return Number(value).toLocaleString();
   };
+
+  const formatPaymentMethod = (method) => {
+    if (!method) {
+      return "NO ESPECIFICADO";
+    }
+    const key = String(method).toUpperCase();
+    const map = {
+      BTC: "Bitcoin",
+      LTC: "Litecoin",
+      MP: "Mercado Pago",
+      NEQUI: "Nequi",
+      BINANCE: "Binance",
+      BINANCE_ID: "Binance ID",
+      USDT: "USDT",
+      USDT_BSC: "USDT BSC",
+      USDT_TRON: "USDT Tron",
+      PAYPAL: "PayPal",
+    };
+    return map[key] || key;
+  };
   const hasProof = Boolean(payment && payment.screenshot_file_id);
   const isAlreadyProcessed = order.status === "PAID" || order.status === "DELIVERED";
   const orderNumberText = order.order_number
@@ -180,14 +219,14 @@ export default function OrderDetail() {
   return (
     <main className="page order-detail-page">
       <section className="card order-detail">
-        <h1>Orden {orderNumberText}</h1>
+        <h1 className="icon-inline"><IconOrders className="panel-icon" /> Orden {orderNumberText}</h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 
         <div className="detail-section">
-          <h3>Detalle</h3>
+          <h3 className="icon-inline"><IconOrders className="panel-icon" /> Detalle</h3>
           <p>Estado: {order.status}</p>
-          <p>Precio (USD): {subtotalUsd}</p>
+          <p>Precio (USD): {formatUsdValue(subtotalUsd)}</p>
           {localTotal && (
             <p>
               Total {localTotal.currency}:{" "}
@@ -200,13 +239,13 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-          <h3>Usuario</h3>
+          <h3 className="icon-inline"><IconAffiliates className="panel-icon" /> Usuario</h3>
           <p>Telegram ID: {user.telegram_id}</p>
           <p>Username: {user.telegram_username || "-"}</p>
         </div>
 
         <div className="detail-section">
-          <h3>Productos</h3>
+          <h3 className="icon-inline"><IconInventory className="panel-icon" /> Productos</h3>
         {items.length > 0 ? (
           <>
             {items.map((item) => {
@@ -216,11 +255,11 @@ export default function OrderDetail() {
                 qty > 1 ? `${displayName} x${qty}` : displayName;
               return (
                 <p key={`${item.product_id}-${item.name}`}>
-                  {nameText}: ${item.line_total_usd}
+                  {nameText}: ${formatUsdValue(item.line_total_usd)}
                 </p>
               );
             })}
-            <p>Total: ${subtotalUsd}</p>
+            <p>Total: ${formatUsdValue(subtotalUsd)}</p>
           </>
         ) : (
           <p>No hay productos registrados.</p>
@@ -228,10 +267,10 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>Pago</h3>
+        <h3 className="icon-inline"><IconPayouts className="panel-icon" /> Pago</h3>
         {payment ? (
           <>
-            <p>Método: {payment.payment_method || "No especificado"}</p>
+            <p>Método: {formatPaymentMethod(payment.payment_method)}</p>
             <p>ID de archivo: {payment.screenshot_file_id}</p>
             <p>Estado de revisión: {payment.review_status}</p>
             <p>Enviado: {new Date(payment.submitted_at).toLocaleString()}</p>
@@ -242,7 +281,7 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>Comisión</h3>
+        <h3 className="icon-inline"><IconPayouts className="panel-icon" /> Comisión</h3>
         {commission ? (
           <>
             <p>ID: {commission.id}</p>
@@ -255,7 +294,7 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>Captura</h3>
+        <h3 className="icon-inline"><IconOrders className="panel-icon" /> Captura</h3>
         {hasProof && proofUrl ? (
           <>
             <img
@@ -273,7 +312,7 @@ export default function OrderDetail() {
         </div>
 
         <div className="detail-section">
-        <h3>Acciones</h3>
+        <h3 className="icon-inline"><IconOrders className="panel-icon" /> Acciones</h3>
         {isAlreadyProcessed && (
           <div className="muted">
             <p>Pago aprobado</p>

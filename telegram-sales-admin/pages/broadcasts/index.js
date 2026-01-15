@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconBroadcasts } from "../../components/PanelIcons";
 
 export default function BroadcastsPage() {
   const router = useRouter();
@@ -41,7 +42,7 @@ export default function BroadcastsPage() {
     <main className="page">
       <section className="card" style={{ width: "min(900px, 100%)" }}>
         <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between" }}>
-          <h1>Difusiones</h1>
+          <h1 className="icon-inline"><IconBroadcasts className="panel-icon" /> Difusiones</h1>
           <Link className="link" href="/broadcasts/new">
             Crear
           </Link>

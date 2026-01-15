@@ -62,7 +62,9 @@ function escapeHtml(str) {
 function formatMoney(value) {
   // mantiene simple: string o number -> string
   if (value == null) return "0";
-  if (typeof value === "number") return value.toFixed(2);
+  if (typeof value === "number") {
+    return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  }
   return String(value);
 }
 

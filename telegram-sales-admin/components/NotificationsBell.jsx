@@ -38,7 +38,7 @@ export default function NotificationsBell({ variant = "sidebar" }) {
             status: item.status,
             created_at: item.created_at,
             text: `Orden ${item.order_number ? `#${String(item.order_number).padStart(5, "0")}` : item.id}`,
-            href: `/orders/${item.id}`,
+            href: `/orders?orderId=${item.id}`,
           }));
 
         const tickets = (ticketsRes.items || []).map((item) => ({
@@ -84,6 +84,24 @@ export default function NotificationsBell({ variant = "sidebar" }) {
 
   useEffect(() => {
     setOpen(false);
+  }, [router.pathname]);
+
+  useEffect(() => {
+    const path = router.pathname || "";
+    if (!path) {
+      return;
+    }
+    setNotifications((prev) =>
+      prev.filter((item) => {
+        if (item.type === "Orden" && path.startsWith("/orders")) {
+          return false;
+        }
+        if (item.type === "Ticket" && path.startsWith("/tickets")) {
+          return false;
+        }
+        return true;
+      })
+    );
   }, [router.pathname]);
 
   const notificationCount = notifications.length;

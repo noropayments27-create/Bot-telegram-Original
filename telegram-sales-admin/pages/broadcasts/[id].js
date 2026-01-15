@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconBroadcasts } from "../../components/PanelIcons";
 
 export default function BroadcastDetailPage() {
   const router = useRouter();
@@ -71,7 +72,7 @@ export default function BroadcastDetailPage() {
   return (
     <main className="page">
       <section className="card" style={{ width: "min(800px, 100%)" }}>
-        <h1>Detalle de Difusión</h1>
+        <h1 className="icon-inline"><IconBroadcasts className="panel-icon" /> Detalle de Difusión</h1>
         {error && <p className="error">{error}</p>}
         {!broadcast && !error && <p className="muted">Cargando...</p>}
         {broadcast && (

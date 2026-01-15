@@ -76,7 +76,7 @@ class PaymentStates(StatesGroup):
 def _format_usd(amount: float) -> str:
     if amount <= 0:
         return "Gratis"
-    return f"${amount:.2f} USD"
+    return f"${amount:,.0f} USD"
 
 
 def _build_cart_text(
@@ -1988,12 +1988,19 @@ def format_receipt(order: Dict[str, Any], locale: str | None = None) -> str:
     if isinstance(paid_at, datetime):
         paid_at_text = paid_at.isoformat()
 
+    total_text = "0 USD"
+    try:
+        numeric_total = float(total or 0)
+        total_text = f"{numeric_total:,.0f} USD"
+    except (TypeError, ValueError):
+        total_text = str(total or "0")
+
     return (
         f"{t(locale, 'receipt_title')}\n"
         f"{t(locale, 'receipt_order').format(order_id=order['id'])}\n"
         f"{t(locale, 'receipt_product').format(product_id=order.get('product_id'))}\n"
         f"{t(locale, 'receipt_qty').format(qty=1)}\n"
-        f"{t(locale, 'receipt_total').format(total=total)}\n"
+        f"{t(locale, 'receipt_total').format(total=total_text)}\n"
         f"{t(locale, 'receipt_date').format(date=paid_at_text)}\n"
         f"{t(locale, 'receipt_status')}"
     )

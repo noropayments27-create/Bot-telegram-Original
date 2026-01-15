@@ -3,6 +3,7 @@ import Link from "next/link";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconTickets } from "../../components/PanelIcons";
 
 const STATUS_OPTIONS = [
   { value: "", label: "Todos" },
@@ -55,7 +56,7 @@ export default function TicketsPage() {
   return (
     <main className="page">
       <section className="card">
-        <h1>Tickets</h1>
+        <h1 className="icon-inline"><IconTickets className="panel-icon" /> Tickets</h1>
         {error && <p className="error">{error}</p>}
         <div className="form">
           <label>
