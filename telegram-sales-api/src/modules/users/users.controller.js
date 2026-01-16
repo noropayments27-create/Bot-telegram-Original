@@ -10,6 +10,15 @@ function parseAdminTelegramIds() {
     .map((item) => Number(item));
 }
 
+function parseScammerTelegramIds() {
+  const value = process.env.SCAMMER_TELEGRAM_IDS || "";
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && /^[0-9]+$/.test(item))
+    .map((item) => Number(item));
+}
+
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
 
@@ -241,6 +250,14 @@ async function getAffiliateStatus(req, res, next) {
       [row.id]
     );
     const earningsTotal = Number(earningsRes.rows[0]?.total || 0);
+    const dailyRes = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM commissions
+       WHERE affiliate_id = $1
+         AND earned_at >= date_trunc('day', now())`,
+      [row.id]
+    );
+    const dailyEarnings = Number(dailyRes.rows[0]?.total || 0);
     const availableRes = await pool.query(
       `SELECT COALESCE(SUM(amount), 0) AS total
        FROM commissions
@@ -273,6 +290,7 @@ async function getAffiliateStatus(req, res, next) {
         approved_at: row.approved_at,
         sales_count: salesCount,
         earnings_total: earningsTotal,
+        daily_earnings: dailyEarnings,
         earnings_available: earningsAvailable,
         referrals_total: referralsTotal,
       },
@@ -356,6 +374,7 @@ async function getAffiliateTop(req, res, next) {
 async function applyAffiliate(req, res, next) {
   const telegramId = Number(req.body.telegram_id);
   const username = req.body.telegram_username || null;
+  const photoFileId = req.body.telegram_photo_file_id || null;
   const method = String(req.body.method || "").toUpperCase();
   const walletUsdtBsc = req.body.wallet_usdt_bsc || null;
   const binanceId = req.body.binance_id || null;
@@ -384,15 +403,41 @@ async function applyAffiliate(req, res, next) {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    if (await isUserBanned(client, telegramId)) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "USER_BANNED" });
+    }
+    const scammers = parseScammerTelegramIds();
+    if (scammers.includes(telegramId)) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "SCAMMER_REPORTED" });
+    }
     const userRes = await client.query(
-      `INSERT INTO users (telegram_id, telegram_username, locale)
-       VALUES ($1, $2, 'es')
+      `INSERT INTO users (telegram_id, telegram_username, telegram_photo_file_id, locale)
+       VALUES ($1, $2, $3, 'es')
        ON CONFLICT (telegram_id)
-       DO UPDATE SET telegram_username = COALESCE(EXCLUDED.telegram_username, users.telegram_username)
+       DO UPDATE SET telegram_username = COALESCE(EXCLUDED.telegram_username, users.telegram_username),
+                     telegram_photo_file_id = COALESCE(EXCLUDED.telegram_photo_file_id, users.telegram_photo_file_id)
        RETURNING id`,
-      [telegramId, username]
+      [telegramId, username, photoFileId]
     );
     const userId = userRes.rows[0].id;
+
+    const userCheckRes = await client.query(
+      `SELECT telegram_username, telegram_photo_file_id
+       FROM users
+       WHERE id = $1`,
+      [userId]
+    );
+    const userRow = userCheckRes.rows[0] || {};
+    if (!userRow.telegram_username) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "USERNAME_REQUIRED" });
+    }
+    if (!userRow.telegram_photo_file_id) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "PHOTO_REQUIRED" });
+    }
 
     const existingRes = await client.query(
       `SELECT * FROM affiliates WHERE user_id = $1`,

@@ -157,8 +157,8 @@ async function renderReceiptPng(data) {
   }
 
   const html = applyTokens(template, {
-    RECEIPT_TITLE: labels.receipt_title,
-    ORDER_NUMBER_LABEL: labels.order_number,
+    RECEIPT_TITLE: data.receiptTitle || labels.receipt_title,
+    ORDER_NUMBER_LABEL: data.orderNumberLabel || labels.order_number,
     ORDER_NUMBER: escapeHtml(data.orderNumber || "-"),
     TELEGRAM_ID_LABEL: labels.telegram_id,
     TELEGRAM_ID: escapeHtml(data.telegramId),

@@ -2902,6 +2902,10 @@ router.post("/affiliates", async (req, res, next) => {
   if (walletUsdtBsc && binanceId) {
     return res.status(400).json({ error: "ONLY_ONE_METHOD_ALLOWED" });
   }
+  const resolvedWalletUsdtBsc = walletUsdtBsc || null;
+  const resolvedBinanceId = binanceId || null;
+  const finalWalletUsdtBsc = resolvedBinanceId ? null : resolvedWalletUsdtBsc;
+  const finalBinanceId = resolvedWalletUsdtBsc ? null : resolvedBinanceId;
 
   const allowedStatuses = ["PENDING", "APPROVED", "REJECTED"];
   const normalizedStatus = status ? String(status).toUpperCase() : "PENDING";
@@ -3046,6 +3050,10 @@ router.patch("/affiliates/:id", async (req, res, next) => {
     }
     commissionRate = rateValue > 1 ? rateValue / 100 : rateValue;
   }
+  const resolvedWalletUsdtBsc = walletUsdtBsc !== undefined ? walletUsdtBsc : null;
+  const resolvedBinanceId = binanceId !== undefined ? binanceId : null;
+  const finalWalletUsdtBsc = resolvedBinanceId ? null : resolvedWalletUsdtBsc;
+  const finalBinanceId = resolvedWalletUsdtBsc ? null : resolvedBinanceId;
 
   try {
     const updateRes = await pool.query(
@@ -3053,15 +3061,15 @@ router.patch("/affiliates/:id", async (req, res, next) => {
        SET status = COALESCE($2, status),
            commission_rate = COALESCE($3, commission_rate),
            wallet_usdt_bsc = CASE
-             WHEN $4 IS NULL AND $5 IS NULL THEN wallet_usdt_bsc
-             WHEN $4 IS NOT NULL THEN $4
-             WHEN $5 IS NOT NULL THEN NULL
+             WHEN $4::text IS NULL AND $5::text IS NULL THEN wallet_usdt_bsc
+             WHEN $4::text IS NOT NULL THEN $4::text
+             WHEN $5::text IS NOT NULL THEN NULL
              ELSE wallet_usdt_bsc
            END,
            binance_id = CASE
-             WHEN $4 IS NULL AND $5 IS NULL THEN binance_id
-             WHEN $5 IS NOT NULL THEN $5
-             WHEN $4 IS NOT NULL THEN NULL
+             WHEN $4::text IS NULL AND $5::text IS NULL THEN binance_id
+             WHEN $5::text IS NOT NULL THEN $5::text
+             WHEN $4::text IS NOT NULL THEN NULL
              ELSE binance_id
            END,
            approved_at = CASE
@@ -3282,7 +3290,7 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
     await client.query("BEGIN");
 
     const payoutRes = await client.query(
-      `SELECT p.*, u.telegram_id
+      `SELECT p.*, u.telegram_id, u.telegram_username
        FROM payouts p
        JOIN affiliates a ON a.id = p.affiliate_id
        JOIN users u ON u.id = a.user_id
@@ -3345,9 +3353,33 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
 
     const message = `🧾 Recibo de retiro pagado\n\nMonto: ${payout.amount}\nMétodo: ${payout.method}\nDestino: ${payout.destination}`;
     try {
-      await sendMessage(payout.telegram_id, message);
+      const receiptPng = await renderReceiptPng({
+        orderId: payout.id,
+        orderNumber: payout.id,
+        orderNumberLabel: "ID de retiro:",
+        receiptTitle: "RECIBO DE RETIRO",
+        telegramId: payout.telegram_id,
+        username: payout.telegram_username,
+        dateTime: new Date(payout.sent_at || new Date()).toLocaleString(),
+        items: [{ name: "Retiro", price: payout.amount }],
+        subtotal: payout.amount,
+        commission: 0,
+        total: payout.amount,
+        referredBy: "N/A",
+        locale: "es",
+      });
+      try {
+        await sendPhoto(payout.telegram_id, { path: receiptPng.pngPath });
+      } finally {
+        await receiptPng.cleanup();
+      }
     } catch (err) {
-      console.error("Telegram notification failed", err);
+      console.error("Telegram payout receipt failed", err);
+      try {
+        await sendMessage(payout.telegram_id, message);
+      } catch (fallbackError) {
+        console.error("Telegram payout receipt fallback failed", fallbackError);
+      }
     }
 
     return res.json({

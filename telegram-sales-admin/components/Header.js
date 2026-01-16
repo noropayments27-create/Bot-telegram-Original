@@ -31,6 +31,8 @@ export default function Header() {
       try {
         const ordersRes = await apiFetch("/admin/orders?page=1&page_size=5");
         const ticketsRes = await apiFetch("/admin/tickets?status=OPEN&page=1&page_size=5");
+        const payoutsRes = await apiFetch("/admin/payouts?status=REQUESTED&page=1&page_size=5");
+        const affiliatesRes = await apiFetch("/admin/affiliates?status=PENDING&page=1&page_size=5");
 
         const orders = (ordersRes.items || [])
           .filter((item) => item.status === "WAITING_PAYMENT")
@@ -52,8 +54,26 @@ export default function Header() {
           href: `/tickets/${item.id}`,
         }));
 
+        const payouts = (payoutsRes.items || []).map((item) => ({
+          id: item.id,
+          type: "Pago",
+          status: item.status,
+          created_at: item.created_at,
+          text: `Pago #${item.id}`,
+          href: `/payouts/${item.id}`,
+        }));
+
+        const affiliates = (affiliatesRes.items || []).map((item) => ({
+          id: item.id,
+          type: "Afiliado",
+          status: item.status,
+          created_at: item.created_at,
+          text: `Afiliado ${item.telegram_username || item.telegram_id || item.id}`,
+          href: `/affiliates`,
+        }));
+
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        const combined = [...orders, ...tickets]
+        const combined = [...orders, ...tickets, ...payouts, ...affiliates]
           .filter((item) => item.created_at)
           .filter((item) => new Date(item.created_at).getTime() >= cutoff)
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
@@ -89,6 +109,10 @@ export default function Header() {
     ? "Orden"
     : router.pathname.startsWith("/tickets")
     ? "Ticket"
+    : router.pathname.startsWith("/payouts")
+    ? "Pago"
+    : router.pathname.startsWith("/affiliates")
+    ? "Afiliado"
     : null;
 
   const visibleNotifications = hiddenType

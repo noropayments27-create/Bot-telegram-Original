@@ -257,10 +257,16 @@ class ApiClient:
             response = await client.post(
                 url, json=payload, headers=self._headers(), timeout=10
             )
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
             if response.status_code in (200, 201):
-                return response.json()
-            response.raise_for_status()
-            return response.json()
+                return data
+            return {
+                "error": data.get("error") if isinstance(data, dict) else None,
+                "status_code": response.status_code,
+            }
 
     async def send_ticket_message(
         self, ticket_id: str, payload: Dict[str, Any]

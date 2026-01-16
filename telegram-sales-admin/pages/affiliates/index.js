@@ -32,6 +32,7 @@ export default function AffiliatesPage() {
   const [globalCommissionSaving, setGlobalCommissionSaving] = useState(false);
   const [photoUrls, setPhotoUrls] = useState({});
   const [isCommissionOpen, setIsCommissionOpen] = useState(true);
+  const [toast, setToast] = useState("");
 
   const formatRatePercent = (rate) => {
     const numeric = Number(rate);
@@ -158,10 +159,25 @@ export default function AffiliatesPage() {
           item.id === affiliate.id ? { ...item, status: nextStatus } : item
         )
       );
+      setToast(
+        nextStatus === "APPROVED"
+          ? "Afiliado activado."
+          : "Afiliado bloqueado."
+      );
     } catch (err) {
+      const detail = err?.payload?.error || "No se pudo actualizar el estado del afiliado.";
+      setToast(detail);
       setError("No se pudo actualizar el estado del afiliado.");
     }
   };
+
+  useEffect(() => {
+    if (!toast) {
+      return;
+    }
+    const timer = setTimeout(() => setToast(""), 3200);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const removeDetail = useCallback((affiliateId) => {
     setDetails((prev) => {
@@ -567,6 +583,7 @@ export default function AffiliatesPage() {
           })}
         </div>
       )}
+      {toast && <div className="toast">{toast}</div>}
     </main>
   );
 }

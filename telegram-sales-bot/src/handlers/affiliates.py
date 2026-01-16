@@ -1,4 +1,5 @@
 from datetime import datetime
+import asyncio
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
@@ -30,29 +31,30 @@ class AffiliateStates(StatesGroup):
 def _build_affiliate_keyboard(
     locale: str | None, has_affiliate: bool, is_approved: bool
 ) -> InlineKeyboardMarkup:
-    buttons = [
-        [
-            InlineKeyboardButton(
-                text=t(locale, "affiliate_info_button"),
-                callback_data="affiliate:info",
-            )
-        ],
-    ]
-    if not has_affiliate:
-        buttons.append(
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "affiliate_apply_button"),
-                    callback_data="affiliate:start:apply",
-                )
-            ]
-        )
+    buttons = []
     if is_approved:
         buttons.append(
             [
                 InlineKeyboardButton(
                     text=t(locale, "affiliate_panel_button"),
                     callback_data="affiliate:panel",
+                )
+            ]
+        )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text=t(locale, "affiliate_info_button"),
+                callback_data="affiliate:info",
+            )
+        ]
+    )
+    if not has_affiliate:
+        buttons.append(
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_apply_button"),
+                    callback_data="affiliate:start:apply",
                 )
             ]
         )
@@ -68,7 +70,7 @@ def _build_affiliate_keyboard(
         [
             InlineKeyboardButton(
                 text=t(locale, "btn_back"),
-                callback_data="home:show",
+                callback_data="home:affiliates",
             )
         ]
     )
@@ -294,7 +296,7 @@ async def handle_affiliates(callback: CallbackQuery, state: FSMContext) -> None:
             f"{t(locale, 'affiliate_panel_telegram_id').format(telegram_id=callback.from_user.id)}\n"
             f"{t(locale, 'affiliate_panel_username').format(username='@' + callback.from_user.username if callback.from_user.username else '-')}\n\n"
             f"{t(locale, 'affiliate_panel_rank').format(rank=rank_text)}\n"
-            f"{t(locale, 'affiliate_panel_since').format(date=_format_date(affiliate.get('approved_at')))}\n"
+            f"{t(locale, 'affiliate_panel_since').format(date=_format_date(affiliate.get('created_at')))}\n"
             f"{t(locale, 'affiliate_panel_code').format(code=_format_affiliate_code(affiliate.get('id')))}\n"
             f"{t(locale, 'affiliate_panel_link').format(link=referral_link)}\n\n"
             f"{t(locale, 'affiliate_panel_question')}"
@@ -325,11 +327,21 @@ async def handle_affiliate_info(callback: CallbackQuery, state: FSMContext) -> N
     locale = await get_user_locale(
         api_client, callback.from_user.id, callback.from_user.language_code
     )
+    has_affiliate = False
+    is_approved = False
+    try:
+        data = await api_client.get_affiliate_status(callback.from_user.id)
+        affiliate = data.get("affiliate")
+        if affiliate:
+            has_affiliate = True
+            is_approved = affiliate.get("status") == "APPROVED"
+    except Exception:
+        pass
     await render_main_view(
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_info_text"),
-        reply_markup=_build_affiliate_keyboard(locale, False, False),
+        reply_markup=_build_affiliate_keyboard(locale, has_affiliate, is_approved),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -342,11 +354,21 @@ async def handle_affiliate_faq(callback: CallbackQuery, state: FSMContext) -> No
     locale = await get_user_locale(
         api_client, callback.from_user.id, callback.from_user.language_code
     )
+    has_affiliate = False
+    is_approved = False
+    try:
+        data = await api_client.get_affiliate_status(callback.from_user.id)
+        affiliate = data.get("affiliate")
+        if affiliate:
+            has_affiliate = True
+            is_approved = affiliate.get("status") == "APPROVED"
+    except Exception:
+        pass
     await render_main_view(
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_faq_text"),
-        reply_markup=_build_affiliate_keyboard(locale, False, False),
+        reply_markup=_build_affiliate_keyboard(locale, has_affiliate, is_approved),
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
@@ -364,26 +386,32 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
         affiliate = data.get("affiliate")
         if affiliate and affiliate.get("status") == "APPROVED":
             sales_count = int(affiliate.get("sales_count") or 0)
-            earnings_total = affiliate.get("earnings_total") or 0
+            earnings_total = affiliate.get("daily_earnings") or 0
             referrals_total = affiliate.get("referrals_total") or 0
-            approved_date = _format_date(affiliate.get("approved_at"))
             days_active = 0
             try:
-                approved_raw = affiliate.get("approved_at")
-                if approved_raw:
-                    approved_dt = datetime.fromisoformat(approved_raw.replace("Z", "+00:00"))
-                    days_active = max((datetime.utcnow() - approved_dt).days, 0)
+                created_raw = affiliate.get("created_at")
+                if created_raw:
+                    created_dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                    days_active = max((datetime.utcnow() - created_dt).days + 1, 0)
             except Exception:
                 days_active = 0
+            daily_percent = 0
+            try:
+                daily_percent = min(int((float(earnings_total) / 10) * 100), 100)
+            except Exception:
+                daily_percent = 0
+            earnings_text = f"${float(earnings_total):.2f}"
             text = (
                 f"{t(locale, 'affiliate_stats_header')}\n\n"
-                f"{t(locale, 'affiliate_stats_earnings').format(amount=earnings_total)}\n"
+                f"{t(locale, 'affiliate_stats_footer')}\n"
+                f"{t(locale, 'affiliate_stats_earnings').format(amount=earnings_text)}\n"
                 f"{t(locale, 'affiliate_stats_sales').format(count=sales_count)}\n"
                 f"{t(locale, 'affiliate_stats_referrals').format(count=referrals_total)}\n"
                 f"{t(locale, 'affiliate_stats_seniority').format(days=days_active)}\n"
-                f"{t(locale, 'affiliate_stats_goal')}\n\n"
-                f"{t(locale, 'affiliate_stats_streak').format(days=0)}\n"
-                f"{t(locale, 'affiliate_stats_footer')}"
+                f"{t(locale, 'affiliate_stats_goal').format(percent=daily_percent)}\n"
+                f"{t(locale, 'affiliate_stats_footer')}\n"
+                f"{t(locale, 'affiliate_stats_streak').format(days=0)}"
             )
             await render_main_view(
                 callback.message,
@@ -491,9 +519,9 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
         if float(balance_value or 0) <= 0:
             await callback.answer(t(locale, "affiliate_withdraw_no_balance"), show_alert=True)
             return
-        balance = _format_money(balance_value)
+        balance = f"${float(balance_value):.2f}"
         text = (
-            f"{t(locale, 'affiliate_withdraw_title')}\n"
+            f"{t(locale, 'affiliate_withdraw_title')}\n\n"
             f"{t(locale, 'affiliate_stats_footer')}\n"
             f"{t(locale, 'affiliate_withdraw_balance').format(amount=balance)}\n"
             f"{t(locale, 'affiliate_withdraw_minimum')}\n"
@@ -559,10 +587,18 @@ async def handle_affiliate_withdraw_confirm(callback: CallbackQuery, state: FSMC
             callback.message,
             callback.from_user.id,
             t(locale, "affiliate_withdraw_requested"),
-            reply_markup=_build_panel_keyboard(locale),
+            reply_markup=None,
             parse_mode=ParseMode.HTML,
         )
         await callback.answer()
+        await asyncio.sleep(5)
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            t(locale, "affiliate_panel_question"),
+            reply_markup=_build_panel_keyboard(locale),
+            parse_mode=ParseMode.HTML,
+        )
         return
     except Exception:
         await callback.answer(t(locale, "affiliate_withdraw_failed"), show_alert=True)
@@ -664,31 +700,50 @@ async def handle_affiliate_destination(message: Message, state: FSMContext) -> N
         return
     data = await state.get_data()
     method = data.get("affiliate_method")
+    photo_file_id = None
+    try:
+        photos = await message.bot.get_user_profile_photos(
+            message.from_user.id, limit=1
+        )
+        if photos.total_count > 0 and photos.photos:
+            photo_file_id = photos.photos[0][-1].file_id
+    except Exception:
+        photo_file_id = None
     payload = {
         "telegram_id": message.from_user.id,
         "telegram_username": message.from_user.username,
+        "telegram_photo_file_id": photo_file_id,
         "method": method,
         "wallet_usdt_bsc": destination if method == "USDT_BSC" else None,
         "binance_id": destination if method == "BINANCE_ID" else None,
     }
-    try:
-        result = await api_client.apply_affiliate(payload)
-        affiliate = result.get("affiliate") or {}
-        referral_text = ""
-        if affiliate.get("id") and affiliate.get("status") == "APPROVED":
-            referral_text = _build_referral_text(locale, affiliate.get("id"))
-        if not referral_text:
-            try:
-                status_data = await api_client.get_affiliate_status(message.from_user.id)
-                affiliate = status_data.get("affiliate") or {}
-                if affiliate.get("id") and affiliate.get("status") == "APPROVED":
-                    referral_text = _build_referral_text(locale, affiliate.get("id"))
-            except Exception:
-                referral_text = ""
-        reply = f"{t(locale, 'affiliate_apply_success')}"
-        if referral_text:
-            reply = f"{reply}\n\n{referral_text}"
-        await message.answer(reply, parse_mode=ParseMode.HTML)
-    except Exception:
-        await message.answer(t(locale, "affiliate_apply_error"))
+    result = await api_client.apply_affiliate(payload)
+    if result.get("error"):
+        error_code = result.get("error")
+        if error_code == "USERNAME_REQUIRED":
+            await message.answer(t(locale, "affiliate_apply_missing_username"))
+        elif error_code == "PHOTO_REQUIRED":
+            await message.answer(t(locale, "affiliate_apply_missing_photo"))
+        elif error_code == "SCAMMER_REPORTED":
+            await message.answer(t(locale, "affiliate_apply_scammer"))
+        else:
+            await message.answer(t(locale, "affiliate_apply_error"))
+        await state.clear()
+        return
+    affiliate = result.get("affiliate") or {}
+    referral_text = ""
+    if affiliate.get("id") and affiliate.get("status") == "APPROVED":
+        referral_text = _build_referral_text(locale, affiliate.get("id"))
+    if not referral_text:
+        try:
+            status_data = await api_client.get_affiliate_status(message.from_user.id)
+            affiliate = status_data.get("affiliate") or {}
+            if affiliate.get("id") and affiliate.get("status") == "APPROVED":
+                referral_text = _build_referral_text(locale, affiliate.get("id"))
+        except Exception:
+            referral_text = ""
+    reply = f"{t(locale, 'affiliate_apply_success')}"
+    if referral_text:
+        reply = f"{reply}\n\n{referral_text}"
+    await message.answer(reply, parse_mode=ParseMode.HTML)
     await state.clear()
