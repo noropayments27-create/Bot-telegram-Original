@@ -54,10 +54,20 @@ export default function NotificationsBell({ variant = "sidebar" }) {
         const combined = [...orders, ...tickets]
           .filter((item) => item.created_at)
           .filter((item) => new Date(item.created_at).getTime() >= cutoff)
-          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at))
-          .slice(0, 10);
+          .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
 
-        setNotifications(combined);
+        const path = router.pathname || "";
+        const filtered = combined.filter((item) => {
+          if (item.type === "Orden" && path.startsWith("/orders")) {
+            return false;
+          }
+          if (item.type === "Ticket" && path.startsWith("/tickets")) {
+            return false;
+          }
+          return true;
+        });
+
+        setNotifications(filtered.slice(0, 10));
       } catch (error) {
         // ignore notification errors
       }
@@ -66,7 +76,7 @@ export default function NotificationsBell({ variant = "sidebar" }) {
     loadNotifications();
     const interval = setInterval(loadNotifications, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [router.pathname]);
 
   useEffect(() => {
     if (!open) {

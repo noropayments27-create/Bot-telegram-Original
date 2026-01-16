@@ -16,7 +16,7 @@ from ..services.user_locale import get_user_locale
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
-api_client = ApiClient(API_BASE_URL, API_TOKEN)
+api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
 
 @router.callback_query(F.data.startswith("admin_auth:"))

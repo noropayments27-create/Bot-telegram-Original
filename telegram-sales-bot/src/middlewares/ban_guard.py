@@ -5,7 +5,7 @@ from typing import Any, Awaitable, Callable, Dict, Optional
 from aiogram import BaseMiddleware
 from aiogram.types import CallbackQuery, Message
 
-from ..config import API_BASE_URL, API_TOKEN
+from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET
 from ..services.api_client import ApiClient
 from ..services.i18n import t
 
@@ -13,7 +13,7 @@ from ..services.i18n import t
 class BanGuardMiddleware(BaseMiddleware):
     def __init__(self) -> None:
         super().__init__()
-        self._api_client = ApiClient(API_BASE_URL, API_TOKEN)
+        self._api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
     async def __call__(
         self,

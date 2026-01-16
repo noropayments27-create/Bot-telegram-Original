@@ -10,6 +10,7 @@ from ..config import (
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    BOT_TO_API_SECRET,
 )
 from ..services.api_client import ApiClient
 from ..services.i18n import t
@@ -18,7 +19,7 @@ from .menu import build_main_keyboard
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
-api_client = ApiClient(API_BASE_URL, API_TOKEN)
+api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
 
 class SupportStates(StatesGroup):

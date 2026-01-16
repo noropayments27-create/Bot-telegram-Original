@@ -8,6 +8,7 @@ from ..config import (
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
+    BOT_TO_API_SECRET,
 )
 from ..services.api_client import ApiClient
 from ..services.i18n import t
@@ -21,7 +22,7 @@ from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
-api_client = ApiClient(API_BASE_URL, API_TOKEN)
+api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
 
 @router.message(Command("start"))
@@ -51,12 +52,22 @@ async def handle_start(message: Message) -> None:
             start_payload = parts[1].strip() or None
 
     try:
+        photo_file_id = None
+        try:
+            photos = await message.bot.get_user_profile_photos(
+                message.from_user.id, limit=1
+            )
+            if photos.total_count > 0 and photos.photos:
+                photo_file_id = photos.photos[0][-1].file_id
+        except Exception:
+            photo_file_id = None
         payload = {
             "telegram_id": message.from_user.id,
             "username": message.from_user.username,
             "first_name": message.from_user.first_name,
             "last_name": message.from_user.last_name,
             "language_code": message.from_user.language_code,
+            "telegram_photo_file_id": photo_file_id,
             "locale": "es"
             if not message.from_user.language_code
             or (message.from_user.language_code or "").lower().startswith("es")

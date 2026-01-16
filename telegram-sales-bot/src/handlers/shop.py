@@ -28,6 +28,7 @@ from ..config import (
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
+    BOT_TO_API_SECRET,
     BINANCE_ID,
     CRYPTO_WALLET_BTC,
     CRYPTO_WALLET_LTC,
@@ -48,7 +49,7 @@ from ..utils.order_watch import start_order_watch, stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
-api_client = ApiClient(API_BASE_URL, API_TOKEN)
+api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 
@@ -1496,6 +1497,9 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         current_order_id=order_id,
         current_order_total=cart_total,
         current_order_summary=cart_summary,
+        payment_method=None,
+        payment_method_order_id=None,
+        payment_ready=False,
     )
     await render_main_view(
         callback.message,
@@ -1593,7 +1597,11 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
-    await state.update_data(payment_method=method_key)
+    await state.update_data(
+        payment_method=method_key,
+        payment_method_order_id=order_id,
+        payment_ready=False,
+    )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 
@@ -1650,6 +1658,9 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         current_order_id=order["id"],
         current_order_total=order.get("total"),
         current_order_summary=None,
+        payment_method=None,
+        payment_method_order_id=None,
+        payment_ready=False,
     )
 
     text = (
@@ -1721,13 +1732,29 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     ):
         await callback.answer()
         return
+    data = await state.get_data()
+    payment_method = data.get("payment_method")
+    payment_method_order_id = data.get("payment_method_order_id")
+    if not payment_method or payment_method_order_id != order_id:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            t(locale, "payment_choose_method"),
+            reply_markup=build_payment_methods_keyboard(order_id, 1, 1, locale),
+        )
+        await callback.answer(t(locale, "select_payment_method_first"), show_alert=True)
+        return
     filtered_markup = None
     if callback.message.reply_markup:
         try:
             await callback.message.edit_reply_markup(reply_markup=None)
         except Exception:
             pass
-    await state.update_data(order_id=order_id, current_order_id=order_id)
+    await state.update_data(
+        order_id=order_id,
+        current_order_id=order_id,
+        payment_ready=True,
+    )
     await state.set_state(PaymentStates.waiting_photo)
     await render_main_view(
         callback.message,
@@ -1758,10 +1785,14 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         return
 
     data = await state.get_data()
+    current_state = await state.get_state()
     order_id = data.get("order_id") or data.get("current_order_id")
     if not order_id:
         await message.answer(t(locale, "no_active_order"))
         await state.set_state(None)
+        return
+    if current_state != PaymentStates.waiting_photo.state or not data.get("payment_ready"):
+        await message.answer(t(locale, "payment_press_paid_first"))
         return
     if not await guard_order_payable_or_redirect(
         api_client, order_id, message, state, locale
@@ -1770,7 +1801,8 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     payment_method = data.get("payment_method")
-    if not payment_method:
+    payment_method_order_id = data.get("payment_method_order_id")
+    if not payment_method or payment_method_order_id != order_id:
         await message.answer(t(locale, "select_payment_method_first"))
         return
 
@@ -1811,7 +1843,12 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         raise
     _SCREENSHOTS_RECEIVED.add(order_id)
     await message.answer(t(locale, "screenshot_received"))
-    await state.update_data(order_id=None)
+    await state.update_data(
+        order_id=None,
+        payment_ready=False,
+        payment_method=None,
+        payment_method_order_id=None,
+    )
     await state.set_state(None)
     await stop_order_watch(message.from_user.id, "proof_submitted")
 
@@ -1964,7 +2001,7 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         )
 
     text += (
-        f"{t(locale, 'payment_amount_total_label').format(amount=f'{total:.2f}')}\n"
+        f"{t(locale, 'payment_amount_total_label').format(amount=_format_usd(total))}\n"
         f"{t(locale, 'payment_send_label_bold').format(amount=send_str)}\n\n"
         f"{t(locale, 'payment_after_pay_short')}"
     )
@@ -1976,7 +2013,11 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
         parse_mode=ParseMode.HTML,
     )
-    await state.update_data(payment_method=asset_key)
+    await state.update_data(
+        payment_method=asset_key,
+        payment_method_order_id=order_id,
+        payment_ready=False,
+    )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
 

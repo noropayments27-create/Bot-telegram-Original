@@ -73,7 +73,7 @@ function formatUsdLabel(value, allowFree = false) {
   if (allowFree && Number.isFinite(numeric) && numeric <= 0) {
     return "Gratis";
   }
-  return `${formatMoney(value)} USD`;
+  return `$${formatMoney(value)} USD`;
 }
 
 function cleanProductName(name) {
@@ -173,13 +173,25 @@ async function renderReceiptPng(data) {
     SUBTOTAL_LABEL: labels.subtotal,
     SUBTOTAL: escapeHtml(formatUsdLabel(data.subtotal, true)),
     COMMISSION_LABEL: labels.commission,
-    COMMISSION: escapeHtml(`${formatMoney(data.commission ?? 0)} USD`),
+    COMMISSION: escapeHtml(`$${Number(data.commission || 0).toFixed(2)} USD`),
     TOTAL_LABEL: labels.total,
     TOTAL: escapeHtml(formatUsdLabel(data.total, true)),
     LOCAL_TOTAL_LINE: localTotalLine,
     REFERRED_BY_LABEL: labels.referred_by,
     REFERRED_BY: escapeHtml(data.referredBy || "N/A"),
     THANK_YOU: labels.thank_you,
+    BOT_USERNAME: escapeHtml(
+      data.botUsername
+        || process.env.BOT_USERNAME
+        || process.env.NEXT_PUBLIC_BOT_USERNAME
+        || "Noroventas_bot"
+    ),
+    ADMIN_TELEGRAM: escapeHtml(
+      data.adminTelegram
+        || process.env.ADMIN_TELEGRAM_USERNAME
+        || process.env.ADMIN_USERNAME
+        || "Noropayments"
+    ),
   });
 
   const tmpName = `receipt-${crypto.randomBytes(8).toString("hex")}.png`;

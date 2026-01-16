@@ -12,6 +12,15 @@ const STATUS_OPTIONS = [
 ];
 
 export default function PayoutsPage() {
+  const formatMethod = (method) => {
+    if (method === "USDT_BSC") {
+      return "USDT";
+    }
+    if (method === "BINANCE_ID") {
+      return "ID de Binance";
+    }
+    return method || "-";
+  };
   const router = useRouter();
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
@@ -206,7 +215,7 @@ export default function PayoutsPage() {
                   <td>{payout.id}</td>
                   <td>{payout.telegram_id}</td>
                   <td>{payout.amount}</td>
-                  <td>{payout.method}</td>
+                  <td>{formatMethod(payout.method)}</td>
                   <td>{payout.destination}</td>
                   <td>{payout.status}</td>
                   <td>{new Date(payout.created_at).toLocaleString()}</td>
@@ -282,7 +291,7 @@ export default function PayoutsPage() {
                         <h3>Detalle</h3>
                         <p>Estado: {payout.status}</p>
                         <p>Monto: {payout.amount}</p>
-                        <p>Método: {payout.method}</p>
+                        <p>Método: {formatMethod(payout.method)}</p>
                         <p>Destino: {payout.destination}</p>
                         <p>
                           Creado: {new Date(payout.created_at).toLocaleString()}

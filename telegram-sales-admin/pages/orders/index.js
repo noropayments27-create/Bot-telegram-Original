@@ -155,13 +155,8 @@ export default function OrdersPage() {
   const [toast, setToast] = useState("");
 
   const filterRecent = (orders) => {
-    const cutoff = Date.now() - 5 * 60 * 1000;
     return orders.filter((order) => {
-      if (order.status === "WAITING_PAYMENT") {
-        return true;
-      }
-      const createdAt = new Date(order.created_at).getTime();
-      return Number.isFinite(createdAt) && createdAt >= cutoff;
+      return order.status === "WAITING_PAYMENT" || order.status === "CREATED";
     });
   };
 
@@ -201,6 +196,23 @@ export default function OrdersPage() {
     const interval = setInterval(loadOrders, 10 * 1000);
     return () => clearInterval(interval);
   }, [loadOrders, status]);
+
+  useEffect(() => {
+    const markOrdersSeen = async () => {
+      try {
+        const summary = await apiFetch("/admin/summary");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(
+            "admin_seen_orders_count",
+            String(summary.new_orders || 0)
+          );
+        }
+      } catch (err) {
+        // ignore summary errors
+      }
+    };
+    markOrdersSeen();
+  }, []);
 
   const handleStatusChange = (event) => {
     setStatus(event.target.value);

@@ -113,6 +113,20 @@ async function createOrder(req, res, next) {
       1
     );
 
+    let affiliateId = user.referred_by_affiliate_id;
+    if (affiliateId) {
+      const affiliateRes = await client.query(
+        "SELECT status FROM affiliates WHERE id = $1",
+        [affiliateId]
+      );
+      if (
+        affiliateRes.rowCount === 0
+        || affiliateRes.rows[0].status !== "APPROVED"
+      ) {
+        affiliateId = null;
+      }
+    }
+
     const orderRes = await client.query(
       `INSERT INTO orders
         (user_id, product_id, affiliate_id, status, unit_price_at_purchase)
@@ -121,7 +135,7 @@ async function createOrder(req, res, next) {
       [
         user.id,
         product.id,
-        user.referred_by_affiliate_id,
+        affiliateId,
         ORDER_STATUS_WAITING_CONFIRMATION,
         unitPrice,
       ]

@@ -14,6 +14,15 @@ export default function PayoutDetail() {
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const formatMethod = (method) => {
+    if (method === "USDT_BSC") {
+      return "USDT";
+    }
+    if (method === "BINANCE_ID") {
+      return "ID de Binance";
+    }
+    return method || "-";
+  };
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -86,7 +95,7 @@ export default function PayoutDetail() {
         <h3 className="icon-inline"><IconPayouts className="panel-icon" /> Detalle</h3>
         <p>Estado: {payout.status}</p>
         <p>Monto: {payout.amount}</p>
-        <p>Método: {payout.method}</p>
+        <p>Método: {formatMethod(payout.method)}</p>
         <p>Destino: {payout.destination}</p>
         <p>Creado: {new Date(payout.created_at).toLocaleString()}</p>
         {payout.sent_at && <p>Enviado: {new Date(payout.sent_at).toLocaleString()}</p>}

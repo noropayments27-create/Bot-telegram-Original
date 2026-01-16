@@ -9,6 +9,7 @@ TELEGRAM_BOT_TOKEN = os.getenv("TELEGRAM_BOT_TOKEN")
 API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:3001")
 API_TOKEN = os.getenv("API_TOKEN")
 BOT_TO_API_SECRET = os.getenv("BOT_TO_API_SECRET")
+BOT_USERNAME = os.getenv("BOT_USERNAME")
 
 
 def _parse_bool(value: str, default: bool = False) -> bool:

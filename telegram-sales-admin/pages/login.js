@@ -102,7 +102,7 @@ export default function Login() {
       <main className="page page-login">
         <div className="login-container">
           <div className="user-icon-bg">
-            <img src="https://i.ibb.co/356LrnLr/bot.png" alt="User Icon" />
+            <img src="https://i.ibb.co/356LrnLr/bot.png" alt="Icono usuario" />
           </div>
           <form className="login-form" onSubmit={handleSubmit}>
             <input

@@ -41,7 +41,7 @@ def build_main_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "menu_affiliates"),
-                    callback_data="home:soon:afiliados",
+                    callback_data="home:affiliates",
                 ),
             ],
             [

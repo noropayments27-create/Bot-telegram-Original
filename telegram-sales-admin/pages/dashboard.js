@@ -149,6 +149,8 @@ export default function Dashboard() {
     affiliates: 0,
   });
   const [statsError, setStatsError] = useState("");
+  const [seenOrdersCount, setSeenOrdersCount] = useState(0);
+  const [seenTicketsCount, setSeenTicketsCount] = useState(0);
   const customersCounter = useCountUp(stats.customers);
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
@@ -180,6 +182,24 @@ export default function Dashboard() {
     return () => clearInterval(interval);
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const storedOrders = Number(
+      window.sessionStorage.getItem("admin_seen_orders_count") || 0
+    );
+    const storedTickets = Number(
+      window.sessionStorage.getItem("admin_seen_tickets_count") || 0
+    );
+    if (!Number.isNaN(storedOrders)) {
+      setSeenOrdersCount(storedOrders);
+    }
+    if (!Number.isNaN(storedTickets)) {
+      setSeenTicketsCount(storedTickets);
+    }
+  }, []);
+
   return (
     <main className="page">
       <section className="card">
@@ -197,7 +217,9 @@ export default function Dashboard() {
               : isTickets
               ? stats.unreadTickets || 0
               : null;
-            const hasAlert = (isOrders || isTickets) && countValue > 0;
+            const hasAlert =
+              (isOrders && countValue > seenOrdersCount) ||
+              (isTickets && countValue > seenTicketsCount);
             const badgeText = countValue > 99 ? "99+" : String(countValue);
             return (
               <Link

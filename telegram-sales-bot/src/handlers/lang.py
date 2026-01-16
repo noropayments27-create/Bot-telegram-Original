@@ -2,7 +2,7 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 
-from ..config import API_BASE_URL, API_TOKEN
+from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET
 from ..services.api_client import ApiClient
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale, invalidate_user_locale
@@ -10,7 +10,7 @@ from ..utils.main_view import render_main_view, set_main_message_id
 from .menu import build_home_text, build_main_keyboard
 
 router = Router()
-api_client = ApiClient(API_BASE_URL, API_TOKEN)
+api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
 
 def _normalize_locale(arg: str | None, language_code: str | None) -> str:

@@ -226,6 +226,8 @@ const RECEIPT_TRANSLATIONS = {
     total: "💵 Total",
     total_in: "💵 Total en",
     rate: "💱 Tasa aplicada",
+    commission: "💸 Comisión",
+    referred_by: "👤 Referido de",
   },
   en: {
     title: "🧾 Receipt",
@@ -240,10 +242,20 @@ const RECEIPT_TRANSLATIONS = {
     total: "💵 Total",
     total_in: "💵 Total in",
     rate: "💱 Applied rate",
+    commission: "💸 Commission",
+    referred_by: "👤 Referred by",
   },
 };
 
-function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd, localTotal) {
+function buildReceiptMessage(
+  order,
+  paymentProof,
+  locale = "es",
+  subtotalUsd,
+  localTotal,
+  commissionAmount,
+  referredBy
+) {
   const translations = RECEIPT_TRANSLATIONS[locale] || RECEIPT_TRANSLATIONS.es;
   const price =
     subtotalUsd !== undefined && subtotalUsd !== null
@@ -300,6 +312,15 @@ function buildReceiptMessage(order, paymentProof, locale = "es", subtotalUsd, lo
         lines.push(`${translations.rate}: 1 USD = ${rateText} ${currency}`);
       }
     }
+  }
+  if (commissionAmount != null) {
+    lines.push("");
+    lines.push(
+      `${translations.commission}: $${Number(commissionAmount || 0).toFixed(2)} USD`
+    );
+  }
+  if (referredBy) {
+    lines.push(`${translations.referred_by}: ${referredBy}`);
   }
   lines.push("");
   lines.push("✅ ¡Gracias por tu compra!");
@@ -1981,10 +2002,20 @@ router.get("/orders/:id", async (req, res, next) => {
         [commission.affiliate_id]
       );
       const affiliateUser = affiliateRes.rows[0] || null;
+      const adminIds = parseAdminTelegramIds();
+      const adminId = adminIds.length > 0 ? adminIds[0] : null;
+      const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+      const isPlaceholderAffiliate =
+        affiliateUser?.telegram_id === 90000000000
+        || affiliateUser?.telegram_username === "admin_affiliate";
       commission = {
         ...commission,
-        affiliate_telegram_id: affiliateUser?.telegram_id || null,
-        affiliate_username: affiliateUser?.telegram_username || null,
+        affiliate_telegram_id: isPlaceholderAffiliate
+          ? adminId
+          : affiliateUser?.telegram_id || null,
+        affiliate_username: isPlaceholderAffiliate
+          ? adminUsername
+          : affiliateUser?.telegram_username || null,
       };
     }
 
@@ -2354,9 +2385,48 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       console.error("Telegram congratulations failed", err);
     }
 
+    if (order.affiliate_id) {
+      try {
+        const affiliateUserRes = await pool.query(
+          `SELECT u.telegram_id
+           FROM affiliates a
+           JOIN users u ON u.id = a.user_id
+           WHERE a.id = $1`,
+          [order.affiliate_id]
+        );
+        if (affiliateUserRes.rowCount > 0) {
+          const affiliateTelegramId = affiliateUserRes.rows[0].telegram_id;
+          const salesRes = await pool.query(
+            `SELECT COUNT(*)::int AS count
+             FROM commissions
+             WHERE affiliate_id = $1`,
+            [order.affiliate_id]
+          );
+          const salesCount = salesRes.rows[0]?.count || 0;
+          let rankMessage = "";
+          if (salesCount === 20) {
+            rankMessage =
+              "🎉 ¡Felicidades! Subiste a <b>Afiliado Plata</b> 🥈\n\n" +
+              "Beneficios próximos: mejores comisiones, bonos y materiales.";
+          } else if (salesCount === 50) {
+            rankMessage =
+              "🏆 ¡Increíble! Subiste a <b>Afiliado Oro</b> 🥇\n\n" +
+              "Beneficios próximos: comisiones VIP, prioridad y bonos especiales.";
+          }
+          if (rankMessage) {
+            await sendMessage(affiliateTelegramId, rankMessage, { parse_mode: "HTML" });
+          }
+        }
+      } catch (err) {
+        console.error("Affiliate rank notification failed", err);
+      }
+    }
+
     try {
       let items = [];
       let subtotal = Number(order.unit_price_at_purchase || 0);
+      let commissionAmount = 0;
+      let referredBy = "N/A";
       try {
         const itemsRes = await pool.query(
           `SELECT
@@ -2395,6 +2465,37 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         subtotal = Number(order.unit_price_at_purchase || order.product_price || 0);
       }
 
+      try {
+        const commissionRes = await pool.query(
+          `SELECT c.amount, u.telegram_username, u.telegram_id
+           FROM commissions c
+           JOIN affiliates a ON a.id = c.affiliate_id
+           JOIN users u ON u.id = a.user_id
+           WHERE c.order_id = $1`,
+          [orderId]
+        );
+        if (commissionRes.rowCount > 0) {
+          const row = commissionRes.rows[0];
+          commissionAmount = Number(row.amount || 0);
+          const adminIds = parseAdminTelegramIds();
+          const adminId = adminIds.length > 0 ? adminIds[0] : null;
+          const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+          const isPlaceholderAffiliate =
+            row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
+          if (isPlaceholderAffiliate) {
+            referredBy = adminUsername ? `@${adminUsername}` : adminId ? String(adminId) : "N/A";
+          } else {
+            referredBy = row.telegram_username
+              ? `@${row.telegram_username}`
+              : row.telegram_id
+              ? String(row.telegram_id)
+              : "N/A";
+          }
+        }
+      } catch (err) {
+        console.error("Receipt commission query failed", err);
+      }
+
       const orderNumberText = order.order_number
         ? String(order.order_number).padStart(5, "0")
         : "-";
@@ -2418,7 +2519,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         paymentRes.rows[0],
         userLocale,
         subtotal,
-        localTotal
+        localTotal,
+        commissionAmount,
+        referredBy
       );
 
       const receiptPng = await renderReceiptPng({
@@ -2429,9 +2532,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
         items,
         subtotal,
-        commission: 0,
+        commission: commissionAmount,
         total: subtotal,
-        referredBy: "N/A",
+        referredBy,
         localTotal,
         locale: userLocale,
       });
@@ -2618,8 +2721,11 @@ router.get("/affiliates", async (req, res, next) => {
     const listRes = await pool.query(
       `SELECT a.id, a.status, a.commission_rate,
               a.wallet_usdt_bsc, a.binance_id,
+              a.created_at, a.approved_at,
               u.telegram_id, u.telegram_username,
-              COALESCE(SUM(c.amount) FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance
+              COALESCE(SUM(c.amount) FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance,
+              COALESCE(SUM(c.amount), 0) AS earnings_total,
+              COUNT(c.id)::int AS sales_count
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN commissions c ON c.affiliate_id = a.id
@@ -2630,8 +2736,23 @@ router.get("/affiliates", async (req, res, next) => {
       [...values, pageSize, offset]
     );
 
+    const adminIds = parseAdminTelegramIds();
+    const adminId = adminIds.length > 0 ? adminIds[0] : null;
+    const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+    const items = listRes.rows.map((row) => {
+      const isPlaceholderAffiliate =
+        row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
+      if (!isPlaceholderAffiliate) {
+        return row;
+      }
+      return {
+        ...row,
+        telegram_id: adminId || row.telegram_id,
+        telegram_username: adminUsername || row.telegram_username,
+      };
+    });
     res.json({
-      items: listRes.rows,
+      items,
       page,
       page_size: pageSize,
       total,
@@ -2639,6 +2760,202 @@ router.get("/affiliates", async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/affiliates/commission-rate", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const defaultRes = await pool.query(
+      `SELECT column_default
+       FROM information_schema.columns
+       WHERE table_name = 'affiliates' AND column_name = 'commission_rate'`
+    );
+    let rate = null;
+    if (defaultRes.rowCount > 0) {
+      const raw = defaultRes.rows[0].column_default || "";
+      const match = String(raw).match(/([0-9]+(?:\.[0-9]+)?)/);
+      if (match) {
+        rate = Number(match[1]);
+      }
+    }
+    if (rate === null) {
+      const fallbackRes = await pool.query(
+        `SELECT commission_rate
+         FROM affiliates
+         ORDER BY created_at ASC
+         LIMIT 1`
+      );
+      if (fallbackRes.rowCount > 0) {
+        rate = Number(fallbackRes.rows[0].commission_rate || 0);
+      }
+    }
+    const ratePercent = rate != null ? Number((rate * 100).toFixed(2)) : null;
+    return res.json({ rate: rate ?? null, rate_percent: ratePercent });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/users/:telegram_id/photo", async (req, res, next) => {
+  const telegramId = Number(req.params.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "INVALID_TELEGRAM_ID" });
+  }
+  const botToken = process.env.TELEGRAM_BOT_TOKEN;
+  if (!botToken) {
+    return res.status(500).json({ error: "BOT_TOKEN_NOT_CONFIGURED" });
+  }
+  try {
+    const pool = getPool();
+    const userRes = await pool.query(
+      "SELECT telegram_photo_file_id FROM users WHERE telegram_id = $1",
+      [telegramId]
+    );
+    const fileId = userRes.rows[0]?.telegram_photo_file_id || null;
+    if (!fileId) {
+      return res.status(404).json({ error: "PHOTO_NOT_FOUND" });
+    }
+    const fileRes = await fetch(
+      `https://api.telegram.org/bot${botToken}/getFile?file_id=${encodeURIComponent(
+        fileId
+      )}`
+    );
+    if (!fileRes.ok) {
+      return res.status(502).json({ error: "TELEGRAM_GETFILE_FAILED" });
+    }
+    const filePayload = await fileRes.json();
+    const filePath = filePayload?.result?.file_path;
+    if (!filePath) {
+      return res.status(404).json({ error: "PHOTO_PATH_NOT_FOUND" });
+    }
+    const photoRes = await fetch(
+      `https://api.telegram.org/file/bot${botToken}/${filePath}`
+    );
+    if (!photoRes.ok) {
+      return res.status(502).json({ error: "TELEGRAM_PHOTO_FAILED" });
+    }
+    const buffer = Buffer.from(await photoRes.arrayBuffer());
+    const contentType =
+      photoRes.headers.get("content-type") || "image/jpeg";
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "public, max-age=3600");
+    return res.send(buffer);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/affiliates/commission-rate", async (req, res, next) => {
+  const { commission_rate: commissionRateInput } = req.body || {};
+  let commissionRate = null;
+  if (commissionRateInput !== undefined && commissionRateInput !== null && commissionRateInput !== "") {
+    const rateValue = Number(commissionRateInput);
+    if (!Number.isFinite(rateValue) || rateValue < 0) {
+      return res.status(400).json({ error: "INVALID_COMMISSION_RATE" });
+    }
+    commissionRate = rateValue > 1 ? rateValue / 100 : rateValue;
+  }
+  if (commissionRate === null) {
+    return res.status(400).json({ error: "COMMISSION_RATE_REQUIRED" });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query(
+      "UPDATE affiliates SET commission_rate = $1",
+      [commissionRate]
+    );
+    await client.query(
+      "ALTER TABLE affiliates ALTER COLUMN commission_rate SET DEFAULT $1",
+      [commissionRate]
+    );
+    await client.query("COMMIT");
+    return res.json({
+      ok: true,
+      commission_rate: commissionRate,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/affiliates", async (req, res, next) => {
+  const {
+    telegram_id: telegramIdInput,
+    telegram_username: telegramUsername,
+    status,
+    commission_rate: commissionRateInput,
+    wallet_usdt_bsc: walletUsdtBsc,
+    binance_id: binanceId,
+  } = req.body || {};
+  const telegramId = Number(telegramIdInput);
+  const pool = getPool();
+
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "TELEGRAM_ID_REQUIRED" });
+  }
+  if (walletUsdtBsc && binanceId) {
+    return res.status(400).json({ error: "ONLY_ONE_METHOD_ALLOWED" });
+  }
+
+  const allowedStatuses = ["PENDING", "APPROVED", "REJECTED"];
+  const normalizedStatus = status ? String(status).toUpperCase() : "PENDING";
+  if (!allowedStatuses.includes(normalizedStatus)) {
+    return res.status(400).json({ error: "INVALID_STATUS" });
+  }
+
+  let commissionRate = null;
+  if (commissionRateInput !== undefined && commissionRateInput !== null && commissionRateInput !== "") {
+    const rateValue = Number(commissionRateInput);
+    if (!Number.isFinite(rateValue) || rateValue < 0) {
+      return res.status(400).json({ error: "INVALID_COMMISSION_RATE" });
+    }
+    commissionRate = rateValue > 1 ? rateValue / 100 : rateValue;
+  }
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const userRes = await client.query(
+      `INSERT INTO users (telegram_id, telegram_username)
+       VALUES ($1, $2)
+       ON CONFLICT (telegram_id)
+       DO UPDATE SET telegram_username = COALESCE(EXCLUDED.telegram_username, users.telegram_username)
+       RETURNING id`,
+      [telegramId, telegramUsername || null]
+    );
+    const userId = userRes.rows[0].id;
+
+    const existingRes = await client.query(
+      "SELECT id FROM affiliates WHERE user_id = $1",
+      [userId]
+    );
+    if (existingRes.rowCount > 0) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "AFFILIATE_ALREADY_EXISTS" });
+    }
+
+    const affiliateRes = await client.query(
+      `INSERT INTO affiliates (user_id, status, commission_rate, wallet_usdt_bsc, binance_id, approved_at)
+       VALUES ($1, $2, COALESCE($3, commission_rate), $4, $5,
+         CASE WHEN $2 = 'APPROVED' THEN now() ELSE NULL END)
+       RETURNING *`,
+      [userId, normalizedStatus, commissionRate, finalWalletUsdtBsc, finalBinanceId]
+    );
+
+    await client.query("COMMIT");
+    return res.status(201).json({ affiliate: affiliateRes.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -2677,17 +2994,94 @@ router.get("/affiliates/:id", async (req, res, next) => {
 
     const row = affiliateRes.rows[0];
 
+    const adminIds = parseAdminTelegramIds();
+    const adminId = adminIds.length > 0 ? adminIds[0] : null;
+    const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+    const isPlaceholderAffiliate =
+      row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
+    const displayTelegramId = isPlaceholderAffiliate ? adminId : row.telegram_id;
+    const displayUsername = isPlaceholderAffiliate ? adminUsername : row.telegram_username;
+
     return res.json({
       affiliate: row,
       user: {
-        telegram_id: row.telegram_id,
-        telegram_username: row.telegram_username,
+        telegram_id: displayTelegramId,
+        telegram_username: displayUsername,
       },
       available_balance: balanceRes.rows[0].available_balance,
       commissions: commissionsRes.rows,
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.patch("/affiliates/:id", async (req, res, next) => {
+  const affiliateId = req.params.id;
+  const {
+    status,
+    commission_rate: commissionRateInput,
+    wallet_usdt_bsc: walletUsdtBsc,
+    binance_id: binanceId,
+  } = req.body || {};
+  const pool = getPool();
+  if (walletUsdtBsc && binanceId) {
+    return res.status(400).json({ error: "ONLY_ONE_METHOD_ALLOWED" });
+  }
+
+  const allowedStatuses = ["PENDING", "APPROVED", "REJECTED"];
+  let normalizedStatus = null;
+  if (status !== undefined && status !== null && status !== "") {
+    normalizedStatus = String(status).toUpperCase();
+    if (!allowedStatuses.includes(normalizedStatus)) {
+      return res.status(400).json({ error: "INVALID_STATUS" });
+    }
+  }
+
+  let commissionRate = null;
+  if (commissionRateInput !== undefined && commissionRateInput !== null && commissionRateInput !== "") {
+    const rateValue = Number(commissionRateInput);
+    if (!Number.isFinite(rateValue) || rateValue < 0) {
+      return res.status(400).json({ error: "INVALID_COMMISSION_RATE" });
+    }
+    commissionRate = rateValue > 1 ? rateValue / 100 : rateValue;
+  }
+
+  try {
+    const updateRes = await pool.query(
+      `UPDATE affiliates
+       SET status = COALESCE($2, status),
+           commission_rate = COALESCE($3, commission_rate),
+           wallet_usdt_bsc = CASE
+             WHEN $4 IS NULL AND $5 IS NULL THEN wallet_usdt_bsc
+             WHEN $4 IS NOT NULL THEN $4
+             WHEN $5 IS NOT NULL THEN NULL
+             ELSE wallet_usdt_bsc
+           END,
+           binance_id = CASE
+             WHEN $4 IS NULL AND $5 IS NULL THEN binance_id
+             WHEN $5 IS NOT NULL THEN $5
+             WHEN $4 IS NOT NULL THEN NULL
+             ELSE binance_id
+           END,
+           approved_at = CASE
+             WHEN $2 = 'APPROVED' THEN COALESCE(approved_at, now())
+             WHEN $2 = 'PENDING' THEN NULL
+             WHEN $2 = 'REJECTED' THEN approved_at
+             ELSE approved_at
+           END
+       WHERE id = $1
+       RETURNING *`,
+      [affiliateId, normalizedStatus, commissionRate, finalWalletUsdtBsc, finalBinanceId]
+    );
+
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
+    }
+
+    return res.json({ affiliate: updateRes.rows[0] });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -2796,13 +3190,17 @@ router.post("/payouts", async (req, res, next) => {
     return res.status(400).json({ error: "INVALID_METHOD" });
   }
 
+  const client = await pool.connect();
   try {
-    const affiliateRes = await pool.query(
+    await client.query("BEGIN");
+
+    const affiliateRes = await client.query(
       "SELECT id, wallet_usdt_bsc, binance_id FROM affiliates WHERE id = $1",
       [affiliateId]
     );
 
     if (affiliateRes.rowCount === 0) {
+      await client.query("ROLLBACK");
       return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
     }
 
@@ -2812,32 +3210,66 @@ router.post("/payouts", async (req, res, next) => {
       (method === "USDT_BSC" ? affiliate.wallet_usdt_bsc : affiliate.binance_id);
 
     if (!resolvedDestination) {
+      await client.query("ROLLBACK");
       return res.status(400).json({ error: "DESTINATION_REQUIRED" });
     }
 
-    const amountRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total
+    const commissionsRes = await client.query(
+      `SELECT id, amount
        FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+       WHERE affiliate_id = $1 AND status = 'EARNED'
+       ORDER BY earned_at ASC
+       FOR UPDATE`,
       [affiliateId]
     );
 
-    const amount = Number(amountRes.rows[0].total);
-
-    if (!amount || amount <= 0) {
+    if (commissionsRes.rowCount === 0) {
+      await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
-    const payoutRes = await pool.query(
+    const amount = commissionsRes.rows.reduce(
+      (sum, row) => sum + Number(row.amount || 0),
+      0
+    );
+
+    if (!amount || amount <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
+    }
+
+    const payoutRes = await client.query(
       `INSERT INTO payouts (affiliate_id, amount, method, destination, status)
        VALUES ($1, $2, $3, $4, 'REQUESTED')
        RETURNING *`,
       [affiliateId, amount, method, resolvedDestination]
     );
 
+    const commissionIds = commissionsRes.rows.map((row) => row.id);
+    const payoutId = payoutRes.rows[0].id;
+
+    await client.query(
+      `INSERT INTO payout_items (payout_id, commission_id, amount)
+       SELECT $1, id, amount
+       FROM commissions
+       WHERE id = ANY($2::uuid[])`,
+      [payoutId, commissionIds]
+    );
+
+    await client.query(
+      `UPDATE commissions
+       SET status = 'RESERVED'
+       WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
+      [commissionIds]
+    );
+
+    await client.query("COMMIT");
     return res.status(201).json({ payout: payoutRes.rows[0] });
   } catch (error) {
+    await client.query("ROLLBACK");
     next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -2884,16 +3316,34 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
       [payoutId]
     );
 
-    const commissionsRes = await client.query(
-      `UPDATE commissions
-       SET status = 'PAID_OUT', paid_out_at = now()
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
-      [payout.affiliate_id]
+    const payoutItemsRes = await client.query(
+      `SELECT commission_id
+       FROM payout_items
+       WHERE payout_id = $1`,
+      [payoutId]
     );
+
+    let commissionsRes = { rowCount: 0 };
+    if (payoutItemsRes.rowCount > 0) {
+      const commissionIds = payoutItemsRes.rows.map((row) => row.commission_id);
+      commissionsRes = await client.query(
+        `UPDATE commissions
+         SET status = 'PAID_OUT', paid_out_at = now()
+         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
+        [commissionIds]
+      );
+    } else {
+      commissionsRes = await client.query(
+        `UPDATE commissions
+         SET status = 'PAID_OUT', paid_out_at = now()
+         WHERE affiliate_id = $1 AND status = 'EARNED'`,
+        [payout.affiliate_id]
+      );
+    }
 
     await client.query("COMMIT");
 
-    const message = `✅ Tu retiro fue enviado.\n\nMonto: ${payout.amount}\nMétodo: ${payout.method}\nDestino: ${payout.destination}`;
+    const message = `🧾 Recibo de retiro pagado\n\nMonto: ${payout.amount}\nMétodo: ${payout.method}\nDestino: ${payout.destination}`;
     try {
       await sendMessage(payout.telegram_id, message);
     } catch (err) {
@@ -2955,6 +3405,23 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
        RETURNING *`,
       [payoutId]
     );
+
+    const payoutItemsRes = await client.query(
+      `SELECT commission_id
+       FROM payout_items
+       WHERE payout_id = $1`,
+      [payoutId]
+    );
+
+    if (payoutItemsRes.rowCount > 0) {
+      const commissionIds = payoutItemsRes.rows.map((row) => row.commission_id);
+      await client.query(
+        `UPDATE commissions
+         SET status = 'EARNED', paid_out_at = NULL
+         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
+        [commissionIds]
+      );
+    }
 
     await client.query("COMMIT");
 

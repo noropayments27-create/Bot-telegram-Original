@@ -1,3 +1,4 @@
+const crypto = require("crypto");
 const fs = require("fs/promises");
 const path = require("path");
 
@@ -77,14 +78,39 @@ async function sendMultipart(
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/bot${token}/${endpoint}`;
   const buffer = await fs.readFile(filePath);
-  const form = new FormData();
-  form.append("chat_id", String(telegramId));
-  form.append(fieldName, new Blob([buffer]), filename);
+  const hasFormData = typeof FormData !== "undefined" && typeof Blob !== "undefined";
+  let response;
 
-  const response = await fetch(url, {
-    method: "POST",
-    body: form,
-  });
+  if (hasFormData) {
+    const form = new FormData();
+    form.append("chat_id", String(telegramId));
+    form.append(fieldName, new Blob([buffer]), filename);
+    response = await fetch(url, {
+      method: "POST",
+      body: form,
+    });
+  } else {
+    const boundary = `----tg-${crypto.randomBytes(8).toString("hex")}`;
+    const header = `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="chat_id"\r\n\r\n` +
+      `${telegramId}\r\n` +
+      `--${boundary}\r\n` +
+      `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+      `Content-Type: application/octet-stream\r\n\r\n`;
+    const footer = `\r\n--${boundary}--\r\n`;
+    const body = Buffer.concat([
+      Buffer.from(header, "utf8"),
+      buffer,
+      Buffer.from(footer, "utf8"),
+    ]);
+    response = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": `multipart/form-data; boundary=${boundary}`,
+      },
+      body,
+    });
+  }
 
   if (!response.ok) {
     throw new Error("TELEGRAM_SEND_FAILED");

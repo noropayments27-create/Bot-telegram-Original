@@ -21,14 +21,22 @@ async def _request_with_retry(fn, attempts: int = 3, delay: float = 0.35) -> Any
 
 
 class ApiClient:
-    def __init__(self, base_url: str, token: Optional[str] = None) -> None:
+    def __init__(
+        self,
+        base_url: str,
+        token: Optional[str] = None,
+        bot_secret: Optional[str] = None,
+    ) -> None:
         self.base_url = base_url.rstrip("/")
         self.token = token
+        self.bot_secret = bot_secret
 
     def _headers(self) -> Dict[str, str]:
         headers: Dict[str, str] = {}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        if self.bot_secret:
+            headers["x-bot-secret"] = self.bot_secret
         return headers
 
     async def ping_health(self) -> Dict[str, Any]:
@@ -108,6 +116,39 @@ class ApiClient:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     url, headers=self._headers(), timeout=10
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
+    async def get_affiliate_top(
+        self, telegram_id: int, period: str = "week"
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/affiliates/top"
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url,
+                    params={"telegram_id": telegram_id, "period": period},
+                    headers=self._headers(),
+                    timeout=15,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
+    async def request_affiliate_withdraw(self, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/affiliates/withdraw"
+        payload = {"telegram_id": telegram_id}
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers=self._headers(),
+                    timeout=15,
                 )
                 response.raise_for_status()
                 return response.json()
@@ -197,6 +238,29 @@ class ApiClient:
                 return {"status_code": 409, "data": response.json()}
             response.raise_for_status()
             return {"status_code": response.status_code, "data": response.json()}
+
+    async def get_affiliate_status(self, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/affiliates/status"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"telegram_id": telegram_id},
+                headers=self._headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def apply_affiliate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/affiliates/apply"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=10
+            )
+            if response.status_code in (200, 201):
+                return response.json()
+            response.raise_for_status()
+            return response.json()
 
     async def send_ticket_message(
         self, ticket_id: str, payload: Dict[str, Any]

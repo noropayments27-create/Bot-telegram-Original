@@ -53,6 +53,23 @@ export default function TicketsPage() {
     loadTickets();
   }, [page, status]);
 
+  useEffect(() => {
+    const markTicketsSeen = async () => {
+      try {
+        const summary = await apiFetch("/admin/summary");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(
+            "admin_seen_tickets_count",
+            String(summary.unread_tickets || 0)
+          );
+        }
+      } catch (err) {
+        // ignore summary errors
+      }
+    };
+    markTicketsSeen();
+  }, []);
+
   const handleStatusChange = (event) => {
     setStatus(event.target.value);
     setPage(1);
