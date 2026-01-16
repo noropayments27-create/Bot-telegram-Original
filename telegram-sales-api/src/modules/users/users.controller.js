@@ -258,6 +258,40 @@ async function getAffiliateStatus(req, res, next) {
       [row.id]
     );
     const dailyEarnings = Number(dailyRes.rows[0]?.total || 0);
+    const dailySalesRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM commissions
+       WHERE affiliate_id = $1
+         AND earned_at >= date_trunc('day', now())`,
+      [row.id]
+    );
+    const dailySalesCount = dailySalesRes.rows[0]?.count || 0;
+    const streakRes = await pool.query(
+      `SELECT DISTINCT date_trunc('day', earned_at)::date AS day
+       FROM commissions
+       WHERE affiliate_id = $1
+       ORDER BY day DESC`,
+      [row.id]
+    );
+    const streakDays = [];
+    for (const streakRow of streakRes.rows) {
+      if (streakRow.day) {
+        streakDays.push(streakRow.day);
+      }
+    }
+    let streakCount = 0;
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const daySet = new Set(streakDays.map((day) => new Date(day).getTime()));
+      let cursor = today;
+      while (daySet.has(cursor.getTime())) {
+        streakCount += 1;
+        cursor = new Date(cursor.getTime() - 24 * 60 * 60 * 1000);
+      }
+    } catch (err) {
+      streakCount = 0;
+    }
     const availableRes = await pool.query(
       `SELECT COALESCE(SUM(amount), 0) AS total
        FROM commissions
@@ -291,6 +325,8 @@ async function getAffiliateStatus(req, res, next) {
         sales_count: salesCount,
         earnings_total: earningsTotal,
         daily_earnings: dailyEarnings,
+        daily_sales: dailySalesCount,
+        daily_streak: streakCount,
         earnings_available: earningsAvailable,
         referrals_total: referralsTotal,
       },

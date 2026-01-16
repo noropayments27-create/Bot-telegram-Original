@@ -385,12 +385,15 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
         data = await api_client.get_affiliate_status(callback.from_user.id)
         affiliate = data.get("affiliate")
         if affiliate and affiliate.get("status") == "APPROVED":
-            sales_count = int(affiliate.get("sales_count") or 0)
-            earnings_total = affiliate.get("daily_earnings") or 0
+            sales_total = int(affiliate.get("sales_count") or 0)
+            sales_today = int(affiliate.get("daily_sales") or 0)
+            earnings_total = affiliate.get("earnings_total") or 0
+            earnings_today = affiliate.get("daily_earnings") or 0
             referrals_total = affiliate.get("referrals_total") or 0
+            daily_streak = int(affiliate.get("daily_streak") or 0)
             days_active = 0
             try:
-                created_raw = affiliate.get("created_at")
+                created_raw = affiliate.get("approved_at") or affiliate.get("created_at")
                 if created_raw:
                     created_dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
                     days_active = max((datetime.utcnow() - created_dt).days + 1, 0)
@@ -398,20 +401,23 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
                 days_active = 0
             daily_percent = 0
             try:
-                daily_percent = min(int((float(earnings_total) / 10) * 100), 100)
+                daily_percent = min(int((float(earnings_today) / 10) * 100), 100)
             except Exception:
                 daily_percent = 0
-            earnings_text = f"${float(earnings_total):.2f}"
+            earnings_today_text = f"${float(earnings_today):.2f}"
+            earnings_total_text = f"${float(earnings_total):.2f}"
             text = (
                 f"{t(locale, 'affiliate_stats_header')}\n\n"
                 f"{t(locale, 'affiliate_stats_footer')}\n"
-                f"{t(locale, 'affiliate_stats_earnings').format(amount=earnings_text)}\n"
-                f"{t(locale, 'affiliate_stats_sales').format(count=sales_count)}\n"
-                f"{t(locale, 'affiliate_stats_referrals').format(count=referrals_total)}\n"
+                f"{t(locale, 'affiliate_stats_earnings_today').format(amount=earnings_today_text)}\n"
+                f"{t(locale, 'affiliate_stats_earnings_total').format(amount=earnings_total_text)}\n"
+                f"{t(locale, 'affiliate_stats_sales_today').format(count=sales_today)}\n"
+                f"{t(locale, 'affiliate_stats_sales_total').format(count=sales_total)}\n"
+                f"{t(locale, 'affiliate_stats_referrals_total').format(count=referrals_total)}\n"
                 f"{t(locale, 'affiliate_stats_seniority').format(days=days_active)}\n"
                 f"{t(locale, 'affiliate_stats_goal').format(percent=daily_percent)}\n"
                 f"{t(locale, 'affiliate_stats_footer')}\n"
-                f"{t(locale, 'affiliate_stats_streak').format(days=0)}"
+                f"{t(locale, 'affiliate_stats_streak').format(days=daily_streak)}"
             )
             await render_main_view(
                 callback.message,
@@ -462,7 +468,12 @@ async def _render_affiliate_top(callback: CallbackQuery, period: str) -> None:
     try:
         data = await api_client.get_affiliate_top(callback.from_user.id, period=period)
         rows = data.get("top") or []
-        lines = [t(locale, "affiliate_top_title"), ""]
+        title_key = {
+            "day": "affiliate_top_title_day",
+            "week": "affiliate_top_title_week",
+            "global": "affiliate_top_title_global",
+        }.get(period, "affiliate_top_title_week")
+        lines = [t(locale, title_key), t(locale, "affiliate_top_header"), ""]
         medals = ["🥇", "🥈", "🥉"]
         if not rows:
             lines.append(t(locale, "affiliate_top_empty"))
