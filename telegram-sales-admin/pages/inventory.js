@@ -1525,70 +1525,72 @@ export default function InventoryPage() {
                 {holdsActive.length === 0 ? (
                   <p>No hay holds activos.</p>
                 ) : (
-                  <table className="holds-table" style={{ width: "100%", marginTop: "12px" }}>
-                    <thead>
-                      <tr>
-                        <th align="left">Pedido</th>
-                        <th align="left">Cant.</th>
-                        <th align="left">Expira</th>
-                        <th align="left">Restante</th>
-                        <th align="left">Creado</th>
-                        <th align="left">Estado</th>
-                        <th></th>
-                      </tr>
-                    </thead>
-                    <tbody>
-                      {holdsActive.map((hold) => {
-                        const expiresAt = hold.expires_at
-                          ? new Date(hold.expires_at)
-                          : null;
-                        const remainingMs = expiresAt ? expiresAt - new Date() : 0;
-                        const minutes = Math.max(Math.floor(remainingMs / 60000), 0);
-                        const seconds = Math.max(
-                          Math.floor((remainingMs % 60000) / 1000),
-                          0
-                        );
-                        return (
-                          <tr key={hold.id}>
-                            <td>
-                              <div className="hold-order-id">
-                                {hold.order_id || "—"}
-                              </div>
-                              {hold.order_id && (
-                                <div className="hold-actions-inline">
-                                  <button
-                                    type="button"
-                                    onClick={() => copyText(hold.order_id, "Pedido")}
-                                  >
-                                    Copiar
-                                  </button>
-                                  <button type="button" onClick={() => openRelease(hold)}>
-                                    Liberar
-                                  </button>
+                  <div className="table-scroll">
+                    <table className="holds-table" style={{ width: "100%", marginTop: "12px" }}>
+                      <thead>
+                        <tr>
+                          <th align="left">Pedido</th>
+                          <th align="left">Cant.</th>
+                          <th align="left">Expira</th>
+                          <th align="left">Restante</th>
+                          <th align="left">Creado</th>
+                          <th align="left">Estado</th>
+                          <th></th>
+                        </tr>
+                      </thead>
+                      <tbody>
+                        {holdsActive.map((hold) => {
+                          const expiresAt = hold.expires_at
+                            ? new Date(hold.expires_at)
+                            : null;
+                          const remainingMs = expiresAt ? expiresAt - new Date() : 0;
+                          const minutes = Math.max(Math.floor(remainingMs / 60000), 0);
+                          const seconds = Math.max(
+                            Math.floor((remainingMs % 60000) / 1000),
+                            0
+                          );
+                          return (
+                            <tr key={hold.id}>
+                              <td>
+                                <div className="hold-order-id">
+                                  {hold.order_id || "—"}
                                 </div>
-                              )}
-                            </td>
-                            <td>{hold.qty}</td>
-                            <td>
-                              {hold.expires_at
-                                ? new Date(hold.expires_at).toLocaleString()
-                                : "-"}
-                            </td>
-                            <td>
-                              {hold.expires_at ? `${minutes}m ${seconds}s` : "-"}
-                            </td>
-                            <td>
-                              {hold.created_at
-                                ? new Date(hold.created_at).toLocaleString()
-                                : "-"}
-                            </td>
-                            <td>{hold.status || "-"}</td>
-                            <td></td>
-                          </tr>
-                        );
-                      })}
-                    </tbody>
-                  </table>
+                                {hold.order_id && (
+                                  <div className="hold-actions-inline">
+                                    <button
+                                      type="button"
+                                      onClick={() => copyText(hold.order_id, "Pedido")}
+                                    >
+                                      Copiar
+                                    </button>
+                                    <button type="button" onClick={() => openRelease(hold)}>
+                                      Liberar
+                                    </button>
+                                  </div>
+                                )}
+                              </td>
+                              <td>{hold.qty}</td>
+                              <td>
+                                {hold.expires_at
+                                  ? new Date(hold.expires_at).toLocaleString()
+                                  : "-"}
+                              </td>
+                              <td>
+                                {hold.expires_at ? `${minutes}m ${seconds}s` : "-"}
+                              </td>
+                              <td>
+                                {hold.created_at
+                                  ? new Date(hold.created_at).toLocaleString()
+                                  : "-"}
+                              </td>
+                              <td>{hold.status || "-"}</td>
+                              <td></td>
+                            </tr>
+                          );
+                        })}
+                      </tbody>
+                    </table>
+                  </div>
                 )}
                 {releaseTarget && (
                   <section className="card emergency-panel inventory-card">

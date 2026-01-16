@@ -6,6 +6,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 
 from .config import TELEGRAM_BOT_TOKEN
 from .handlers import admin_auth, lang, start, shop, support
+from .middlewares.ban_guard import BanGuardMiddleware
 
 
 async def main() -> None:
@@ -16,6 +17,10 @@ async def main() -> None:
 
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
+
+    ban_guard = BanGuardMiddleware()
+    dp.message.middleware(ban_guard)
+    dp.callback_query.middleware(ban_guard)
 
     dp.include_router(start.router)
     dp.include_router(lang.router)

@@ -22,13 +22,16 @@
 }
 
 .bell svg {
-  width: 20px;
-  height: 20px;
+  width: 24px;
+  height: 24px;
+  display: block;
 }
 
-.bellEmoji {
-  font-size: 20px;
-  line-height: 1;
+.bellIcon {
+  width: 24px;
+  height: 24px;
+  color: var(--scarlet-red);
+  stroke: var(--scarlet-red);
 }
 
 .badge {

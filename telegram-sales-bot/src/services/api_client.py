@@ -101,6 +101,19 @@ class ApiClient:
 
         return await _request_with_retry(_do)
 
+    async def get_ban_status(self, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/{telegram_id}/ban"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url, headers=self._headers(), timeout=10
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
     async def set_user_locale(self, telegram_id: int, locale: str) -> Dict[str, Any]:
         url = f"{self.base_url}/users/{telegram_id}/locale"
         payload = {"locale": locale}

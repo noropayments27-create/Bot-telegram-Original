@@ -1947,10 +1947,12 @@ router.get("/orders/:id", async (req, res, next) => {
   try {
     const orderRes = await pool.query(
       `SELECT o.*, u.telegram_id, u.telegram_username,
+              b.telegram_id AS banned_telegram_id,
               p.id AS product_id, p.code AS product_code,
               p.name AS product_name, p.price AS product_price
        FROM orders o
        JOIN users u ON u.id = o.user_id
+       LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
        JOIN products p ON p.id = o.product_id
        WHERE o.id = $1`,
       [orderId]
@@ -2054,6 +2056,7 @@ router.get("/orders/:id", async (req, res, next) => {
       user: {
         telegram_id: order.telegram_id,
         telegram_username: order.telegram_username,
+        banned: Boolean(order.banned_telegram_id),
       },
       product: {
         id: order.product_id,
@@ -2071,6 +2074,35 @@ router.get("/orders/:id", async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.post("/users/:telegram_id/ban-toggle", async (req, res, next) => {
+  const telegramId = Number(req.params.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  const pool = getPool();
+
+  try {
+    const banRes = await pool.query(
+      "SELECT 1 FROM user_bans WHERE telegram_id = $1 LIMIT 1",
+      [telegramId]
+    );
+    if (banRes.rowCount > 0) {
+      await pool.query("DELETE FROM user_bans WHERE telegram_id = $1", [
+        telegramId,
+      ]);
+      return res.json({ banned: false });
+    }
+
+    await pool.query(
+      "INSERT INTO user_bans (telegram_id, reason) VALUES ($1, $2)",
+      [telegramId, "Banned from admin panel"]
+    );
+    return res.json({ banned: true });
+  } catch (error) {
+    return next(error);
   }
 });
 

@@ -571,6 +571,19 @@ body.login-success {
   gap: 12px;
 }
 
+.orders-detail-title-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.orders-ban-button {
+  padding: 2px 6px;
+  font-size: 10px;
+  margin-top: -20px;
+}
+
 .orders-detail-header h2 {
   font-size: 18px;
   font-weight: 700;
@@ -771,6 +784,58 @@ body.login-success {
   align-items: flex-start;
   gap: 0.4cm;
   line-height: 1.2;
+}
+
+.ticket-thread {
+  margin-top: 10px;
+  display: grid;
+  gap: 10px;
+  max-height: 260px;
+  overflow-y: auto;
+  padding-right: 6px;
+}
+
+.ticket-message {
+  display: flex;
+  flex-direction: column;
+  align-items: flex-start;
+  gap: 4px;
+}
+
+.ticket-message--admin {
+  align-items: flex-end;
+}
+
+.ticket-bubble {
+  max-width: 100%;
+  padding: 8px 10px;
+  border-radius: 12px;
+  background: rgba(20, 20, 20, 0.7);
+  border: 1px solid rgba(255, 36, 0, 0.2);
+  color: #f0f0f0;
+  display: grid;
+  gap: 4px;
+}
+
+.ticket-message--admin .ticket-bubble {
+  background: rgba(255, 36, 0, 0.12);
+  border-color: rgba(255, 36, 0, 0.45);
+}
+
+.ticket-meta {
+  font-size: 10px;
+  color: #b7b7b7;
+}
+
+.detail-textbox {
+  background: rgba(20, 20, 20, 0.7);
+  border: 1px solid rgba(255, 36, 0, 0.3);
+  border-radius: 12px;
+  padding: 10px 12px;
+  color: #f0f0f0;
+  white-space: pre-wrap;
+  font-size: 12px;
+  line-height: 1.4;
 }
 
 .orders-inline-line {
@@ -1669,6 +1734,198 @@ button.ghost {
   }
   .stats-grid {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1200px) {
+  .page {
+    padding: 100px 20px 1.5cm;
+  }
+  .orders-card {
+    width: 100%;
+    margin: 0;
+  }
+  .orders-detail-wrap {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .inventory-page {
+    zoom: 1;
+  }
+}
+
+@media (max-width: 960px) {
+  .page {
+    padding: 92px 18px 1.2cm;
+  }
+  .app-header__actions {
+    margin-right: 0;
+  }
+  .orders-card .form select {
+    width: 100%;
+  }
+  .orders-list {
+    overflow-x: auto;
+  }
+  .orders-table {
+    min-width: 680px;
+  }
+  .orders-detail-wrap {
+    grid-template-columns: 1fr;
+    margin-top: 24px;
+  }
+  .orders-detail-card {
+    max-height: none;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .orders-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .orders-detail-grid p {
+    line-height: 1.2;
+  }
+  .orders-detail-date-line {
+    gap: 8px;
+  }
+  .orders-detail-actions .actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .orders-status-inline {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .inventory-column {
+    gap: 24px;
+  }
+  .product-list {
+    max-height: none;
+  }
+  .simple-stock-row {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .stock-toggle-group {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .page {
+    padding: 88px 16px 1cm;
+  }
+  .card {
+    padding: 20px;
+    border-radius: 20px;
+  }
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .product-row {
+    grid-template-columns: 1fr;
+  }
+  .product-row__main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .product-row__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .product-row__actions input {
+    width: 100%;
+  }
+  .create-product__actions,
+  .product-edit__actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .orders-table {
+    min-width: 620px;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 84px 14px 0.8cm;
+  }
+  .card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+  .dashboard-grid,
+  .stats-grid {
+    grid-template-columns: 1fr;
+  }
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .category-grid {
+    grid-template-columns: 1fr;
+  }
+  .nav-card {
+    min-height: 76px;
+  }
+  .nav-card__count {
+    font-size: 22px;
+  }
+  .stat-value {
+    font-size: 24px;
+  }
+  .inventory-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .payment-proof {
+    width: 100%;
+    max-width: 100%;
+  }
+  .orders-table {
+    min-width: 560px;
+  }
+}
+
+@media (max-width: 520px) {
+  .page {
+    padding: 80px 12px 0.8cm;
+  }
+  .orders-table {
+    min-width: 520px;
+  }
+}
+
+.table-scroll {
+  width: 100%;
+  overflow-x: auto;
+  -webkit-overflow-scrolling: touch;
+}
+
+.table-scroll table {
+  min-width: 720px;
+}
+
+@media (max-width: 768px) {
+  .table-scroll table {
+    min-width: 640px;
+  }
+}
+
+@media (max-width: 640px) {
+  .table-scroll table {
+    min-width: 520px;
   }
 }
 .card h1,

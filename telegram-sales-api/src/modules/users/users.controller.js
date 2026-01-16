@@ -179,4 +179,25 @@ async function updateUserLocale(req, res) {
   }
 }
 
-module.exports = { upsertTelegramUser, getUserByTelegramId, updateUserLocale };
+async function getUserBanStatus(req, res, next) {
+  const telegramId = Number(req.params.telegram_id);
+
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+
+  try {
+    const pool = getPool();
+    const banned = await isUserBanned(pool, telegramId);
+    return res.status(200).json({ banned });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+module.exports = {
+  upsertTelegramUser,
+  getUserByTelegramId,
+  updateUserLocale,
+  getUserBanStatus,
+};

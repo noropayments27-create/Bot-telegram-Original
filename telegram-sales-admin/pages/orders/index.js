@@ -462,6 +462,32 @@ export default function OrdersPage() {
     }
   };
 
+  const handleToggleBan = async (orderId) => {
+    const detail = details[orderId];
+    const telegramId = detail?.user?.telegram_id;
+    if (!telegramId) {
+      return;
+    }
+    try {
+      const result = await apiFetch(`/admin/users/${telegramId}/ban-toggle`, {
+        method: "POST",
+      });
+      setDetails((prev) => ({
+        ...prev,
+        [orderId]: {
+          ...detail,
+          user: {
+            ...detail.user,
+            banned: Boolean(result.banned),
+          },
+        },
+      }));
+      setToast(result.banned ? "Usuario baneado" : "Usuario desbaneado");
+    } catch (err) {
+      setToast("No se pudo actualizar el baneo");
+    }
+  };
+
   return (
     <main className="page">
       <section className="card orders-card">
@@ -655,7 +681,16 @@ export default function OrdersPage() {
                         )}
                       </div>
                       <div className="orders-detail-section">
-                        <h3>Usuario</h3>
+                        <div className="orders-detail-title-row">
+                          <h3>Usuario</h3>
+                          <button
+                            type="button"
+                            className="orders-ban-button"
+                            onClick={() => handleToggleBan(orderId)}
+                          >
+                            {detail.user?.banned ? "Desbanear" : "Banear"}
+                          </button>
+                        </div>
                         <p>
                           <span className="orders-copy-label">Telegram ID:</span>
                           <button

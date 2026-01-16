@@ -137,65 +137,67 @@ export default function AffiliatesPage() {
             </select>
           </label>
         </div>
-        <table style={{ width: "100%", marginTop: "16px" }}>
-          <thead>
-            <tr>
-              <th align="left">ID de Afiliado</th>
-              <th align="left">Telegram</th>
-              <th align="left">Estado</th>
-              <th align="left">Balance</th>
-              <th align="left">Tasa</th>
-              <th align="left">Crear pago</th>
-            </tr>
-          </thead>
-          <tbody>
-            {items.map((affiliate) => {
-              const state = formState[affiliate.id] || {};
-              return (
-                <tr key={affiliate.id}>
-                  <td>{affiliate.id}</td>
-                  <td>{affiliate.telegram_id}</td>
-                  <td>{affiliate.status}</td>
-                  <td>{affiliate.available_balance}</td>
-                  <td>{affiliate.commission_rate}</td>
-                  <td>
-                    <div style={{ display: "grid", gap: "8px" }}>
-                      <select
-                        value={state.method || "USDT_BSC"}
-                        onChange={(event) =>
-                          handleMethodChange(affiliate, event.target.value)
-                        }
-                      >
-                        {METHOD_OPTIONS.map((option) => (
-                          <option key={option.value} value={option.value}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                      <input
-                        type="text"
-                        value={state.destination || ""}
-                        onChange={(event) =>
-                          handleDestinationChange(affiliate.id, event.target.value)
-                        }
-                        placeholder="Destino"
-                      />
-                      <button
-                        type="button"
-                        onClick={() => handleCreatePayout(affiliate)}
-                      >
-                        Crear payout
-                      </button>
-                      <Link className="link" href="/payouts">
-                        Ver payouts
-                      </Link>
-                    </div>
-                  </td>
-                </tr>
-              );
-            })}
-          </tbody>
-        </table>
+        <div className="table-scroll">
+          <table style={{ width: "100%", marginTop: "16px" }}>
+            <thead>
+              <tr>
+                <th align="left">ID de Afiliado</th>
+                <th align="left">Telegram</th>
+                <th align="left">Estado</th>
+                <th align="left">Balance</th>
+                <th align="left">Tasa</th>
+                <th align="left">Crear pago</th>
+              </tr>
+            </thead>
+            <tbody>
+              {items.map((affiliate) => {
+                const state = formState[affiliate.id] || {};
+                return (
+                  <tr key={affiliate.id}>
+                    <td>{affiliate.id}</td>
+                    <td>{affiliate.telegram_id}</td>
+                    <td>{affiliate.status}</td>
+                    <td>{affiliate.available_balance}</td>
+                    <td>{affiliate.commission_rate}</td>
+                    <td>
+                      <div style={{ display: "grid", gap: "8px" }}>
+                        <select
+                          value={state.method || "USDT_BSC"}
+                          onChange={(event) =>
+                            handleMethodChange(affiliate, event.target.value)
+                          }
+                        >
+                          {METHOD_OPTIONS.map((option) => (
+                            <option key={option.value} value={option.value}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                        <input
+                          type="text"
+                          value={state.destination || ""}
+                          onChange={(event) =>
+                            handleDestinationChange(affiliate.id, event.target.value)
+                          }
+                          placeholder="Destino"
+                        />
+                        <button
+                          type="button"
+                          onClick={() => handleCreatePayout(affiliate)}
+                        >
+                          Crear payout
+                        </button>
+                        <Link className="link" href="/payouts">
+                          Ver payouts
+                        </Link>
+                      </div>
+                    </td>
+                  </tr>
+                );
+              })}
+            </tbody>
+          </table>
+        </div>
         <div className="actions" style={{ marginTop: "16px" }}>
           <button
             type="button"

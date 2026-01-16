@@ -148,7 +148,28 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           });
         }}
       >
-        <span className={styles.bellEmoji}>🔔</span>
+        <svg
+          viewBox="0 0 24 24"
+          aria-hidden="true"
+          className={styles.bellIcon}
+        >
+          <path
+            d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6"
+            fill="none"
+            stroke="#ff2400"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M9 17v1a3 3 0 0 0 6 0v-1"
+            fill="none"
+            stroke="#ff2400"
+            strokeWidth="2.5"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+        </svg>
         {unreadCount > 0 && (
           <span className={styles.badge}>
             {unreadCount > 99 ? "99+" : unreadCount}
