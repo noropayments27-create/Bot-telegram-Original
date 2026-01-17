@@ -56,11 +56,10 @@ export default function TicketsPage() {
   useEffect(() => {
     const markTicketsSeen = async () => {
       try {
-        const summary = await apiFetch("/admin/summary");
         if (typeof window !== "undefined") {
           window.sessionStorage.setItem(
-            "admin_seen_tickets_count",
-            String(summary.unread_tickets || 0)
+            "admin_seen_tickets_at",
+            String(Date.now())
           );
         }
       } catch (err) {

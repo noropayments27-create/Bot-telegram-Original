@@ -16,6 +16,7 @@ const {
 const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
 const { deliverOrderToTelegram } = require("../services/delivery");
+const { getAffiliateLevel } = require("../services/affiliateLevels");
 
 const MESSAGES = {
   es: {
@@ -2337,24 +2338,55 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     );
 
     if (order.affiliate_id) {
-      const affiliateRes = await client.query(
+      const statsRes = await client.query(
+        `SELECT COUNT(*)::int AS sales_count,
+                COALESCE(SUM(amount), 0) AS earnings_total,
+                MAX(earned_at) AS last_sale_at
+         FROM commissions
+         WHERE affiliate_id = $1`,
+        [order.affiliate_id]
+      );
+      const stats = statsRes.rows[0] || {};
+      const salesTotal = stats.sales_count || 0;
+      const earningsTotal = Number(stats.earnings_total || 0);
+      const boostRes = await client.query(
         "SELECT commission_rate FROM affiliates WHERE id = $1",
         [order.affiliate_id]
       );
-
-      if (affiliateRes.rowCount > 0) {
-        const rate = Number(affiliateRes.rows[0].commission_rate);
-        const amount = Number(
-          (Number(order.unit_price_at_purchase) * rate).toFixed(2)
-        );
-
-        await client.query(
-          `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (order_id) DO NOTHING`,
-          [order.id, order.affiliate_id, rate, amount]
+      const boostRate = Number(boostRes.rows[0]?.commission_rate || 0);
+      let daysSinceLastSale = null;
+      if (stats.last_sale_at) {
+        const lastSaleTime = new Date(stats.last_sale_at).getTime();
+        daysSinceLastSale = Math.max(
+          Math.floor((Date.now() - lastSaleTime) / (24 * 60 * 60 * 1000)),
+          0
         );
       }
+      let baseRate = 0.2;
+      let boostEffective = boostRate;
+      if (salesTotal > 0) {
+        const currentLevel = getAffiliateLevel({
+          salesTotal,
+          earningsTotal,
+          daysSinceLastSale,
+        });
+        baseRate = currentLevel.rate;
+      } else {
+        boostEffective = 0;
+      }
+      const rate = Math.min(baseRate + boostEffective, 1);
+      const amount = Number(
+        (Number(order.unit_price_at_purchase) * rate).toFixed(2)
+      );
+
+      await client.query(
+        `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (order_id) DO NOTHING`,
+        [order.id, order.affiliate_id, rate, amount]
+      );
+
+      // Commission rate is based on level + optional boost, no per-affiliate override.
     }
 
     await client.query("COMMIT");
@@ -2403,15 +2435,34 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
             [order.affiliate_id]
           );
           const salesCount = salesRes.rows[0]?.count || 0;
+          const earningsRes = await pool.query(
+            `SELECT COALESCE(SUM(amount), 0) AS total
+             FROM commissions
+             WHERE affiliate_id = $1`,
+            [order.affiliate_id]
+          );
+          const earningsTotal = Number(earningsRes.rows[0]?.total || 0);
           let rankMessage = "";
-          if (salesCount === 20) {
+          if (salesCount === 2 && earningsTotal >= 5) {
+            rankMessage =
+              "🎉 ¡Felicidades! Subiste a <b>Afiliado Bronce</b> 🥉\n\n" +
+              "Beneficios próximos: mejores comisiones y materiales.";
+          } else if (salesCount === 20 && earningsTotal >= 50) {
             rankMessage =
               "🎉 ¡Felicidades! Subiste a <b>Afiliado Plata</b> 🥈\n\n" +
               "Beneficios próximos: mejores comisiones, bonos y materiales.";
-          } else if (salesCount === 50) {
+          } else if (salesCount === 40 && earningsTotal >= 200) {
             rankMessage =
               "🏆 ¡Increíble! Subiste a <b>Afiliado Oro</b> 🥇\n\n" +
               "Beneficios próximos: comisiones VIP, prioridad y bonos especiales.";
+          } else if (salesCount === 70 && earningsTotal >= 500) {
+            rankMessage =
+              "💎 ¡Excelente! Subiste a <b>Afiliado Diamante</b> 💎\n\n" +
+              "Beneficios próximos: bonos premium y soporte prioritario.";
+          } else if (salesCount === 100 && earningsTotal >= 600) {
+            rankMessage =
+              "👑 ¡Legendario! Subiste a <b>Afiliado Elite</b> 👑\n\n" +
+              "Beneficios próximos: recompensas elite y beneficios exclusivos.";
           }
           if (rankMessage) {
             await sendMessage(affiliateTelegramId, rankMessage, { parse_mode: "HTML" });
@@ -2725,7 +2776,8 @@ router.get("/affiliates", async (req, res, next) => {
               u.telegram_id, u.telegram_username,
               COALESCE(SUM(c.amount) FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance,
               COALESCE(SUM(c.amount), 0) AS earnings_total,
-              COUNT(c.id)::int AS sales_count
+              COUNT(c.id)::int AS sales_count,
+              MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN commissions c ON c.affiliate_id = a.id
@@ -2863,15 +2915,55 @@ router.post("/affiliates/commission-rate", async (req, res, next) => {
   const client = await pool.connect();
   try {
     await client.query("BEGIN");
+    const previousRes = await client.query(
+      `SELECT commission_rate
+       FROM affiliates
+       ORDER BY created_at ASC
+       LIMIT 1`
+    );
+    const previousRate = Number(previousRes.rows[0]?.commission_rate || 0);
     await client.query(
       "UPDATE affiliates SET commission_rate = $1",
       [commissionRate]
     );
     await client.query(
-      "ALTER TABLE affiliates ALTER COLUMN commission_rate SET DEFAULT $1",
-      [commissionRate]
+      `ALTER TABLE affiliates ALTER COLUMN commission_rate SET DEFAULT ${commissionRate}`
     );
     await client.query("COMMIT");
+    const ratePercent = Number((commissionRate * 100).toFixed(2));
+    const previousPercent = Number((previousRate * 100).toFixed(2));
+    try {
+      const affiliatesRes = await pool.query(
+        `SELECT u.telegram_id
+         FROM affiliates a
+         JOIN users u ON u.id = a.user_id
+         WHERE a.status = 'APPROVED' AND u.telegram_id IS NOT NULL`
+      );
+      let message = "";
+      if (commissionRate > 0) {
+        message =
+          `🚀 BOOST ACTIVADO\n\n` +
+          `Porcentaje extra por venta: +${ratePercent}%\n\n` +
+          `Aplica a todas tus ventas mientras esté activo.`;
+      } else if (previousRate > 0) {
+        message =
+          `✅ BOOST FINALIZADO\n\n` +
+          `Tus comisiones vuelven a tu porcentaje habitual por nivel.`;
+      }
+      if (message) {
+        await Promise.all(
+          affiliatesRes.rows.map(async (row) => {
+            try {
+              await sendMessage(row.telegram_id, message);
+            } catch (err) {
+              // ignore affiliate notification errors
+            }
+          })
+        );
+      }
+    } catch (err) {
+      // ignore broadcast errors
+    }
     return res.json({
       ok: true,
       commission_rate: commissionRate,
@@ -2969,10 +3061,15 @@ router.get("/affiliates/:id", async (req, res, next) => {
 
   try {
     const affiliateRes = await pool.query(
-      `SELECT a.*, u.telegram_id, u.telegram_username
+      `SELECT a.*, u.telegram_id, u.telegram_username,
+              COALESCE(SUM(c.amount), 0) AS earnings_total,
+              COUNT(c.id)::int AS sales_count,
+              MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
-       WHERE a.id = $1`,
+       LEFT JOIN commissions c ON c.affiliate_id = a.id
+       WHERE a.id = $1
+       GROUP BY a.id, u.telegram_id, u.telegram_username`,
       [affiliateId]
     );
 
@@ -2988,10 +3085,22 @@ router.get("/affiliates/:id", async (req, res, next) => {
     );
 
     const commissionsRes = await pool.query(
-      `SELECT id, order_id, amount, status, earned_at, paid_out_at
-       FROM commissions
-       WHERE affiliate_id = $1
-       ORDER BY earned_at DESC
+      `SELECT c.id,
+              c.order_id,
+              c.amount,
+              c.status,
+              c.earned_at,
+              c.paid_out_at,
+              op.reviewed_by_admin_at AS payment_approved_at,
+              o.order_number,
+              u.telegram_id AS buyer_telegram_id,
+              u.telegram_username AS buyer_username
+       FROM commissions c
+       LEFT JOIN orders o ON o.id = c.order_id
+       LEFT JOIN order_payments op ON op.order_id = o.id
+       LEFT JOIN users u ON u.id = o.user_id
+       WHERE c.affiliate_id = $1
+       ORDER BY c.earned_at DESC
        LIMIT 50`,
       [affiliateId]
     );

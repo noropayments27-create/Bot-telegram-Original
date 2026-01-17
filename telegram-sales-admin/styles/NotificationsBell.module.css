@@ -7,6 +7,10 @@
   margin-left: auto;
 }
 
+.wrappersidebar {
+  margin-top: -80px;
+}
+
 .bell {
   width: 38px;
   height: 38px;
@@ -19,6 +23,10 @@
   justify-content: center;
   cursor: pointer;
   position: relative;
+  background-image: url("/bell.png");
+  background-size: 20px 20px;
+  background-position: center;
+  background-repeat: no-repeat;
 }
 
 .bell svg {
@@ -32,6 +40,7 @@
   height: 24px;
   color: var(--scarlet-red);
   stroke: var(--scarlet-red);
+  display: none;
 }
 
 .badge {
@@ -48,7 +57,6 @@
 }
 
 .panel {
-  position: absolute;
   top: 48px;
   right: 0;
   min-width: 260px;
@@ -56,11 +64,12 @@
   background: #111;
   border: 1px solid rgba(255, 36, 0, 0.4);
   border-radius: 14px;
-  padding: 12px;
+  padding: 34px 12px 12px;
   box-shadow: 0 12px 24px rgba(0, 0, 0, 0.3);
   z-index: 200;
   display: grid;
   gap: 8px;
+  position: absolute;
 }
 
 .paneltopbar {
@@ -76,6 +85,47 @@
   margin: 0;
   color: var(--scarlet-red);
   font-size: 14px;
+}
+
+.panelTitle {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.panelIcon {
+  display: none;
+}
+
+.panelIconImg {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  width: 24px;
+  height: 24px;
+  z-index: 999;
+  pointer-events: none;
+  object-fit: contain;
+  opacity: 0.15;
+}
+
+.panelIconSvg {
+  position: absolute;
+  top: 6px;
+  left: 12px;
+  width: 24px;
+  height: 24px;
+  z-index: 1000;
+  pointer-events: none;
+  color: var(--scarlet-red);
+}
+
+.panelIcon img {
+  width: 100%;
+  height: 100%;
+  display: block;
+  object-fit: contain;
+  filter: none;
 }
 
 .empty {

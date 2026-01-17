@@ -188,7 +188,38 @@ export default function NotificationsBell({ variant = "sidebar" }) {
       </button>
       {open && (
         <div className={`${styles.panel} ${styles[`panel${variant}`] || ""}`}>
-          <h4>Notificaciones</h4>
+          <img
+            src="/bell.png"
+            alt=""
+            className={styles.panelIconImg}
+            aria-hidden="true"
+            onError={() => {
+              // fallback to inline SVG if image fails to render
+            }}
+          />
+          <svg
+            viewBox="0 0 24 24"
+            aria-hidden="true"
+            className={styles.panelIconSvg}
+          >
+            <path
+              d="M10 5a2 2 0 1 1 4 0a7 7 0 0 1 4 6v3a4 4 0 0 0 2 3h-16a4 4 0 0 0 2 -3v-3a7 7 0 0 1 4 -6"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+            <path
+              d="M9 17v1a3 3 0 0 0 6 0v-1"
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2.2"
+              strokeLinecap="round"
+              strokeLinejoin="round"
+            />
+          </svg>
+          <h4 className={styles.panelTitle}>Notificaciones</h4>
           {visibleNotifications.length === 0 && (
             <p className={styles.empty}>Sin notificaciones.</p>
           )}

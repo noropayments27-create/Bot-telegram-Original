@@ -35,6 +35,25 @@ export default function TicketDetail() {
     loadDetail();
   }, [id]);
 
+  useEffect(() => {
+    const markTicketsSeen = async () => {
+      if (!id) {
+        return;
+      }
+      try {
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(
+            "admin_seen_tickets_at",
+            String(Date.now())
+          );
+        }
+      } catch (err) {
+        // ignore summary errors
+      }
+    };
+    markTicketsSeen();
+  }, [id]);
+
   const handleReply = async () => {
     if (!reply.trim()) {
       return;

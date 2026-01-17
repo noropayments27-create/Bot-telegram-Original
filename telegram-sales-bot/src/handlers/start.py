@@ -17,7 +17,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .menu import build_home_text, build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
-from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.main_view import render_main_view, set_main_message_id, pop_previous_view
 from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
 
@@ -131,6 +131,25 @@ async def handle_home_show(callback: CallbackQuery) -> None:
     await callback.answer()
 
 
+@router.callback_query(F.data == "nav:back")
+async def handle_nav_back(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    previous = pop_previous_view(callback.from_user.id)
+    if not previous:
+        await callback.answer()
+        return
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        str(previous.get("text") or ""),
+        reply_markup=previous.get("reply_markup"),
+        parse_mode=previous.get("parse_mode"),
+        push_history=False,
+    )
+    await callback.answer()
+
+
 @router.callback_query(F.data == "home:soon:idioma")
 async def handle_language_panel(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -224,7 +243,7 @@ async def handle_home_community(callback: CallbackQuery) -> None:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=t(locale, "btn_back"), callback_data="home:show"
+                    text=t(locale, "btn_back"), callback_data="nav:back"
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"), callback_data="home:show"

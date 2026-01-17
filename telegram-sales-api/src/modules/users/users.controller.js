@@ -43,6 +43,10 @@ function normalizeLocale(input, languageCode) {
 
 async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
   let affiliateId = null;
+  let numericCode = null;
+  if (typeof startAffiliateCode === "string" && /^[0-9]+$/.test(startAffiliateCode)) {
+    numericCode = Number(startAffiliateCode);
+  }
 
   if (isUuid(startAffiliateCode)) {
     const res = await client.query(
@@ -54,6 +58,23 @@ async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
       [startAffiliateCode]
     );
 
+    if (res.rowCount > 0) {
+      const row = res.rows[0];
+      if (Number(row.telegram_id) !== Number(telegramId)) {
+        affiliateId = row.id;
+      }
+    }
+  }
+
+  if (!affiliateId && numericCode !== null) {
+    const res = await client.query(
+      `SELECT a.id, u.telegram_id
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE u.telegram_id = $1 AND a.status = 'APPROVED'
+       LIMIT 1`,
+      [numericCode]
+    );
     if (res.rowCount > 0) {
       const row = res.rows[0];
       if (Number(row.telegram_id) !== Number(telegramId)) {
@@ -250,6 +271,21 @@ async function getAffiliateStatus(req, res, next) {
       [row.id]
     );
     const earningsTotal = Number(earningsRes.rows[0]?.total || 0);
+    const lastSaleRes = await pool.query(
+      `SELECT MAX(earned_at) AS last_sale_at
+       FROM commissions
+       WHERE affiliate_id = $1`,
+      [row.id]
+    );
+    const lastSaleAt = lastSaleRes.rows[0]?.last_sale_at || null;
+    const last30Res = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM commissions
+       WHERE affiliate_id = $1
+         AND earned_at >= now() - interval '30 days'`,
+      [row.id]
+    );
+    const salesLast30 = last30Res.rows[0]?.count || 0;
     const dailyRes = await pool.query(
       `SELECT COALESCE(SUM(amount), 0) AS total
        FROM commissions
@@ -306,6 +342,15 @@ async function getAffiliateStatus(req, res, next) {
       [row.id]
     );
     const referralsTotal = referralsRes.rows[0]?.count || 0;
+    const pendingPayoutRes = await pool.query(
+      `SELECT amount, created_at
+       FROM payouts
+       WHERE affiliate_id = $1 AND status = 'REQUESTED'
+       ORDER BY created_at DESC
+       LIMIT 1`,
+      [row.id]
+    );
+    const pendingPayout = pendingPayoutRes.rows[0] || null;
     const payoutMethod = row.wallet_usdt_bsc
       ? "USDT_BSC"
       : row.binance_id
@@ -329,6 +374,9 @@ async function getAffiliateStatus(req, res, next) {
         daily_streak: streakCount,
         earnings_available: earningsAvailable,
         referrals_total: referralsTotal,
+        last_sale_at: lastSaleAt,
+        sales_last_30: salesLast30,
+        pending_payout: pendingPayout,
       },
       user: {
         telegram_id: row.telegram_id,
@@ -346,7 +394,7 @@ async function getAffiliateTop(req, res, next) {
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });
   }
-  if (period !== "week" && period !== "day") {
+  if (period !== "week" && period !== "day" && period !== "global") {
     return res.status(400).json({ error: "INVALID_PERIOD" });
   }
   try {
@@ -362,33 +410,61 @@ async function getAffiliateTop(req, res, next) {
       return res.status(404).json({ error: "AFFILIATE_NOT_APPROVED" });
     }
     const affiliateId = affiliateRes.rows[0].id;
-    const interval = period === "day" ? "1 day" : "7 days";
-    const rankedRes = await pool.query(
-      `WITH stats AS (
-         SELECT a.id,
-                u.telegram_username,
-                COUNT(c.id)::int AS sales_count,
-                COALESCE(SUM(c.amount), 0) AS earnings_total
-           FROM affiliates a
-           JOIN users u ON u.id = a.user_id
-           LEFT JOIN commissions c
-             ON c.affiliate_id = a.id
-            AND c.earned_at >= (now() - $1::interval)
-          WHERE a.status = 'APPROVED'
-          GROUP BY a.id, u.telegram_username
-       ),
-       ranked AS (
-         SELECT *,
-                ROW_NUMBER() OVER (
-                  ORDER BY sales_count DESC, earnings_total DESC, telegram_username ASC NULLS LAST
-                ) AS position
-           FROM stats
-       )
-       SELECT *
-         FROM ranked
-        ORDER BY sales_count DESC, earnings_total DESC, telegram_username ASC NULLS LAST`,
-      [interval]
-    );
+    let rankedRes;
+    if (period === "global") {
+      rankedRes = await pool.query(
+        `WITH stats AS (
+           SELECT a.id,
+                  u.telegram_username,
+                  COUNT(c.id)::int AS sales_count,
+                  COALESCE(SUM(c.amount), 0) AS earnings_total
+             FROM affiliates a
+             JOIN users u ON u.id = a.user_id
+             LEFT JOIN commissions c
+               ON c.affiliate_id = a.id
+            WHERE a.status = 'APPROVED'
+            GROUP BY a.id, u.telegram_username
+         ),
+         ranked AS (
+           SELECT *,
+                  ROW_NUMBER() OVER (
+                    ORDER BY sales_count DESC, earnings_total DESC, telegram_username ASC NULLS LAST
+                  ) AS position
+             FROM stats
+         )
+         SELECT *
+           FROM ranked
+          ORDER BY sales_count DESC, earnings_total DESC, telegram_username ASC NULLS LAST`
+      );
+    } else {
+      const interval = period === "day" ? "1 day" : "7 days";
+      rankedRes = await pool.query(
+        `WITH stats AS (
+           SELECT a.id,
+                  u.telegram_username,
+                  COUNT(c.id)::int AS sales_count,
+                  COALESCE(SUM(c.amount), 0) AS earnings_total
+             FROM affiliates a
+             JOIN users u ON u.id = a.user_id
+             LEFT JOIN commissions c
+               ON c.affiliate_id = a.id
+              AND c.earned_at >= (now() - $1::interval)
+            WHERE a.status = 'APPROVED'
+            GROUP BY a.id, u.telegram_username
+         ),
+         ranked AS (
+           SELECT *,
+                  ROW_NUMBER() OVER (
+                    ORDER BY sales_count DESC, earnings_total DESC, telegram_username ASC NULLS LAST
+                  ) AS position
+             FROM stats
+         )
+         SELECT *
+           FROM ranked
+          ORDER BY sales_count DESC, earnings_total DESC, telegram_username ASC NULLS LAST`,
+        [interval]
+      );
+    }
     const rows = rankedRes.rows || [];
     const top = rows.slice(0, 3).map((row) => ({
       username: row.telegram_username || "-",

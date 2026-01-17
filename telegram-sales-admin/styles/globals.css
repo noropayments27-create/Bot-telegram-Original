@@ -481,7 +481,7 @@ body.login-success {
 }
 
 .orders-card {
-  width: 60%;
+  width: 100%;
   margin: -1cm auto 0;
 }
 
@@ -549,19 +549,23 @@ body.login-success {
 }
 
 .orders-detail-wrap {
-  margin-top: 2cm;
+  margin-top: 1cm;
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));
-  gap: 18px;
+  gap: 10px;
+  width: 100%;
+  max-width: 1400px;
+  margin-left: auto;
+  margin-right: auto;
 }
 
 .orders-detail-card {
   width: 100%;
   margin: 0;
-  max-height: 75cm;
-  overflow: auto;
-  font-size: 10px;
-  line-height: 0;
+  max-height: none;
+  overflow: visible;
+  font-size: 12px;
+  line-height: 1.2;
 }
 
 .orders-detail-header {
@@ -601,10 +605,10 @@ body.login-success {
 }
 
 .orders-detail-grid {
-  margin-top: 0.5cm;
+  margin-top: 0.2cm;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 16px;
+  gap: 10px;
 }
 
 .orders-detail-grid > div {
@@ -612,16 +616,197 @@ body.login-success {
 }
 
 .orders-detail-grid h3 {
-  margin-bottom: 10px;
+  margin-bottom: 0.5cm;
+  margin-top: 0.5cm;
   color: var(--scarlet-red);
-  font-size: 13px;
+  font-size: 18px;
+}
+
+.orders-detail-section > h3 {
+  margin-top: 0.5cm;
 }
 
 .orders-detail-grid p {
-  margin: 4px 0;
+  margin: 2px 0;
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 0;
+  line-height: 1.4;
+}
+
+.affiliate-commissions-scroll {
+  max-height: 220px;
+  overflow-y: auto;
+  background: #111;
+  border: 1px solid rgba(255, 36, 0, 0.35);
+  border-radius: 12px;
+  padding: 8px 10px;
+  overscroll-behavior: contain;
+  position: relative;
+}
+
+.affiliate-commissions-scroll thead th {
+  text-align: center;
+}
+
+.affiliate-commissions-scroll thead th,
+.affiliate-commissions-scroll thead td {
+  background: #111;
+}
+
+.affiliate-commissions-scroll tbody td {
+  text-align: center;
+}
+
+.affiliate-commissions-scroll thead {
+  position: sticky;
+  top: 10;
+  z-index: 3;
+  background: #111;
+}
+
+.affiliate-commissions-scroll thead tr {
+  background: #111;
+}
+
+.affiliate-commissions-scroll thead th {
+  background: #111;
+  position: sticky;
+  top: 0;
+  z-index: 3;
+}
+
+.affiliate-commissions-title {
+  font-size: 18px;
+  margin-bottom: 0.5cm;
+}
+
+.commission-order-link {
+  color: var(--scarlet-red) !important;
+}
+
+.truncate-id {
+  display: inline-block;
+  max-width: 180px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.affiliate-detail-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+
+.affiliate-detail-avatar {
+  width: 48px;
+  height: 48px;
+  font-size: 14px;
+}
+
+.affiliate-detail-info {
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.affiliate-detail-name {
+  font-weight: 600;
+  color: #f5f5f5;
+}
+
+.affiliate-detail-meta {
+  color: #bcbcbc;
+  font-size: 11px;
+  line-height: 1.3;
+}
+
+.affiliate-detail-table {
+  background: #111;
+  border-radius: 12px;
+  border: 1px solid rgba(255, 36, 0, 0.25);
+  padding: 10px 12px;
+}
+
+.affiliate-detail-row--header {
+  display: grid;
+  grid-template-columns: 1.6fr repeat(7, minmax(80px, 1fr));
+  gap: 8px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  font-size: 10px;
+  color: #b8b8b8;
+  border-bottom: 1px solid rgba(255, 36, 0, 0.2);
+  padding-bottom: 6px;
+}
+
+.affiliate-detail-row--data {
+  display: grid;
+  grid-template-columns: 1.6fr repeat(7, minmax(80px, 1fr));
+  gap: 8px;
+  align-items: center;
+  padding-top: 8px;
+}
+
+.affiliate-detail-table .affiliate-name-cell {
+  gap: 10px;
+}
+
+
+.lock-button {
+  border: none !important;
+  background: transparent !important;
+  border-radius: 999px;
+  padding: 4px 8px;
+  cursor: pointer;
+  transition: transform 0.2s ease;
+  color: #ff2400;
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.lock-button.lock-open {
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.lock-button.lock-closed {
+  box-shadow: none !important;
+  background: transparent !important;
+}
+
+.lock-button:active {
+  transform: scale(0.95);
+}
+
+.lock-button:focus,
+.lock-button:focus-visible {
+  outline: none !important;
+  box-shadow: none !important;
+}
+
+.lock-button svg {
+  width: 18px;
+  height: 18px;
+  display: block;
+  color: var(--scarlet-red);
+  stroke: var(--scarlet-red);
+}
+.lock-pill {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  border-radius: 999px;
+  padding: 4px 8px;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  outline: none !important;
+}
+
+.lock-pill svg {
+  color: var(--scarlet-red);
+  stroke: var(--scarlet-red);
 }
 
 .orders-detail-total-line {
@@ -641,19 +826,19 @@ body.login-success {
 .orders-detail-section {
   display: flex;
   flex-direction: column;
-  gap: 6px;
+  gap: 4px;
 }
 
 .orders-detail-separator {
   height: 1px;
   background: rgba(255, 36, 0, 0.35);
-  margin: 16px 0;
+  margin: 10px 0;
 }
 
 .orders-detail-subseparator {
   height: 1px;
   background: rgba(255, 36, 0, 0.2);
-  margin: 10px 0;
+  margin: 6px 0;
 }
 
 .orders-detail-actions {
@@ -769,6 +954,17 @@ body.login-success {
   line-height: inherit;
 }
 
+.affiliates-card .orders-copy {
+  background: transparent;
+  border: none;
+  color: #7cffb2;
+  font-weight: 600;
+  padding: 0;
+  cursor: pointer;
+  font-size: inherit;
+  line-height: inherit;
+}
+
 .orders-copy-label {
   margin-right: 6px;
   color: #bdbdbd;
@@ -839,16 +1035,59 @@ body.login-success {
 }
 
 .affiliates-card {
-  max-width: 1100px;
+  max-width: 1100px; /* Controla el ancho máximo */
+  width: 100%; /* O usa un porcentaje para hacerla más o menos ancha */
   margin-left: auto;
   margin-right: auto;
-  padding: 16px;
+  padding: 30px 30px;
+  margin-top: -60px; /* Para subirla más arriba, usa valores menores o negativos */
+  /* O también puedes usar */
+  position: relative;
+  top: -10px; /* Valores negativos la suben, positivos la bajan */
+}
+
+.affiliates-header {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+
+.affiliates-header-actions {
+  display: flex;
+  align-items: flex-end;
+  gap: 16px;
+  flex-wrap: wrap;
+  margin-top: -68px;
+}
+
+.affiliates-title {
+  font-size: 28px;
+  line-height: 1.1;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  color: var(--scarlet-red);
+  margin: 0;
+}
+
+.affiliates-title-icon {
+  width: 22px;
+  height: 22px;
 }
 
 .affiliates-commission-card {
-  max-width: 320px;
-  margin: 0 0 8px 0;
-  padding: 16px;
+  max-width: 360px;
+  margin: 0;
+  padding: 2px 24px;
+  border-radius: 14px;
+}
+
+.affiliates-filters {
+  margin-top: -100px !important;
+  display: flex;
+  margin-right: 460px !important; /* Mueve todo a la izquierda */
 }
 
 .affiliates-commission-header {
@@ -856,10 +1095,18 @@ body.login-success {
   align-items: center;
   justify-content: space-between;
   gap: 12px;
+  margin-top: 6px;
 }
 
 .commission-input {
   width: 60px;
+}
+
+.affiliates-commission-card .form {
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  flex-wrap: wrap;
 }
 
 .commission-input::-webkit-outer-spin-button,
@@ -875,12 +1122,12 @@ body.login-success {
 .affiliate-name-cell {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 22px;
 }
 
 .affiliate-avatar {
-  width: 36px;
-  height: 36px;
+  width: 50px;
+  height: 50px;
   border-radius: 50%;
   background: rgba(255, 36, 0, 0.12);
   border: 1px solid rgba(255, 36, 0, 0.45);
@@ -977,11 +1224,12 @@ body.login-success {
 }
 
 .inventory-search {
-  margin-top: 16px;
+  margin-top: 0;
 }
 
 .inventory-card {
-  max-width: 70%;
+  max-width: 100%;
+  width: 130%;
   margin-left: auto;
   margin-right: auto;
   padding: 20px;
@@ -1003,13 +1251,13 @@ body.login-success {
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 16px;
-  margin-top: 2cm;
+  margin-top: 0.8cm;
 }
 
 .inventory-column {
   display: flex;
   flex-direction: column;
-  gap: 2cm;
+  gap: 1cm;
 }
 
 .inventory-detail-grid .inventory-card {
@@ -2323,4 +2571,40 @@ button:disabled {
 .error {
   color: #b00020;
   font-weight: 600;
+}
+
+
+/* Affiliates-specific overrides to avoid global cross-impact */
+.affiliates-page .orders-detail-wrap {
+  grid-template-columns: 1fr;
+  max-width: 1100px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+.affiliates-page .orders-detail-card {
+  font-size: 14px;
+  line-height: 1.1;
+}
+
+.affiliates-page .orders-detail-grid {
+  margin-top: 0.2cm;
+  gap: 10px;
+}
+
+.affiliates-page .orders-detail-grid p {
+  margin: 2px 0;
+  line-height: 1.4;
+}
+
+.affiliates-page .orders-detail-section {
+  gap: 4px;
+}
+
+.affiliates-page .orders-detail-separator {
+  margin: 10px 0;
+}
+
+.affiliates-page .orders-detail-subseparator {
+  margin: 6px 0;
 }

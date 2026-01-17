@@ -70,7 +70,7 @@ def _build_affiliate_keyboard(
         [
             InlineKeyboardButton(
                 text=t(locale, "btn_back"),
-                callback_data="home:affiliates",
+                callback_data="nav:back",
             )
         ]
     )
@@ -93,7 +93,7 @@ def _build_method_keyboard(locale: str | None, action: str) -> InlineKeyboardMar
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="home:affiliates",
+                    callback_data="nav:back",
                 )
             ],
         ]
@@ -123,18 +123,95 @@ def _format_date(value: str | None) -> str:
         return "-"
 
 
-def _format_affiliate_code(affiliate_id: str | None) -> str:
-    if not affiliate_id:
+def _format_affiliate_code(affiliate_code: str | int | None) -> str:
+    if not affiliate_code:
         return "-"
-    return affiliate_id
+    return str(affiliate_code)
 
 
-def _compute_rank(sales_count: int) -> str:
-    if sales_count >= 50:
-        return "Oro 🥇"
-    if sales_count >= 20:
-        return "Plata 🥈"
-    return "Bronce 🥉"
+def _format_affiliate_status(locale: str | None, status: str | None) -> str:
+    if not status:
+        return t(locale, "affiliate_status_none")
+    normalized = str(status).upper()
+    if normalized == "APPROVED":
+        return t(locale, "affiliate_status_approved")
+    if normalized == "PENDING":
+        return t(locale, "affiliate_status_pending")
+    if normalized == "REJECTED":
+        return t(locale, "affiliate_status_rejected")
+    return normalized
+
+
+def _compute_rank(
+    sales_total: int,
+    earnings_total: float,
+    days_since_last_sale: int | None,
+) -> str:
+    if sales_total >= 100 and earnings_total >= 600:
+        base_index = 5
+    elif sales_total >= 70 and earnings_total >= 500:
+        base_index = 4
+    elif sales_total >= 40 and earnings_total >= 200:
+        base_index = 3
+    elif sales_total >= 20 and earnings_total >= 50:
+        base_index = 2
+    elif sales_total >= 2 and earnings_total >= 5:
+        base_index = 1
+    else:
+        base_index = 0
+
+    downgrade_steps = 0
+    if days_since_last_sale is not None and days_since_last_sale >= 30:
+        downgrade_steps = days_since_last_sale // 30
+
+    final_index = max(0, base_index - downgrade_steps)
+    labels = [
+        "Novato 🎖️",
+        "Bronce 🥉",
+        "Plata 🥈",
+        "Oro 🥇",
+        "Diamante 💎",
+        "Élite 👑",
+    ]
+    return labels[final_index]
+
+
+def _get_level_details(
+    sales_total: int,
+    earnings_total: float,
+    days_since_last_sale: int | None,
+) -> dict:
+    rank = _compute_rank(sales_total, earnings_total, days_since_last_sale)
+    base_rates = {
+        "Novato 🎖️": 0.05,
+        "Bronce 🥉": 0.08,
+        "Plata 🥈": 0.12,
+        "Oro 🥇": 0.15,
+        "Diamante 💎": 0.2,
+        "Élite 👑": 0.3,
+    }
+    min_withdraw = {
+        "Novato 🎖️": "$25 USD",
+        "Bronce 🥉": "$20 USD",
+        "Plata 🥈": "$15 USD",
+        "Oro 🥇": "$10 USD",
+        "Diamante 💎": "No aplica",
+        "Élite 👑": "No aplica",
+    }
+    min_values = {
+        "Novato 🎖️": 25,
+        "Bronce 🥉": 20,
+        "Plata 🥈": 15,
+        "Oro 🥇": 10,
+        "Diamante 💎": 0,
+        "Élite 👑": 0,
+    }
+    return {
+        "rank": rank,
+        "base_rate": base_rates.get(rank, 0),
+        "min_withdraw": min_withdraw.get(rank, "No aplica"),
+        "min_withdraw_value": min_values.get(rank, 0),
+    }
 
 
 def _build_panel_keyboard(locale: str | None) -> InlineKeyboardMarkup:
@@ -167,7 +244,7 @@ def _build_panel_keyboard(locale: str | None) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="home:affiliates",
+                    callback_data="nav:back",
                 )
             ],
         ]
@@ -192,36 +269,43 @@ def _build_top_keyboard(locale: str | None) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="affiliate:panel",
+                    callback_data="nav:back",
                 )
             ],
         ]
     )
 
 
-def _build_withdraw_keyboard(locale: str | None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+def _build_withdraw_keyboard(
+    locale: str | None, allow_withdraw: bool
+) -> InlineKeyboardMarkup:
+    rows = []
+    if allow_withdraw:
+        rows.append(
             [
                 InlineKeyboardButton(
                     text=t(locale, "affiliate_withdraw_all_button"),
                     callback_data="affiliate:withdraw:all",
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "affiliate_edit_wallet_button"),
-                    callback_data="affiliate:start:update",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_back"),
-                    callback_data="affiliate:panel",
-                )
-            ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=t(locale, "affiliate_edit_wallet_button"),
+                callback_data="affiliate:start:update",
+            )
         ]
     )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=t(locale, "btn_back"),
+                callback_data="nav:back",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 
 
 def _build_withdraw_confirm_keyboard(locale: str | None) -> InlineKeyboardMarkup:
@@ -236,7 +320,7 @@ def _build_withdraw_confirm_keyboard(locale: str | None) -> InlineKeyboardMarkup
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="affiliate:withdraw",
+                    callback_data="nav:back",
                 )
             ],
         ]
@@ -249,6 +333,92 @@ def _format_money(value: object) -> str:
     except (TypeError, ValueError):
         amount = 0.0
     return f"${amount:.2f}"
+
+
+async def _render_affiliates_home(
+    callback: CallbackQuery, state: FSMContext, locale: str | None
+) -> None:
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    has_affiliate = False
+    is_approved = False
+    affiliate_status = None
+    affiliate = None
+
+    try:
+        data = await api_client.get_affiliate_status(callback.from_user.id)
+        affiliate = data.get("affiliate")
+        if affiliate:
+            has_affiliate = True
+            affiliate_status = affiliate.get("status")
+            is_approved = affiliate_status == "APPROVED"
+    except Exception:
+        data = {}
+
+    if is_approved and affiliate:
+        affiliate_code = (data.get("user") or {}).get("telegram_id") or affiliate.get("id")
+        referral_link = _build_referral_link(affiliate_code)
+        sales_count = int(affiliate.get("sales_count") or 0)
+        earnings_total = float(affiliate.get("earnings_total") or 0)
+        days_since_last_sale = None
+        try:
+            last_sale_raw = affiliate.get("last_sale_at")
+            if last_sale_raw:
+                last_sale_dt = datetime.fromisoformat(last_sale_raw.replace("Z", "+00:00"))
+                days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
+        except Exception:
+            days_since_last_sale = None
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        rank_text = level["rank"]
+        boost_rate = float(affiliate.get("commission_rate") or 0)
+        base_percent = int(round(level["base_rate"] * 100))
+        boost_percent = int(round(boost_rate * 100))
+        if boost_percent > 0:
+            commission_text = f"{base_percent}% + {boost_percent}%"
+        else:
+            commission_text = f"{base_percent}%"
+        approval_date = _format_date(affiliate.get("approved_at") or affiliate.get("created_at"))
+        days_active = 0
+        try:
+            created_raw = affiliate.get("approved_at") or affiliate.get("created_at")
+            if created_raw:
+                created_dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
+                days_active = max((datetime.utcnow() - created_dt).days + 1, 0)
+        except Exception:
+            days_active = 0
+        inactivity_days = days_since_last_sale if days_since_last_sale is not None else "-"
+        text = (
+            "🌟 ¡BIENVENIDO AL EQUIPO! 🌟\n\n"
+            f"🆔 ID: {callback.from_user.id}\n"
+            f"👤 Usuario: {'@' + callback.from_user.username if callback.from_user.username else '-'}\n"
+            f"{t(locale, 'affiliate_top_separator')}\n"
+            f"🏅 Tu Rango: {rank_text}\n"
+            f"💸 Comisión base: {commission_text}\n"
+            f"📅 Antigüedad: {approval_date} [{days_active} dias]\n"
+            f"💵 Mínimo retiro: {level['min_withdraw']}\n"
+            f"⏳ Conteo de inactividad: {inactivity_days}\n"
+            f"{t(locale, 'affiliate_top_separator')}\n"
+            f"🧾 ID Afiliado: {_format_affiliate_code(affiliate_code)}\n\n"
+            f"🔗 Link de referido: {referral_link}\n\n"
+            "¿Qué te gustaría hacer hoy? 🚀"
+        )
+    else:
+        text = (
+            f"{t(locale, 'affiliate_welcome_title')}\n\n"
+            f"{t(locale, 'affiliate_welcome_body')}"
+        )
+        if has_affiliate and affiliate_status:
+            text += (
+                f"\n\n{t(locale, 'affiliate_pending_notice').format(status=_format_affiliate_status(locale, affiliate_status))}"
+            )
+
+    await state.clear()
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        text,
+        reply_markup=_build_affiliate_keyboard(locale, has_affiliate, is_approved),
+        parse_mode=ParseMode.HTML,
+    )
 
 
 @router.callback_query(F.data == "home:affiliates")
@@ -270,53 +440,7 @@ async def handle_affiliates(callback: CallbackQuery, state: FSMContext) -> None:
             show_alert=True,
         )
         return
-    set_main_message_id(callback.from_user.id, callback.message.message_id)
-
-    has_affiliate = False
-    is_approved = False
-    affiliate_status = None
-    affiliate = None
-
-    try:
-        data = await api_client.get_affiliate_status(callback.from_user.id)
-        affiliate = data.get("affiliate")
-        if affiliate:
-            has_affiliate = True
-            affiliate_status = affiliate.get("status")
-            is_approved = affiliate_status == "APPROVED"
-    except Exception:
-        pass
-
-    if is_approved and affiliate:
-        referral_link = _build_referral_link(affiliate.get("id"))
-        sales_count = int(affiliate.get("sales_count") or 0)
-        rank_text = _compute_rank(sales_count)
-        text = (
-            f"{t(locale, 'affiliate_welcome_back_title')}\n\n"
-            f"{t(locale, 'affiliate_panel_telegram_id').format(telegram_id=callback.from_user.id)}\n"
-            f"{t(locale, 'affiliate_panel_username').format(username='@' + callback.from_user.username if callback.from_user.username else '-')}\n\n"
-            f"{t(locale, 'affiliate_panel_rank').format(rank=rank_text)}\n"
-            f"{t(locale, 'affiliate_panel_since').format(date=_format_date(affiliate.get('created_at')))}\n"
-            f"{t(locale, 'affiliate_panel_code').format(code=_format_affiliate_code(affiliate.get('id')))}\n"
-            f"{t(locale, 'affiliate_panel_link').format(link=referral_link)}\n\n"
-            f"{t(locale, 'affiliate_panel_question')}"
-        )
-    else:
-        text = (
-            f"{t(locale, 'affiliate_welcome_title')}\n\n"
-            f"{t(locale, 'affiliate_welcome_body')}"
-        )
-        if has_affiliate and affiliate_status:
-            text += f"\n\n{t(locale, 'affiliate_pending_notice').format(status=affiliate_status)}"
-
-    await state.clear()
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        text,
-        reply_markup=_build_affiliate_keyboard(locale, has_affiliate, is_approved),
-        parse_mode=ParseMode.HTML,
-    )
+    await _render_affiliates_home(callback, state, locale)
     await callback.answer()
 
 
@@ -411,10 +535,11 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
                 f"{t(locale, 'affiliate_stats_footer')}\n"
                 f"{t(locale, 'affiliate_stats_earnings_today').format(amount=earnings_today_text)}\n"
                 f"{t(locale, 'affiliate_stats_earnings_total').format(amount=earnings_total_text)}\n"
+                f"{t(locale, 'affiliate_stats_footer')}\n"
                 f"{t(locale, 'affiliate_stats_sales_today').format(count=sales_today)}\n"
                 f"{t(locale, 'affiliate_stats_sales_total').format(count=sales_total)}\n"
+                f"{t(locale, 'affiliate_stats_footer')}\n"
                 f"{t(locale, 'affiliate_stats_referrals_total').format(count=referrals_total)}\n"
-                f"{t(locale, 'affiliate_stats_seniority').format(days=days_active)}\n"
                 f"{t(locale, 'affiliate_stats_goal').format(percent=daily_percent)}\n"
                 f"{t(locale, 'affiliate_stats_footer')}\n"
                 f"{t(locale, 'affiliate_stats_streak').format(days=daily_streak)}"
@@ -444,7 +569,7 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
 async def handle_affiliate_top(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
-    await _render_affiliate_top(callback, "week")
+    await _render_affiliate_top(callback, "global")
 
 
 @router.callback_query(F.data == "affiliate:top:week")
@@ -473,7 +598,13 @@ async def _render_affiliate_top(callback: CallbackQuery, period: str) -> None:
             "week": "affiliate_top_title_week",
             "global": "affiliate_top_title_global",
         }.get(period, "affiliate_top_title_week")
-        lines = [t(locale, title_key), t(locale, "affiliate_top_header"), ""]
+        separator = t(locale, "affiliate_top_separator")
+        lines = [
+            t(locale, title_key),
+            separator,
+            t(locale, "affiliate_top_header"),
+            separator,
+        ]
         medals = ["🥇", "🥈", "🥉"]
         if not rows:
             lines.append(t(locale, "affiliate_top_empty"))
@@ -490,9 +621,9 @@ async def _render_affiliate_top(callback: CallbackQuery, period: str) -> None:
                         earnings=earnings,
                     )
                 )
+        lines.append(separator)
         position = data.get("position") or "-"
         my_earnings = _format_money(data.get("my_earnings"))
-        lines.append("")
         lines.append(t(locale, "affiliate_top_position").format(position=position))
         lines.append(t(locale, "affiliate_top_earnings").format(amount=my_earnings))
         await render_main_view(
@@ -520,31 +651,51 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
         data = await api_client.get_affiliate_status(callback.from_user.id)
         affiliate = data.get("affiliate") or {}
         destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
-        if destination == "-":
-            await callback.answer(
-                t(locale, "affiliate_withdraw_missing_destination"),
-                show_alert=True,
-            )
-            return
-        balance_value = affiliate.get("earnings_available") or 0
-        if float(balance_value or 0) <= 0:
-            await callback.answer(t(locale, "affiliate_withdraw_no_balance"), show_alert=True)
-            return
+        balance_value = float(affiliate.get("earnings_available") or 0)
+        sales_count = int(affiliate.get("sales_count") or 0)
+        earnings_total = float(affiliate.get("earnings_total") or 0)
+        days_since_last_sale = None
+        try:
+            last_sale_raw = affiliate.get("last_sale_at")
+            if last_sale_raw:
+                last_sale_dt = datetime.fromisoformat(last_sale_raw.replace("Z", "+00:00"))
+                days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
+        except Exception:
+            days_since_last_sale = None
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        min_required = float(level.get("min_withdraw_value") or 0)
+        allow_withdraw = min_required <= 0 or balance_value >= min_required
         balance = f"${float(balance_value):.2f}"
+        minimum_text = level.get("min_withdraw") or "-"
+        separator = t(locale, "affiliate_stats_footer")
+        pending_payout = affiliate.get("pending_payout") if isinstance(affiliate, dict) else None
+        pending_lines = ""
+        if pending_payout:
+            pending_amount = _format_money(pending_payout.get("amount"))
+            pending_date = _format_date(pending_payout.get("created_at"))
+            pending_lines = (
+                f"💸 Su solicitud de retiro por: {pending_amount}\n"
+                "Esta en proceso... 🕑\n\n"
+                f"Fecha de retiro: {pending_date}\n"
+                f"{separator}\n"
+            )
         text = (
             f"{t(locale, 'affiliate_withdraw_title')}\n\n"
-            f"{t(locale, 'affiliate_stats_footer')}\n"
+            f"{separator}\n"
             f"{t(locale, 'affiliate_withdraw_balance').format(amount=balance)}\n"
-            f"{t(locale, 'affiliate_withdraw_minimum')}\n"
+            f"{separator}\n"
+            f"{t(locale, 'affiliate_withdraw_minimum').format(amount=minimum_text)}\n"
             f"{t(locale, 'affiliate_withdraw_processing')}\n"
+            f"{separator}\n"
             f"{t(locale, 'affiliate_withdraw_destination').format(destination=destination)}\n"
-            f"{t(locale, 'affiliate_stats_footer')}"
+            f"{separator}\n"
+            f"{pending_lines}"
         )
         await render_main_view(
             callback.message,
             callback.from_user.id,
             text,
-            reply_markup=_build_withdraw_keyboard(locale),
+            reply_markup=_build_withdraw_keyboard(locale, allow_withdraw),
             parse_mode=ParseMode.HTML,
         )
         await callback.answer()
@@ -565,7 +716,35 @@ async def handle_affiliate_withdraw_all(callback: CallbackQuery, state: FSMConte
         data = await api_client.get_affiliate_status(callback.from_user.id)
         affiliate = data.get("affiliate") or {}
         destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
-        balance = _format_money(affiliate.get("earnings_available"))
+        balance_value = float(affiliate.get("earnings_available") or 0)
+        sales_count = int(affiliate.get("sales_count") or 0)
+        earnings_total = float(affiliate.get("earnings_total") or 0)
+        days_since_last_sale = None
+        try:
+            last_sale_raw = affiliate.get("last_sale_at")
+            if last_sale_raw:
+                last_sale_dt = datetime.fromisoformat(last_sale_raw.replace("Z", "+00:00"))
+                days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
+        except Exception:
+            days_since_last_sale = None
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        min_required = float(level.get("min_withdraw_value") or 0)
+        if destination == "-":
+            await callback.answer(
+                t(locale, "affiliate_withdraw_missing_destination"),
+                show_alert=True,
+            )
+            return
+        if balance_value <= 0:
+            await callback.answer(t(locale, "affiliate_withdraw_no_balance"), show_alert=True)
+            return
+        if min_required > 0 and balance_value < min_required:
+            await callback.answer(
+                t(locale, "affiliate_withdraw_minimum_required").format(amount=min_required),
+                show_alert=True,
+            )
+            return
+        balance = _format_money(balance_value)
         text = (
             f"{t(locale, 'affiliate_withdraw_confirm_title')}\n\n"
             f"{t(locale, 'affiliate_withdraw_confirm_destination').format(destination=destination)}\n"
@@ -603,13 +782,7 @@ async def handle_affiliate_withdraw_confirm(callback: CallbackQuery, state: FSMC
         )
         await callback.answer()
         await asyncio.sleep(5)
-        await render_main_view(
-            callback.message,
-            callback.from_user.id,
-            t(locale, "affiliate_panel_question"),
-            reply_markup=_build_panel_keyboard(locale),
-            parse_mode=ParseMode.HTML,
-        )
+        await _render_affiliates_home(callback, state, locale)
         return
     except Exception:
         await callback.answer(t(locale, "affiliate_withdraw_failed"), show_alert=True)
@@ -678,7 +851,7 @@ async def handle_affiliate_method(callback: CallbackQuery, state: FSMContext) ->
                 [
                     InlineKeyboardButton(
                         text=t(locale, "btn_back"),
-                        callback_data="home:affiliates",
+                        callback_data="nav:back",
                     )
                 ]
             ]
@@ -743,14 +916,14 @@ async def handle_affiliate_destination(message: Message, state: FSMContext) -> N
         return
     affiliate = result.get("affiliate") or {}
     referral_text = ""
-    if affiliate.get("id") and affiliate.get("status") == "APPROVED":
-        referral_text = _build_referral_text(locale, affiliate.get("id"))
+    if affiliate.get("status") == "APPROVED":
+        referral_text = _build_referral_text(locale, message.from_user.id)
     if not referral_text:
         try:
             status_data = await api_client.get_affiliate_status(message.from_user.id)
             affiliate = status_data.get("affiliate") or {}
-            if affiliate.get("id") and affiliate.get("status") == "APPROVED":
-                referral_text = _build_referral_text(locale, affiliate.get("id"))
+            if affiliate.get("status") == "APPROVED":
+                referral_text = _build_referral_text(locale, message.from_user.id)
         except Exception:
             referral_text = ""
     reply = f"{t(locale, 'affiliate_apply_success')}"

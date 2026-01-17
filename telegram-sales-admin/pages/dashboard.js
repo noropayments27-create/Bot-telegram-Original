@@ -150,7 +150,8 @@ export default function Dashboard() {
   });
   const [statsError, setStatsError] = useState("");
   const [seenOrdersCount, setSeenOrdersCount] = useState(0);
-  const [seenTicketsCount, setSeenTicketsCount] = useState(0);
+  const [seenTicketsAt, setSeenTicketsAt] = useState(0);
+  const [latestTicketAt, setLatestTicketAt] = useState(0);
   const customersCounter = useCountUp(stats.customers);
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
@@ -159,7 +160,10 @@ export default function Dashboard() {
   useEffect(() => {
     const loadSummary = async () => {
       try {
-        const data = await apiFetch("/admin/summary");
+        const [data, ticketsRes] = await Promise.all([
+          apiFetch("/admin/summary"),
+          apiFetch("/admin/tickets?status=OPEN&page=1&page_size=1"),
+        ]);
         const nextStats = {
           customers: Number(data.customers || 0),
           totalSales: Number(data.total_sales || 0),
@@ -170,6 +174,11 @@ export default function Dashboard() {
           affiliates: Number(data.affiliates || 0),
         };
         setStats(nextStats);
+        const latestTicket = ticketsRes.items?.[0];
+        const latestTicketTime = latestTicket
+          ? new Date(latestTicket.last_message_at || latestTicket.created_at).getTime()
+          : 0;
+        setLatestTicketAt(Number.isNaN(latestTicketTime) ? 0 : latestTicketTime);
         setStatsError("");
       } catch (error) {
         setStatsError("No se pudo cargar el resumen.");
@@ -189,14 +198,14 @@ export default function Dashboard() {
     const storedOrders = Number(
       window.sessionStorage.getItem("admin_seen_orders_count") || 0
     );
-    const storedTickets = Number(
-      window.sessionStorage.getItem("admin_seen_tickets_count") || 0
+    const storedTicketsAt = Number(
+      window.sessionStorage.getItem("admin_seen_tickets_at") || 0
     );
     if (!Number.isNaN(storedOrders)) {
       setSeenOrdersCount(storedOrders);
     }
-    if (!Number.isNaN(storedTickets)) {
-      setSeenTicketsCount(storedTickets);
+    if (!Number.isNaN(storedTicketsAt)) {
+      setSeenTicketsAt(storedTicketsAt);
     }
   }, []);
 
@@ -219,7 +228,7 @@ export default function Dashboard() {
               : null;
             const hasAlert =
               (isOrders && countValue > seenOrdersCount) ||
-              (isTickets && countValue > seenTicketsCount);
+              (isTickets && latestTicketAt > seenTicketsAt);
             const badgeText = countValue > 99 ? "99+" : String(countValue);
             return (
               <Link

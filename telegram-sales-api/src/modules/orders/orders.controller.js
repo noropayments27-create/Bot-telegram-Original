@@ -1,6 +1,7 @@
 const { getPool } = require("../../db");
 const { consumeStockForOrder, releaseStockForOrder } = require("../../services/stock");
 const { deliverOrderToTelegram } = require("../../services/delivery");
+const { getAffiliateLevel } = require("../../services/affiliateLevels");
 
 const ORDER_STATUS_PENDING = "CREATED"; // maps to PENDING_PAYMENT
 const ORDER_STATUS_WAITING_CONFIRMATION = "WAITING_PAYMENT"; // maps to WAITING_CONFIRMATION
@@ -520,24 +521,55 @@ async function markOrderPaid(req, res, next) {
     );
 
     if (order.affiliate_id) {
-      const affiliateRes = await client.query(
+      const statsRes = await client.query(
+        `SELECT COUNT(*)::int AS sales_count,
+                COALESCE(SUM(amount), 0) AS earnings_total,
+                MAX(earned_at) AS last_sale_at
+         FROM commissions
+         WHERE affiliate_id = $1`,
+        [order.affiliate_id]
+      );
+      const stats = statsRes.rows[0] || {};
+      const salesTotal = stats.sales_count || 0;
+      const earningsTotal = Number(stats.earnings_total || 0);
+      const boostRes = await client.query(
         "SELECT commission_rate FROM affiliates WHERE id = $1",
         [order.affiliate_id]
       );
-
-      if (affiliateRes.rowCount > 0) {
-        const rate = Number(affiliateRes.rows[0].commission_rate);
-        const amount = Number(
-          (Number(order.unit_price_at_purchase) * rate).toFixed(2)
-        );
-
-        await client.query(
-          `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
-           VALUES ($1, $2, $3, $4)
-           ON CONFLICT (order_id) DO NOTHING`,
-          [order.id, order.affiliate_id, rate, amount]
+      const boostRate = Number(boostRes.rows[0]?.commission_rate || 0);
+      let daysSinceLastSale = null;
+      if (stats.last_sale_at) {
+        const lastSaleTime = new Date(stats.last_sale_at).getTime();
+        daysSinceLastSale = Math.max(
+          Math.floor((Date.now() - lastSaleTime) / (24 * 60 * 60 * 1000)),
+          0
         );
       }
+      let baseRate = 0.2;
+      let boostEffective = boostRate;
+      if (salesTotal > 0) {
+        const currentLevel = getAffiliateLevel({
+          salesTotal,
+          earningsTotal,
+          daysSinceLastSale,
+        });
+        baseRate = currentLevel.rate;
+      } else {
+        boostEffective = 0;
+      }
+      const rate = Math.min(baseRate + boostEffective, 1);
+      const amount = Number(
+        (Number(order.unit_price_at_purchase) * rate).toFixed(2)
+      );
+
+      await client.query(
+        `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
+         VALUES ($1, $2, $3, $4)
+         ON CONFLICT (order_id) DO NOTHING`,
+        [order.id, order.affiliate_id, rate, amount]
+      );
+
+      // Commission rate is based on level + optional boost, no per-affiliate override.
     }
 
     await client.query("COMMIT");

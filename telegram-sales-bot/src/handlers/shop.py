@@ -3,7 +3,6 @@ import html
 import re
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
-
 import httpx
 from aiogram import F, Router
 from aiogram.enums import ParseMode
@@ -16,7 +15,6 @@ from aiogram.types import (
     InlineKeyboardMarkup,
     Message,
 )
-
 from ..services.api_client import ApiClient
 from ..services.crypto_rates import usd_to_btc_rate, usd_to_ltc_rate
 from ..services.fx import usd_to_cop, usd_to_mxn
@@ -47,12 +45,10 @@ from ..utils.order_flow import (
 )
 from ..utils.order_watch import start_order_watch, stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
-
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
-
 _PAGE_SIZE = 9
 _PREFIX_SHOP = "T"
 _PREFIX_METODOS = "M"
@@ -68,24 +64,17 @@ _CATEGORY_TITLES = {
     "vip": "💬 VIP",
     "programas": "💻 Programas y Web",
 }
-
-
 class PaymentStates(StatesGroup):
     waiting_photo = State()
-
-
 def _format_usd(amount: float) -> str:
     if amount <= 0:
         return "Gratis"
     return f"${amount:,.0f} USD"
-
-
 def _build_cart_text(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
     if not cart_items:
         return t(locale, "cart_empty")
-
     lines = [t(locale, "cart_title"), "", t(locale, "cart_products_title"), ""]
     for idx, item in enumerate(cart_items, start=1):
         name = html.escape(_strip_category_prefix(item["name"]))
@@ -96,8 +85,6 @@ def _build_cart_text(
         t(locale, "cart_total_label").format(total=_format_usd(total_usd))
     )
     return "\n".join(lines)
-
-
 def _build_cart_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -114,7 +101,7 @@ def _build_cart_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="shop:page:1",
+                    callback_data="nav:back",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"),
@@ -123,15 +110,13 @@ def _build_cart_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
             ],
         ]
     )
-
-
 def _build_cart_empty_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="shop:page:1",
+                    callback_data="nav:back",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"),
@@ -140,8 +125,6 @@ def _build_cart_empty_keyboard(locale: str | None = None) -> InlineKeyboardMarku
             ],
         ]
     )
-
-
 def _build_cart_summary(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
@@ -153,8 +136,6 @@ def _build_cart_summary(
         qty = int(item["qty"])
         lines.append(f"{idx}. {name} x{qty}")
     return "\n".join(lines)
-
-
 def _build_products_only_summary(summary_text: Optional[str]) -> str:
     if not summary_text:
         return ""
@@ -182,8 +163,6 @@ def _build_products_only_summary(summary_text: Optional[str]) -> str:
                 continue
         lines.append(line)
     return "\n".join(lines).strip()
-
-
 async def _build_payment_instructions(
     method_key: str,
     base_total: Optional[float],
@@ -196,7 +175,6 @@ async def _build_payment_instructions(
     summary_text = _build_products_only_summary(summary)
     include_final_total = True
     instructions: List[str] = []
-
     if method_key == "nequi":
         instructions.append(t(locale, "payment_nequi_title"))
         instructions.append("")
@@ -324,7 +302,6 @@ async def _build_payment_instructions(
         include_final_total = False
     else:
         instructions.append(t(locale, "payment_method_default"))
-
     instructions.append("")
     if summary_text and include_final_total:
         instructions.append(summary_text)
@@ -335,13 +312,10 @@ async def _build_payment_instructions(
         )
         instructions.append(t(locale, "payment_final_note"))
     return "\n".join(instructions)
-
-
 def build_shop_keyboard(
     page: int, total_pages: int, count: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
-
     for idx in range(1, count + 1):
         if (idx - 1) % 3 == 0:
             rows.append([])
@@ -351,7 +325,6 @@ def build_shop_keyboard(
                 callback_data=f"shop:select:{page}:{idx}",
             )
         )
-
     nav_row: List[InlineKeyboardButton] = []
     if total_pages > 1:
         if page > 1:
@@ -368,14 +341,11 @@ def build_shop_keyboard(
             rows.append(nav_row)
     rows.append(
         [
-            InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="home:show"),
+            InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="nav:back"),
             InlineKeyboardButton(text=t(locale, "btn_home"), callback_data="home:show"),
         ]
     )
-
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def build_product_detail_keyboard(
     page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -401,7 +371,7 @@ def build_product_detail_keyboard(
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data=f"shop:page:{page}",
+                    callback_data="nav:back",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"), callback_data="home:show"
@@ -409,8 +379,6 @@ def build_product_detail_keyboard(
             ],
         ]
     )
-
-
 def build_category_keyboard(
     category_key: str, count: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -426,13 +394,11 @@ def build_category_keyboard(
         )
     rows.append(
         [
-            InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="home:show"),
+            InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="nav:back"),
             InlineKeyboardButton(text=t(locale, "btn_home"), callback_data="home:show"),
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
-
-
 def build_category_detail_keyboard(
     category_key: str, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -458,7 +424,7 @@ def build_category_detail_keyboard(
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data=f"category:page:{category_key}",
+                    callback_data="nav:back",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"), callback_data="home:show"
@@ -466,8 +432,6 @@ def build_category_detail_keyboard(
             ],
         ]
     )
-
-
 def build_detail_back_keyboard(
     page: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -475,7 +439,7 @@ def build_detail_back_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=t(locale, "btn_back"), callback_data=f"shop:page:{page}"
+                    text=t(locale, "btn_back"), callback_data="nav:back"
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"), callback_data="home:show"
@@ -483,8 +447,6 @@ def build_detail_back_keyboard(
             ]
         ]
     )
-
-
 def get_category_title(category_key: str, locale: str | None = None) -> str:
     key_map = {
         "metodos": "category_title_metodos",
@@ -495,14 +457,11 @@ def get_category_title(category_key: str, locale: str | None = None) -> str:
     if not key:
         return t(locale, "category_default_title")
     return t(locale, key)
-
-
 def format_products(
     items: List[Dict[str, Any]], page: int, locale: str | None = None
 ) -> str:
     if not items:
         return t(locale, "no_more_products")
-
     lines = [t(locale, "shop_products_page").format(page=page), ""]
     for idx, item in enumerate(items, start=1):
         lines.append(f"{idx}. {item['display_name']}")
@@ -510,8 +469,6 @@ def format_products(
         if stock_line:
             lines.append(f"   {stock_line}")
     return "\n".join(lines)
-
-
 def format_category_products(
     category_key: str, items: List[Dict[str, Any]], locale: str | None = None
 ) -> str:
@@ -525,8 +482,6 @@ def format_category_products(
         if stock_line:
             lines.append(f"   {stock_line}")
     return "\n".join(lines)
-
-
 async def _fetch_active_products() -> List[Dict[str, Any]]:
     products: List[Dict[str, Any]] = []
     page = 1
@@ -541,11 +496,7 @@ async def _fetch_active_products() -> List[Dict[str, Any]]:
             )
         page += 1
     return products
-
-
 _PREFIXES_FOR_STRIP = ("SHOP", "METODOS", "VIP", "WEB")
-
-
 def _strip_category_prefix(name: str) -> str:
     cleaned = name.strip()
     for base in _PREFIXES_FOR_STRIP:
@@ -560,8 +511,6 @@ def _strip_category_prefix(name: str) -> str:
             if maybe_code.isdigit():
                 return rest.strip()
     return cleaned
-
-
 def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
     name = str(product.get("name") or "")
     return {
@@ -576,15 +525,11 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
         "show_stock": product.get("show_stock"),
         "created_at": product.get("created_at"),
     }
-
-
 def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str:
     code = str(product.get("code") or "").strip()
     if not code:
         return ""
     return f"{t(locale, 'product_code_label').format(code=code)}\n\n"
-
-
 def _build_stock_line(product: Dict[str, Any]) -> str:
     if product.get("show_stock") is not True:
         return ""
@@ -600,15 +545,11 @@ def _build_stock_line(product: Dict[str, Any]) -> str:
     if available_int <= 0:
         return "📦 Sin Stock ❌"
     return f"📦 Disponibles: {available_int}"
-
-
 def _format_stock_block(product: Dict[str, Any]) -> str:
     line = _build_stock_line(product)
     if not line:
         return ""
     return f"{line}\n\n"
-
-
 def _format_price_label(price: float | int | None, locale: str | None = None) -> str:
     try:
         price_value = float(price or 0)
@@ -617,8 +558,6 @@ def _format_price_label(price: float | int | None, locale: str | None = None) ->
     if price_value <= 0:
         return t(locale, "product_price_free_label")
     return t(locale, "product_price_label").format(price=int(price_value))
-
-
 def _format_description(raw: Optional[str], locale: str | None = None) -> str:
     if not raw:
         return f"⌾ {t(locale, 'description_fallback')}"
@@ -633,8 +572,6 @@ def _format_description(raw: Optional[str], locale: str | None = None) -> str:
             continue
         lines.append(f"⌾ {clean}")
     return "\n".join(lines)
-
-
 async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
     products = await _fetch_active_products()
     filtered = [
@@ -646,14 +583,10 @@ async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
         key=lambda item: item.get("code") or item.get("created_at") or ""
     )
     return filtered
-
-
 def _paginate(items: List[Dict[str, Any]], page: int) -> List[Dict[str, Any]]:
     start = (page - 1) * _PAGE_SIZE
     end = start + _PAGE_SIZE
     return items[start:end]
-
-
 async def _get_shop_page_items(page: int) -> Dict[str, Any]:
     products = await _get_products_by_prefix(_PREFIX_SHOP)
     total_pages = max((len(products) + _PAGE_SIZE - 1) // _PAGE_SIZE, 1)
@@ -661,16 +594,12 @@ async def _get_shop_page_items(page: int) -> Dict[str, Any]:
         "items": _paginate(products, page),
         "total_pages": total_pages,
     }
-
-
 async def _get_category_items(category_key: str) -> List[Dict[str, Any]]:
     prefix = _CATEGORY_PREFIXES.get(category_key)
     if not prefix:
         return []
     products = await _get_products_by_prefix(prefix)
     return _paginate(products, 1)
-
-
 def build_payment_methods_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -709,7 +638,7 @@ def build_payment_methods_keyboard(
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="home:cart",
+                    callback_data="nav:back",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"),
@@ -718,8 +647,6 @@ def build_payment_methods_keyboard(
             ],
         ]
     )
-
-
 def build_crypto_assets_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -752,13 +679,11 @@ def build_crypto_assets_keyboard(
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data=f"order:methods:{order_id}:{page}:{index}",
+                    callback_data="nav:back",
                 )
             ],
         ]
     )
-
-
 def build_payment_prompt_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -771,7 +696,7 @@ def build_payment_prompt_keyboard(
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data=f"order:methods:{order_id}:{page}:{index}",
+                    callback_data="nav:back",
                 ),
             ],
             [
@@ -781,19 +706,15 @@ def build_payment_prompt_keyboard(
             ],
         ]
     )
-
-
 async def render_shop_page(
     target: Message, user_id: int, page: int, locale: str | None = None
 ) -> None:
     catalog = await _get_shop_page_items(page)
     items = catalog["items"]
     total_pages = catalog["total_pages"]
-
     if not items:
         await render_main_view(target, user_id, t(locale, "no_more_products"))
         return
-
     text = format_products(items, page, locale)
     await render_main_view(
         target,
@@ -801,8 +722,6 @@ async def render_shop_page(
         text,
         reply_markup=build_shop_keyboard(page, total_pages, len(items), locale),
     )
-
-
 async def render_category_page(
     target: Message, user_id: int, category_key: str, locale: str | None = None
 ) -> None:
@@ -817,8 +736,6 @@ async def render_category_page(
         text,
         reply_markup=build_category_keyboard(category_key, len(items), locale),
     )
-
-
 @router.message(Command("shop"))
 @router.message(F.text == "🛒 Tienda")
 async def handle_shop(message: Message) -> None:
@@ -839,8 +756,6 @@ async def handle_shop(message: Message) -> None:
         )
         return
     await render_shop_page(message, message.from_user.id, 1, locale)
-
-
 @router.callback_query(F.data.startswith("shop:page:"))
 async def handle_shop_page(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -864,8 +779,6 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
     page = int(callback.data.split(":")[-1])
     await render_shop_page(callback.message, callback.from_user.id, page, locale)
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("category:page:"))
 async def handle_category_page(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -891,8 +804,6 @@ async def handle_category_page(callback: CallbackQuery) -> None:
         callback.message, callback.from_user.id, category_key, locale
     )
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("shop:select:"))
 async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -921,7 +832,6 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
-
     product = items[index - 1]
     await state.update_data(selected_product_id=product["id"])
     text = (
@@ -940,8 +850,6 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         reply_markup=keyboard,
     )
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("category:select:"))
 async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -986,8 +894,6 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         reply_markup=keyboard,
     )
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("shop:buy:"))
 async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1026,14 +932,12 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         )
         await callback.answer()
         return
-
     order_payload = {
         "telegram_id": callback.from_user.id,
         "product_id": product["id"],
         "qty": 1,
         "username": callback.from_user.username,
     }
-
     result = await api_client.create_order(order_payload)
     if result.get("status_code") == 409:
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
@@ -1048,7 +952,6 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         )
         await callback.answer()
         return
-
     await state.update_data(
         last_order_id=order["id"],
         current_order_id=order["id"],
@@ -1062,8 +965,6 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         reply_markup=build_payment_methods_keyboard(order["id"], page, index, locale),
     )
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("category:buy:"))
 async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1100,14 +1001,12 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await callback.answer()
         return
-
     order_payload = {
         "telegram_id": callback.from_user.id,
         "product_id": product["id"],
         "qty": 1,
         "username": callback.from_user.username,
     }
-
     result = await api_client.create_order(order_payload)
     if result.get("status_code") == 409:
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
@@ -1122,7 +1021,6 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await callback.answer()
         return
-
     await state.update_data(
         last_order_id=order["id"],
         current_order_id=order["id"],
@@ -1136,8 +1034,6 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         reply_markup=build_payment_methods_keyboard(order["id"], 1, 1, locale),
     )
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("shop:cart:"))
 async def handle_shop_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -1234,8 +1130,6 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         reply_markup=keyboard,
     )
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("category:cart:"))
 async def handle_category_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -1329,8 +1223,6 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         reply_markup=keyboard,
     )
     await callback.answer()
-
-
 @router.callback_query(F.data == "home:cart")
 async def handle_home_cart(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -1374,8 +1266,6 @@ async def handle_home_cart(callback: CallbackQuery) -> None:
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
-
-
 @router.callback_query(F.data == "cart:clear")
 async def handle_cart_clear(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -1405,8 +1295,6 @@ async def handle_cart_clear(callback: CallbackQuery) -> None:
         parse_mode=ParseMode.HTML,
     )
     await callback.answer()
-
-
 @router.callback_query(F.data == "cart:checkout")
 async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1451,7 +1339,6 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         )
         await callback.answer()
         return
-
     if result.get("ok") is False:
         error_code = result.get("error")
         if error_code == "OUT_OF_STOCK":
@@ -1481,7 +1368,6 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
             )
             await callback.answer(msg, show_alert=True)
             return
-
     order_id = result.get("order_id")
     cart_total = float(result.get("total_usd", cart_total))
     if not order_id:
@@ -1509,8 +1395,6 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("order:methods:"))
 async def handle_order_methods(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1547,8 +1431,6 @@ async def handle_order_methods(callback: CallbackQuery, state: FSMContext) -> No
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("order:method:"))
 async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1604,8 +1486,6 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("order:create:"))
 async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1629,21 +1509,18 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     parts = callback.data.split(":")
     product_id = parts[2] if len(parts) > 2 else parts[-1]
     page = int(parts[3]) if len(parts) > 3 and parts[3].isdigit() else 1
-
     order_payload = {
         "telegram_id": callback.from_user.id,
         "product_id": product_id,
         "qty": 1,
         "username": callback.from_user.username,
     }
-
     result = await api_client.create_order(order_payload)
     if result.get("status_code") == 409:
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     order = result.get("order")
     instructions = result.get("payment_instructions", {})
-
     if not order:
         await render_main_view(
             callback.message,
@@ -1652,7 +1529,6 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await callback.answer()
         return
-
     await state.update_data(
         last_order_id=order["id"],
         current_order_id=order["id"],
@@ -1662,7 +1538,6 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         payment_method_order_id=None,
         payment_ready=False,
     )
-
     text = (
         f"{t(locale, 'order_created_title')}\n\n"
         f"{t(locale, 'order_id_label').format(order_id=order['id'])}\n"
@@ -1674,7 +1549,6 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         f"{t(locale, 'payment_note_label').format(note=instructions.get('note'))}\n\n"
         f"{t(locale, 'payment_instructions_footer')}"
     )
-
     keyboard = InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -1690,12 +1564,11 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data=f"shop:page:{page}",
+                    callback_data="nav:back",
                 )
             ],
         ]
     )
-
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -1704,8 +1577,6 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     )
     await start_order_watch(api_client, order["id"], callback.message, state, locale)
     await callback.answer()
-
-
 @router.callback_query(F.data.startswith("order:pay:"))
 async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1763,8 +1634,6 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         reply_markup=None,
     )
     await callback.answer()
-
-
 @router.message(F.photo)
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
@@ -1783,7 +1652,6 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
             t(locale, "rate_limit_wait").format(seconds=wait_seconds)
         )
         return
-
     data = await state.get_data()
     current_state = await state.get_state()
     order_id = data.get("order_id") or data.get("current_order_id")
@@ -1798,21 +1666,18 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
         api_client, order_id, message, state, locale
     ):
         return
-
     data = await state.get_data()
     payment_method = data.get("payment_method")
     payment_method_order_id = data.get("payment_method_order_id")
     if not payment_method or payment_method_order_id != order_id:
         await message.answer(t(locale, "select_payment_method_first"))
         return
-
     screenshot_file_id = message.photo[-1].file_id
     payload = {
         "telegram_id": message.from_user.id,
         "screenshot_file_id": screenshot_file_id,
         "payment_method": payment_method,
     }
-
     try:
         await api_client.submit_payment_proof(order_id, payload)
     except httpx.HTTPStatusError as exc:
@@ -1851,8 +1716,6 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     )
     await state.set_state(None)
     await stop_order_watch(message.from_user.id, "proof_submitted")
-
-
 @router.callback_query(F.data.startswith("order:status:"))
 async def handle_status_callback(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1879,8 +1742,6 @@ async def handle_status_callback(callback: CallbackQuery, state: FSMContext) -> 
         callback.message, callback.from_user.id, order_id, locale
     )
     await callback.answer()
-
-
 @router.message(F.text == "📦 Ver estado")
 async def handle_status_message(message: Message, state: FSMContext) -> None:
     if not message.from_user:
@@ -1909,8 +1770,6 @@ async def handle_status_message(message: Message, state: FSMContext) -> None:
         )
         return
     await send_order_status(message, message.from_user.id, order_id, locale)
-
-
 @router.callback_query(F.data.startswith("cryptoasset:"))
 async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1919,7 +1778,6 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         api_client, callback.from_user.id, callback.from_user.language_code
     )
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-
     _, asset_key, order_id, page_text, index_text = callback.data.split(":", 4)
     page = int(page_text)
     index = int(index_text)
@@ -1928,10 +1786,8 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
     ):
         await callback.answer()
         return
-
     data = await state.get_data()
     total = float(data.get("current_order_total") or 0)
-
     items_text = ""
     summary = data.get("current_order_summary")
     if summary:
@@ -1951,10 +1807,8 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
                 items_text = "\n".join(lines)
         except Exception:
             items_text = ""
-
     wallet = ""
     send_str = ""
-
     if asset_key == "btc":
         wallet = CRYPTO_WALLET_BTC
         try:
@@ -1979,33 +1833,27 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         send_str = f"{total:.2f} USDT (BSC)"
     else:
         send_str = f"{total:.2f} USDT"
-
     if not wallet:
         wallet = t(locale, "crypto_wallet_not_configured")
-
     title = {
         "btc": t(locale, "crypto_asset_btc"),
         "usdt_tron": t(locale, "crypto_asset_usdt_tron"),
         "usdt_bsc": t(locale, "crypto_asset_usdt_bsc"),
         "ltc": t(locale, "crypto_asset_ltc"),
     }.get(asset_key, t(locale, "crypto_asset_default"))
-
     text = (
         f"{title}\n\n"
         f"{t(locale, 'crypto_wallet_label')}\n<code>{html.escape(wallet)}</code>\n\n"
     )
-
     if items_text:
         text += (
             f"{t(locale, 'payment_products_title')}\n\n{items_text}\n\n"
         )
-
     text += (
         f"{t(locale, 'payment_amount_total_label').format(amount=_format_usd(total))}\n"
         f"{t(locale, 'payment_send_label_bold').format(amount=send_str)}\n\n"
         f"{t(locale, 'payment_after_pay_short')}"
     )
-
     await render_main_view(
         callback.message,
         callback.from_user.id,
@@ -2020,22 +1868,18 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
-
-
 def format_receipt(order: Dict[str, Any], locale: str | None = None) -> str:
     total = order.get("unit_price_at_purchase")
     paid_at = order.get("paid_at") or order.get("created_at")
     paid_at_text = paid_at
     if isinstance(paid_at, datetime):
         paid_at_text = paid_at.isoformat()
-
     total_text = "0 USD"
     try:
         numeric_total = float(total or 0)
         total_text = f"{numeric_total:,.0f} USD"
     except (TypeError, ValueError):
         total_text = str(total or "0")
-
     return (
         f"{t(locale, 'receipt_title')}\n"
         f"{t(locale, 'receipt_order').format(order_id=order['id'])}\n"
@@ -2045,14 +1889,11 @@ def format_receipt(order: Dict[str, Any], locale: str | None = None) -> str:
         f"{t(locale, 'receipt_date').format(date=paid_at_text)}\n"
         f"{t(locale, 'receipt_status')}"
     )
-
-
 async def send_order_status(
     target: Message, user_id: int, order_id: str, locale: str | None = None
 ) -> None:
     result = await api_client.get_order(order_id)
     order = result.get("order")
-
     if not order:
         await render_main_view(
             target,
@@ -2060,7 +1901,6 @@ async def send_order_status(
             t(locale, "order_not_found"),
         )
         return
-
     status = order.get("status")
     if status == "PAID":
         await render_main_view(target, user_id, format_receipt(order, locale))

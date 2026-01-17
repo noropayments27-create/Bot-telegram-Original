@@ -24,22 +24,23 @@
 
 .brandGroup {
   display: flex;
-  align-items: flex-start;
+  align-items: center;
   flex-direction: column;
-  gap: 8px;
+  gap: 16px;
   text-align: left;
 }
 
 .logoCircle {
-  width: 55px;
-  height: 55px;
+  width: 70px;
+  height: 70px;
   border-radius: 50%;
   background: rgba(255, 36, 0, 0.15);
   display: inline-flex;
   align-items: center;
   justify-content: center;
-  border: 1px solid var(--scarlet-red);
+  border: 2px solid var(--scarlet-red);
   overflow: hidden;
+  margin-left: -45px;
 }
 
 
@@ -60,11 +61,13 @@
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.02em;
+  margin-left: 15px;
 }
 
 .brandSubtitle {
   font-size: 12px;
   opacity: 0.85;
+  margin-left: 15px;
 }
 
 .nav {

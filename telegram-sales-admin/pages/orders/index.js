@@ -601,24 +601,6 @@ export default function OrdersPage() {
             </tbody>
           </table>
         </div>
-        {!(status === "RECENT" && items.length === 0) && (
-          <div className="actions" style={{ marginTop: "16px" }}>
-            <button
-              type="button"
-              onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-              disabled={page <= 1}
-            >
-              Anterior
-            </button>
-            <button
-              type="button"
-              onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
-              disabled={page >= totalPages}
-            >
-              Siguiente
-            </button>
-          </div>
-        )}
       </section>
       {selectedOrderIds.length > 0 && (
         <div className="orders-detail-wrap">
