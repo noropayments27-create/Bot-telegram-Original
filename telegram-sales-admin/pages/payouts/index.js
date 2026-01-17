@@ -21,6 +21,59 @@ export default function PayoutsPage() {
     }
     return method || "-";
   };
+  const formatStatus = (value) => {
+    const map = {
+      REQUESTED: "SOLICITADO",
+      SENT: "ENVIADO",
+      CANCELLED: "CANCELADO",
+      APPROVED: "APROBADO",
+      REJECTED: "RECHAZADO",
+      PENDING: "PENDIENTE",
+    };
+    return map[value] || value || "-";
+  };
+  const formatUsername = (username) => {
+    if (!username) {
+      return "-";
+    }
+    return username.startsWith("@") ? username : `@${username}`;
+  };
+  const formatUsdAmount = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return value || "-";
+    }
+    const formatted = numeric.toLocaleString("en-US", {
+      minimumFractionDigits: numeric % 1 === 0 ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
+    return `$${formatted} USD`;
+  };
+  const formatPayoutNumber = (value) => {
+    if (!value) {
+      return null;
+    }
+    return String(value).padStart(5, "0");
+  };
+  const getPayoutTone = (status) => {
+    if (status === "SENT") {
+      return "success";
+    }
+    if (status === "CANCELLED") {
+      return "danger";
+    }
+    return "neutral";
+  };
+  const maskValue = (value) => {
+    if (!value) {
+      return "-";
+    }
+    const text = String(value);
+    if (text.length <= 10) {
+      return text;
+    }
+    return text.slice(0, 10);
+  };
   const router = useRouter();
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
@@ -33,12 +86,21 @@ export default function PayoutsPage() {
   const [detailErrors, setDetailErrors] = useState({});
   const [detailMessages, setDetailMessages] = useState({});
   const [reasonById, setReasonById] = useState({});
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
     if (!getAuthToken()) {
       router.replace("/login");
     }
   }, [router]);
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setToast(""), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     const loadPayouts = async () => {
@@ -174,6 +236,18 @@ export default function PayoutsPage() {
     }
   };
 
+  const handleCopy = async (label, value) => {
+    if (!value) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setToast(`${label} copiado`);
+    } catch (err) {
+      setToast("No se pudo copiar");
+    }
+  };
+
   return (
     <main className="page">
       <section className="card orders-card">
@@ -192,17 +266,18 @@ export default function PayoutsPage() {
           </label>
         </div>
         <div className="orders-list">
-          <table className="orders-table">
+          <table className="orders-table payouts-table">
             <thead>
               <tr>
-                <th align="left">ID de Pago</th>
-                <th align="left">Afiliado</th>
-                <th align="left">Monto</th>
-                <th align="left">Método</th>
-                <th align="left">Destino</th>
-                <th align="left">Estado</th>
-                <th align="left">Creado</th>
-                <th align="left">Enviado</th>
+                <th>ID de Pago</th>
+                <th>Telegram ID</th>
+                <th>Username</th>
+                <th>Monto</th>
+                <th>Método</th>
+                <th>Destino</th>
+                <th>Estado</th>
+                <th>Creado</th>
+                <th>Enviado</th>
                 <th></th>
               </tr>
             </thead>
@@ -212,12 +287,37 @@ export default function PayoutsPage() {
                   key={payout.id}
                   className={selectedPayoutIds.includes(payout.id) ? "orders-row-active" : ""}
                 >
-                  <td>{payout.id}</td>
-                  <td>{payout.telegram_id}</td>
-                  <td>{payout.amount}</td>
+                  <td>{maskValue(payout.id)}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="orders-copy"
+                      onClick={() => handleCopy("Telegram ID", payout.telegram_id)}
+                    >
+                      {payout.telegram_id || "-"}
+                    </button>
+                  </td>
+                  <td>
+                    <button
+                      type="button"
+                      className="orders-copy"
+                      onClick={() => handleCopy("Username", payout.telegram_username)}
+                    >
+                      {formatUsername(payout.telegram_username)}
+                    </button>
+                  </td>
+                  <td>{formatUsdAmount(payout.amount)}</td>
                   <td>{formatMethod(payout.method)}</td>
-                  <td>{payout.destination}</td>
-                  <td>{payout.status}</td>
+                  <td>
+                    <button
+                      type="button"
+                      className="orders-copy"
+                      onClick={() => handleCopy("Destino", payout.destination)}
+                    >
+                      {maskValue(payout.destination)}
+                    </button>
+                  </td>
+                  <td>{formatStatus(payout.status)}</td>
                   <td>{new Date(payout.created_at).toLocaleString()}</td>
                   <td>
                     {payout.sent_at ? new Date(payout.sent_at).toLocaleString() : "-"}
@@ -235,22 +335,6 @@ export default function PayoutsPage() {
               ))}
             </tbody>
           </table>
-        </div>
-        <div className="actions" style={{ marginTop: "16px" }}>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-            disabled={page <= 1}
-          >
-            Anterior
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
-            disabled={page >= totalPages}
-          >
-            Siguiente
-          </button>
         </div>
       </section>
       {selectedPayoutIds.length > 0 && (
@@ -274,7 +358,12 @@ export default function PayoutsPage() {
                 {!isLoading && payout && (
                   <>
                     <div className="orders-detail-header">
-                      <h2>Pago #{payout.id}</h2>
+                      <h2>
+                        Pago
+                        {payout.payout_number
+                          ? ` #${formatPayoutNumber(payout.payout_number)}`
+                          : ""}
+                      </h2>
                       <button
                         type="button"
                         className="link-button"
@@ -286,13 +375,22 @@ export default function PayoutsPage() {
                     <div className="orders-detail-separator"></div>
                     {message && <p className="muted">{message}</p>}
                     {errorMessage && <p className="error">{errorMessage}</p>}
-                    <div className="orders-detail-grid">
+                    <div className="orders-detail-grid payouts-detail-grid">
                       <div className="orders-detail-section">
                         <h3>Detalle</h3>
-                        <p>Estado: {payout.status}</p>
-                        <p>Monto: {payout.amount}</p>
+                        <p>Estado: {formatStatus(payout.status)}</p>
+                        <p>Monto: {formatUsdAmount(payout.amount)}</p>
                         <p>Método: {formatMethod(payout.method)}</p>
-                        <p>Destino: {payout.destination}</p>
+                        <p>
+                          Destino:{" "}
+                          <button
+                            type="button"
+                            className="orders-copy"
+                            onClick={() => handleCopy("Destino", payout.destination)}
+                          >
+                            {maskValue(payout.destination)}
+                          </button>
+                        </p>
                         <p>
                           Creado: {new Date(payout.created_at).toLocaleString()}
                         </p>
@@ -302,14 +400,30 @@ export default function PayoutsPage() {
                       </div>
                       <div className="orders-detail-section">
                         <h3>Afiliado</h3>
-                        <p>ID: {affiliate?.id || "-"}</p>
-                        <p>Estado: {affiliate?.status || "-"}</p>
-                        <p>Tasa: {affiliate?.commission_rate || "-"}</p>
+                        <p>Estado: {formatStatus(affiliate?.status)}</p>
                         <p>Balance disponible: {availableBalance || "-"}</p>
                         <div className="orders-detail-subseparator"></div>
                         <h3>Usuario</h3>
-                        <p>Telegram ID: {user?.telegram_id || "-"}</p>
-                        <p>Username: {user?.telegram_username || "-"}</p>
+                        <p>
+                          Telegram ID:{" "}
+                          <button
+                            type="button"
+                            className="orders-copy"
+                            onClick={() => handleCopy("Telegram ID", user?.telegram_id)}
+                          >
+                            {user?.telegram_id || "-"}
+                          </button>
+                        </p>
+                        <p>
+                          Username:{" "}
+                          <button
+                            type="button"
+                            className="orders-copy"
+                            onClick={() => handleCopy("Username", user?.telegram_username)}
+                          >
+                            {formatUsername(user?.telegram_username)}
+                          </button>
+                        </p>
                       </div>
                     </div>
                     <div className="orders-detail-actions">
@@ -345,6 +459,23 @@ export default function PayoutsPage() {
                           Cancelar
                         </button>
                       </div>
+                      {(() => {
+                        const tone = getPayoutTone(payout.status);
+                        return (
+                          <div className={`orders-detail-footer orders-detail-footer--${tone}`}>
+                            <div className="orders-status-inline">
+                              <span>
+                                <span className={`orders-status-dot is-${tone}`}></span>
+                                Pago aprobado
+                              </span>
+                              <span>
+                                <span className={`orders-status-dot is-${tone}`}></span>
+                                Entrega realizada
+                              </span>
+                            </div>
+                          </div>
+                        );
+                      })()}
                     </div>
                   </>
                 )}
@@ -356,6 +487,7 @@ export default function PayoutsPage() {
           })}
         </div>
       )}
+      {toast && <div className="toast">{toast}</div>}
     </main>
   );
 }

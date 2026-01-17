@@ -522,11 +522,16 @@ async function markOrderPaid(req, res, next) {
 
     if (order.affiliate_id) {
       const statsRes = await client.query(
-        `SELECT COUNT(*)::int AS sales_count,
-                COALESCE(SUM(amount), 0) AS earnings_total,
-                MAX(earned_at) AS last_sale_at
-         FROM commissions
-         WHERE affiliate_id = $1`,
+        `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
+                COALESCE(SUM(c.amount), 0) AS earnings_total,
+                MAX(c.earned_at) AS last_sale_at
+         FROM commissions c
+         LEFT JOIN (
+           SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+           FROM order_items
+           GROUP BY order_id
+         ) oi ON oi.order_id = c.order_id
+         WHERE c.affiliate_id = $1`,
         [order.affiliate_id]
       );
       const stats = statsRes.rows[0] || {};

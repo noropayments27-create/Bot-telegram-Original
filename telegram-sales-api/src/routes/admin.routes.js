@@ -1937,7 +1937,7 @@ router.get("/orders", async (req, res, next) => {
     const listRes = await pool.query(
       `SELECT o.id, o.status, o.created_at,
               o.order_number,
-              u.telegram_id,
+              u.telegram_id, u.telegram_username,
               p.id AS product_id, p.code AS product_code, p.name AS product_name,
               (op.id IS NOT NULL) AS has_payment_proof
        FROM orders o
@@ -2339,11 +2339,16 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
     if (order.affiliate_id) {
       const statsRes = await client.query(
-        `SELECT COUNT(*)::int AS sales_count,
-                COALESCE(SUM(amount), 0) AS earnings_total,
-                MAX(earned_at) AS last_sale_at
-         FROM commissions
-         WHERE affiliate_id = $1`,
+        `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
+                COALESCE(SUM(c.amount), 0) AS earnings_total,
+                MAX(c.earned_at) AS last_sale_at
+         FROM commissions c
+         LEFT JOIN (
+           SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+           FROM order_items
+           GROUP BY order_id
+         ) oi ON oi.order_id = c.order_id
+         WHERE c.affiliate_id = $1`,
         [order.affiliate_id]
       );
       const stats = statsRes.rows[0] || {};
@@ -2770,19 +2775,32 @@ router.get("/affiliates", async (req, res, next) => {
     const total = countRes.rows[0].total;
 
     const listRes = await pool.query(
-      `SELECT a.id, a.status, a.commission_rate,
+      `WITH ranked AS (
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY approved_at, id) AS affiliate_number
+         FROM affiliates
+         WHERE approved_at IS NOT NULL
+       )
+       SELECT a.id, a.status, a.commission_rate,
               a.wallet_usdt_bsc, a.binance_id,
               a.created_at, a.approved_at,
               u.telegram_id, u.telegram_username,
+              ranked.affiliate_number,
               COALESCE(SUM(c.amount) FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance,
               COALESCE(SUM(c.amount), 0) AS earnings_total,
-              COUNT(c.id)::int AS sales_count,
+              COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
               MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
+       LEFT JOIN ranked ON ranked.id = a.id
        LEFT JOIN commissions c ON c.affiliate_id = a.id
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
        ${whereClause}
-       GROUP BY a.id, u.telegram_id, u.telegram_username
+       GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number
        ORDER BY a.created_at DESC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
@@ -3061,15 +3079,28 @@ router.get("/affiliates/:id", async (req, res, next) => {
 
   try {
     const affiliateRes = await pool.query(
-      `SELECT a.*, u.telegram_id, u.telegram_username,
+      `WITH ranked AS (
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY approved_at, id) AS affiliate_number
+         FROM affiliates
+         WHERE approved_at IS NOT NULL
+       )
+       SELECT a.*, u.telegram_id, u.telegram_username,
+              ranked.affiliate_number,
               COALESCE(SUM(c.amount), 0) AS earnings_total,
-              COUNT(c.id)::int AS sales_count,
+              COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
               MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
+       LEFT JOIN ranked ON ranked.id = a.id
        LEFT JOIN commissions c ON c.affiliate_id = a.id
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
        WHERE a.id = $1
-       GROUP BY a.id, u.telegram_id, u.telegram_username`,
+       GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number`,
       [affiliateId]
     );
 
@@ -3225,12 +3256,17 @@ router.get("/payouts", async (req, res, next) => {
     const total = countRes.rows[0].total;
 
     const listRes = await pool.query(
-      `SELECT p.*, u.telegram_id, u.telegram_username
-       FROM payouts p
-       JOIN affiliates a ON a.id = p.affiliate_id
+      `WITH numbered AS (
+         SELECT p.*,
+                ROW_NUMBER() OVER (ORDER BY p.created_at, p.id) AS payout_number
+         FROM payouts p
+       )
+       SELECT numbered.*, u.telegram_id, u.telegram_username
+       FROM numbered
+       JOIN affiliates a ON a.id = numbered.affiliate_id
        JOIN users u ON u.id = a.user_id
-       ${whereClause}
-       ORDER BY p.created_at DESC
+       ${whereClause.replace(/\bp\./g, "numbered.")}
+       ORDER BY numbered.created_at DESC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
     );
@@ -3253,13 +3289,18 @@ router.get("/payouts/:id", async (req, res, next) => {
 
   try {
     const payoutRes = await pool.query(
-      `SELECT p.*, a.status AS affiliate_status, a.commission_rate,
+      `WITH numbered AS (
+         SELECT p.*,
+                ROW_NUMBER() OVER (ORDER BY p.created_at, p.id) AS payout_number
+         FROM payouts p
+       )
+       SELECT numbered.*, a.status AS affiliate_status, a.commission_rate,
               a.wallet_usdt_bsc, a.binance_id,
               u.telegram_id, u.telegram_username
-       FROM payouts p
-       JOIN affiliates a ON a.id = p.affiliate_id
+       FROM numbered
+       JOIN affiliates a ON a.id = numbered.affiliate_id
        JOIN users u ON u.id = a.user_id
-       WHERE p.id = $1`,
+       WHERE numbered.id = $1`,
       [payoutId]
     );
 
@@ -3563,6 +3604,12 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
         [commissionIds]
       );
     }
+
+    await client.query(
+      `DELETE FROM payout_items
+       WHERE payout_id = $1`,
+      [payoutId]
+    );
 
     await client.query("COMMIT");
 

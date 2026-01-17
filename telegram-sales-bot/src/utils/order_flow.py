@@ -29,17 +29,7 @@ async def show_not_payable_and_redirect(
     await state.update_data(order_guard_token=token, order_id=None, current_order_id=None)
     await state.set_state(None)
 
-    try:
-        await render_main_view(
-            message,
-            user_id,
-            notice_text,
-            reply_markup=None,
-            parse_mode="HTML",
-        )
-    except Exception as exc:
-        print("[bot/order_guard] notice_edit_failed", {"error": str(exc)})
-        return
+    async def _return_home(current_token: str) -> None:
         await asyncio.sleep(delay_seconds)
         data = await state.get_data()
         if data.get("order_guard_token") != current_token:
@@ -54,6 +44,17 @@ async def show_not_payable_and_redirect(
             )
         except Exception as exc:
             print("[bot/order_guard] home_edit_failed", {"error": str(exc)})
+
+    try:
+        await render_main_view(
+            message,
+            user_id,
+            notice_text,
+            reply_markup=None,
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        print("[bot/order_guard] notice_edit_failed", {"error": str(exc)})
 
     asyncio.create_task(_return_home(token))
 

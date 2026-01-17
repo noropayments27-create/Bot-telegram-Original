@@ -25,9 +25,11 @@ export default function NotificationsBell({ variant = "sidebar" }) {
   useEffect(() => {
     const loadNotifications = async () => {
       try {
-        const [ordersRes, ticketsRes] = await Promise.all([
+        const [ordersRes, ticketsRes, payoutsRes, affiliatesRes] = await Promise.all([
           apiFetch("/admin/orders?page=1&page_size=5"),
           apiFetch("/admin/tickets?status=OPEN&page=1&page_size=5"),
+          apiFetch("/admin/payouts?status=REQUESTED&page=1&page_size=5"),
+          apiFetch("/admin/affiliates?status=PENDING&page=1&page_size=5"),
         ]);
 
         const orders = (ordersRes.items || [])
@@ -50,8 +52,26 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           href: `/tickets/${item.id}`,
         }));
 
+        const payouts = (payoutsRes.items || []).map((item) => ({
+          id: item.id,
+          type: "Pago",
+          status: item.status,
+          created_at: item.created_at,
+          text: `Retiro ${item.id}`,
+          href: "/payouts",
+        }));
+
+        const affiliates = (affiliatesRes.items || []).map((item) => ({
+          id: item.id,
+          type: "Afiliado",
+          status: item.status,
+          created_at: item.created_at,
+          text: `Afiliado ${item.telegram_username || item.telegram_id || item.id}`,
+          href: "/affiliates",
+        }));
+
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        const combined = [...orders, ...tickets]
+        const combined = [...orders, ...tickets, ...payouts, ...affiliates]
           .filter((item) => item.created_at)
           .filter((item) => new Date(item.created_at).getTime() >= cutoff)
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -62,6 +82,12 @@ export default function NotificationsBell({ variant = "sidebar" }) {
             return false;
           }
           if (item.type === "Ticket" && path.startsWith("/tickets")) {
+            return false;
+          }
+          if (item.type === "Pago" && path.startsWith("/payouts")) {
+            return false;
+          }
+          if (item.type === "Afiliado" && path.startsWith("/affiliates")) {
             return false;
           }
           return true;
@@ -107,6 +133,12 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           return false;
         }
         if (item.type === "Ticket" && path.startsWith("/tickets")) {
+          return false;
+        }
+        if (item.type === "Pago" && path.startsWith("/payouts")) {
+          return false;
+        }
+        if (item.type === "Afiliado" && path.startsWith("/affiliates")) {
           return false;
         }
         return true;

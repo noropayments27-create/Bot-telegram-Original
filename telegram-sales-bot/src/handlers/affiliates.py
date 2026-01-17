@@ -884,6 +884,7 @@ async def handle_affiliate_destination(message: Message, state: FSMContext) -> N
         return
     data = await state.get_data()
     method = data.get("affiliate_method")
+    action = data.get("affiliate_action") or "apply"
     photo_file_id = None
     try:
         photos = await message.bot.get_user_profile_photos(
@@ -914,20 +915,9 @@ async def handle_affiliate_destination(message: Message, state: FSMContext) -> N
             await message.answer(t(locale, "affiliate_apply_error"))
         await state.clear()
         return
-    affiliate = result.get("affiliate") or {}
-    referral_text = ""
-    if affiliate.get("status") == "APPROVED":
-        referral_text = _build_referral_text(locale, message.from_user.id)
-    if not referral_text:
-        try:
-            status_data = await api_client.get_affiliate_status(message.from_user.id)
-            affiliate = status_data.get("affiliate") or {}
-            if affiliate.get("status") == "APPROVED":
-                referral_text = _build_referral_text(locale, message.from_user.id)
-        except Exception:
-            referral_text = ""
-    reply = f"{t(locale, 'affiliate_apply_success')}"
-    if referral_text:
-        reply = f"{reply}\n\n{referral_text}"
+    success_key = (
+        "affiliate_update_success" if action == "update" else "affiliate_apply_success"
+    )
+    reply = f"{t(locale, success_key)}"
     await message.answer(reply, parse_mode=ParseMode.HTML)
     await state.clear()

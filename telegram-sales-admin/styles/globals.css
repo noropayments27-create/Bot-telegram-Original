@@ -529,6 +529,11 @@ body.login-success {
   vertical-align: middle;
 }
 
+.payouts-table th,
+.payouts-table td {
+  text-align: center;
+}
+
 .orders-row-active {
   background: rgba(245, 176, 46, 0.2);
 }
@@ -633,6 +638,15 @@ body.login-success {
   line-height: 1.4;
 }
 
+.payouts-detail-grid p {
+  margin: 0;
+  line-height: 1;
+}
+
+.payouts-detail-grid p:last-child {
+  margin-bottom: 0;
+}
+
 .affiliate-commissions-scroll {
   max-height: 220px;
   overflow-y: auto;
@@ -665,11 +679,11 @@ body.login-success {
 }
 
 .affiliate-commissions-scroll thead tr {
-  background: #111;
+  background: #000000;
 }
 
 .affiliate-commissions-scroll thead th {
-  background: #111;
+  background: #000000;
   position: sticky;
   top: 0;
   z-index: 3;
@@ -892,8 +906,6 @@ body.login-success {
 }
 
 .orders-detail-footer {
-  position: sticky;
-  bottom: 0;
   margin-top: 12px;
   padding: 10px 0 6px;
   background: transparent;
@@ -931,6 +943,7 @@ body.login-success {
 .orders-detail-card .orders-copy {
   background: transparent;
   border: none;
+  box-shadow: none;
   color: #7cffb2;
   font-weight: 600;
   padding: 0;
@@ -946,12 +959,17 @@ body.login-success {
 .orders-card .orders-copy {
   background: transparent;
   border: none;
+  box-shadow: none;
   color: #7cffb2;
   font-weight: 600;
   padding: 0;
   cursor: pointer;
   font-size: inherit;
   line-height: inherit;
+}
+
+.payouts-table .orders-copy {
+  background: transparent;
 }
 
 .affiliates-card .orders-copy {

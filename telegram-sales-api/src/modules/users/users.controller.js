@@ -258,9 +258,14 @@ async function getAffiliateStatus(req, res, next) {
     }
     const row = result.rows[0];
     const salesRes = await pool.query(
-      `SELECT COUNT(*)::int AS count
-       FROM commissions
-       WHERE affiliate_id = $1`,
+      `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS count
+       FROM commissions c
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
+       WHERE c.affiliate_id = $1`,
       [row.id]
     );
     const salesCount = salesRes.rows[0]?.count || 0;
@@ -279,10 +284,15 @@ async function getAffiliateStatus(req, res, next) {
     );
     const lastSaleAt = lastSaleRes.rows[0]?.last_sale_at || null;
     const last30Res = await pool.query(
-      `SELECT COUNT(*)::int AS count
-       FROM commissions
-       WHERE affiliate_id = $1
-         AND earned_at >= now() - interval '30 days'`,
+      `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS count
+       FROM commissions c
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
+       WHERE c.affiliate_id = $1
+         AND c.earned_at >= now() - interval '30 days'`,
       [row.id]
     );
     const salesLast30 = last30Res.rows[0]?.count || 0;
@@ -295,10 +305,15 @@ async function getAffiliateStatus(req, res, next) {
     );
     const dailyEarnings = Number(dailyRes.rows[0]?.total || 0);
     const dailySalesRes = await pool.query(
-      `SELECT COUNT(*)::int AS count
-       FROM commissions
-       WHERE affiliate_id = $1
-         AND earned_at >= date_trunc('day', now())`,
+      `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS count
+       FROM commissions c
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
+       WHERE c.affiliate_id = $1
+         AND c.earned_at >= date_trunc('day', now())`,
       [row.id]
     );
     const dailySalesCount = dailySalesRes.rows[0]?.count || 0;
@@ -416,12 +431,17 @@ async function getAffiliateTop(req, res, next) {
         `WITH stats AS (
            SELECT a.id,
                   u.telegram_username,
-                  COUNT(c.id)::int AS sales_count,
+                  COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
                   COALESCE(SUM(c.amount), 0) AS earnings_total
              FROM affiliates a
              JOIN users u ON u.id = a.user_id
              LEFT JOIN commissions c
                ON c.affiliate_id = a.id
+             LEFT JOIN (
+               SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+               FROM order_items
+               GROUP BY order_id
+             ) oi ON oi.order_id = c.order_id
             WHERE a.status = 'APPROVED'
             GROUP BY a.id, u.telegram_username
          ),
@@ -442,13 +462,18 @@ async function getAffiliateTop(req, res, next) {
         `WITH stats AS (
            SELECT a.id,
                   u.telegram_username,
-                  COUNT(c.id)::int AS sales_count,
+                  COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
                   COALESCE(SUM(c.amount), 0) AS earnings_total
              FROM affiliates a
              JOIN users u ON u.id = a.user_id
              LEFT JOIN commissions c
                ON c.affiliate_id = a.id
               AND c.earned_at >= (now() - $1::interval)
+             LEFT JOIN (
+               SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+               FROM order_items
+               GROUP BY order_id
+             ) oi ON oi.order_id = c.order_id
             WHERE a.status = 'APPROVED'
             GROUP BY a.id, u.telegram_username
          ),
@@ -635,11 +660,15 @@ async function requestAffiliatePayout(req, res, next) {
     }
 
     const commissionsRes = await client.query(
-      `SELECT id, amount
-       FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'
-       ORDER BY earned_at ASC
-       FOR UPDATE`,
+      `SELECT c.id, c.amount
+       FROM commissions c
+       LEFT JOIN payout_items pi ON pi.commission_id = c.id
+       LEFT JOIN payouts p ON p.id = pi.payout_id
+       WHERE c.affiliate_id = $1
+         AND c.status = 'EARNED'
+         AND (pi.commission_id IS NULL OR p.status = 'CANCELLED')
+       ORDER BY c.earned_at ASC
+       FOR UPDATE OF c`,
       [affiliate.id]
     );
 
@@ -658,6 +687,14 @@ async function requestAffiliatePayout(req, res, next) {
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
+    const commissionIds = commissionsRes.rows.map((row) => row.id);
+
+    await client.query(
+      `DELETE FROM payout_items
+       WHERE commission_id = ANY($1::uuid[])`,
+      [commissionIds]
+    );
+
     const payoutRes = await client.query(
       `INSERT INTO payouts (affiliate_id, amount, method, destination, status)
        VALUES ($1, $2, $3, $4, 'REQUESTED')
@@ -665,7 +702,6 @@ async function requestAffiliatePayout(req, res, next) {
       [affiliate.id, amount, method, destination]
     );
 
-    const commissionIds = commissionsRes.rows.map((row) => row.id);
     const payoutId = payoutRes.rows[0].id;
 
     await client.query(

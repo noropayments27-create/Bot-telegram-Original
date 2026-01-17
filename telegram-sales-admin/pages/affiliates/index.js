@@ -51,6 +51,25 @@ export default function AffiliatesPage() {
     return `$${numeric.toLocaleString("en-US", { maximumFractionDigits: 0 })}`;
   };
 
+  const formatUsdAmount = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return "-";
+    }
+    const formatted = numeric.toLocaleString("en-US", {
+      minimumFractionDigits: Number.isInteger(numeric) ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
+    return `$${formatted} USD`;
+  };
+
+  const formatAffiliateNumber = (value) => {
+    if (!value) {
+      return null;
+    }
+    return String(value).padStart(5, "0");
+  };
+
   const formatDate = (value) => {
     if (!value) {
       return "-";
@@ -465,6 +484,7 @@ export default function AffiliatesPage() {
             <thead>
               <tr>
                 <th align="left">Perfil</th>
+                <th align="left" className="affiliate-center">Afiliado</th>
                 <th align="left" className="affiliate-center">Telegram ID</th>
                 <th align="left" className="affiliate-center">Estado</th>
                 <th align="left" className="affiliate-center">Ventas</th>
@@ -508,6 +528,11 @@ export default function AffiliatesPage() {
                           </button>
                         </div>
                       </div>
+                    </td>
+                    <td className="affiliate-center">
+                      {affiliate?.affiliate_number
+                        ? `#${formatAffiliateNumber(affiliate.affiliate_number)}`
+                        : "-"}
                     </td>
                     <td className="affiliate-center">
                       <button
@@ -649,7 +674,12 @@ export default function AffiliatesPage() {
                 {!isLoading && affiliate && (
                   <>
                     <div className="orders-detail-header">
-                      <h2>Afiliado #{affiliate.id}</h2>
+                      <h2>
+                        Afiliado
+                        {affiliate?.affiliate_number
+                          ? ` #${formatAffiliateNumber(affiliate.affiliate_number)}`
+                          : ""}
+                      </h2>
                       <button
                         type="button"
                         className="link-button"
@@ -795,7 +825,7 @@ export default function AffiliatesPage() {
                             )
                           )}%`}
                         </p>
-                        <p>Balance disponible: {detail.available_balance}</p>
+                        <p>Balance disponible: {formatUsdAmount(detail.available_balance)}</p>
                         <p>
                           Ingreso:{" "}
                           {affiliate.approved_at
@@ -863,7 +893,7 @@ export default function AffiliatesPage() {
                         <p className="muted">Sin comisiones.</p>
                       ) : (
                         <div className="table-scroll affiliate-commissions-scroll">
-                          <table style={{ width: "100%", marginTop: "8px" }}>
+                          <table style={{ width: "100%", marginTop: "0px" }}>
                             <thead>
                               <tr>
                                 <th align="left">Número</th>

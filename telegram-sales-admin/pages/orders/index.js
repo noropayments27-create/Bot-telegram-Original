@@ -523,6 +523,7 @@ export default function OrdersPage() {
               <tr>
                 <th align="left">Número</th>
                 <th align="left">Telegram</th>
+                <th align="left">Username</th>
                 <th align="left">Producto</th>
                 <th align="left">Estado</th>
                 <th align="left">Creada</th>
@@ -535,6 +536,7 @@ export default function OrdersPage() {
                   <tr className="orders-placeholder">
                     <td>—</td>
                     <td>0000000000</td>
+                    <td>@usuario</td>
                     <td>Producto de ejemplo</td>
                     <td>CREATED</td>
                     <td>Hace 2 min</td>
@@ -545,6 +547,7 @@ export default function OrdersPage() {
                   <tr className="orders-placeholder">
                     <td>—</td>
                     <td>0000000001</td>
+                    <td>@usuario</td>
                     <td>Producto de ejemplo</td>
                     <td>WAITING_PAYMENT</td>
                     <td>Hace 4 min</td>
@@ -564,17 +567,28 @@ export default function OrdersPage() {
                         ? String(order.order_number).padStart(5, "0")
                         : "-"}
                     </td>
-                <td>
-                  <button
-                    type="button"
-                    className="orders-copy"
-                    onClick={() =>
-                      handleCopy("Telegram ID", order.telegram_id)
-                    }
-                  >
-                    {order.telegram_id}
-                  </button>
-                </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="orders-copy"
+                        onClick={() =>
+                          handleCopy("Telegram ID", order.telegram_id)
+                        }
+                      >
+                        {order.telegram_id}
+                      </button>
+                    </td>
+                    <td>
+                      <button
+                        type="button"
+                        className="orders-copy"
+                        onClick={() =>
+                          handleCopy("Username", order.telegram_username)
+                        }
+                      >
+                        {formatUsername(order.telegram_username)}
+                      </button>
+                    </td>
                     <td>
                       {order.product_code
                         ? `${order.product_code} - ${cleanProductName(
