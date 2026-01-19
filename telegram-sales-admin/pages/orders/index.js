@@ -149,6 +149,7 @@ export default function OrdersPage() {
   const [detailErrors, setDetailErrors] = useState({});
   const [detailLoading, setDetailLoading] = useState({});
   const [proofUrls, setProofUrls] = useState({});
+  const [receiptUrls, setReceiptUrls] = useState({});
   const [previewUrl, setPreviewUrl] = useState("");
   const [reasons, setReasons] = useState({});
   const [isSubmittingApprove, setIsSubmittingApprove] = useState({});
@@ -258,6 +259,14 @@ export default function OrdersPage() {
       delete next[orderId];
       return next;
     });
+    setReceiptUrls((prev) => {
+      const next = { ...prev };
+      if (next[orderId]) {
+        URL.revokeObjectURL(next[orderId]);
+      }
+      delete next[orderId];
+      return next;
+    });
   }, []);
 
   const loadDetail = useCallback(async (orderId) => {
@@ -286,6 +295,29 @@ export default function OrdersPage() {
       } catch (err) {
         setProofUrls((prev) => ({ ...prev, [orderId]: "" }));
       }
+      if (
+        data?.order?.status === "PAID"
+        || data?.order?.status === "DELIVERED"
+        || data?.payment?.review_status === "APPROVED"
+      ) {
+        try {
+          const result = await apiFetchBinary(
+            `/admin/orders/${orderId}/receipt`
+          );
+          const blob = new Blob([result.buffer], { type: result.contentType });
+          const url = URL.createObjectURL(blob);
+          setReceiptUrls((prev) => {
+            if (prev[orderId]) {
+              URL.revokeObjectURL(prev[orderId]);
+            }
+            return { ...prev, [orderId]: url };
+          });
+        } catch (err) {
+          setReceiptUrls((prev) => ({ ...prev, [orderId]: "" }));
+        }
+      } else {
+        setReceiptUrls((prev) => ({ ...prev, [orderId]: "" }));
+      }
     } catch (err) {
       setDetailErrors((prev) => ({
         ...prev,
@@ -297,6 +329,7 @@ export default function OrdersPage() {
         return next;
       });
       setProofUrls((prev) => ({ ...prev, [orderId]: "" }));
+      setReceiptUrls((prev) => ({ ...prev, [orderId]: "" }));
     } finally {
       setDetailLoading((prev) => ({ ...prev, [orderId]: false }));
     }
@@ -329,8 +362,13 @@ export default function OrdersPage() {
           URL.revokeObjectURL(url);
         }
       });
+      Object.values(receiptUrls).forEach((url) => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      });
     };
-  }, [proofUrls]);
+  }, [proofUrls, receiptUrls]);
 
   useEffect(() => {
     if (!toast) {
@@ -471,6 +509,23 @@ export default function OrdersPage() {
         ...prev,
         [orderId]: "No se pudo descargar la prueba.",
       }));
+    }
+  };
+
+  const handleReceiptDownload = async (orderId) => {
+    try {
+      const result = await apiFetchBinary(`/admin/orders/${orderId}/receipt/download`);
+      const blob = new Blob([result.buffer], { type: result.contentType });
+      const url = URL.createObjectURL(blob);
+      const anchor = document.createElement("a");
+      anchor.href = url;
+      anchor.download = `recibo-${orderId}.png`;
+      document.body.appendChild(anchor);
+      anchor.click();
+      anchor.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setToast("No se pudo descargar el recibo.");
     }
   };
 
@@ -624,8 +679,13 @@ export default function OrdersPage() {
             const errorMessage = detailErrors[orderId];
             const message = detailMessages[orderId];
             const proofUrl = proofUrls[orderId];
+            const receiptUrl = receiptUrls[orderId];
             const reason = reasons[orderId] || "";
             const isApproving = isSubmittingApprove[orderId];
+            const isApproved =
+              detail?.order?.status === "PAID"
+              || detail?.order?.status === "DELIVERED"
+              || detail?.payment?.review_status === "APPROVED";
 
             return (
               <section key={orderId} className="card orders-detail-card">
@@ -699,7 +759,7 @@ export default function OrdersPage() {
                             {detail.user?.banned ? "Desbanear" : "Banear"}
                           </button>
                         </div>
-                        <p>
+                        <p className="orders-user-telegram">
                           <span className="orders-copy-label">Telegram ID:</span>
                           <button
                             type="button"
@@ -788,26 +848,53 @@ export default function OrdersPage() {
                       <div className="orders-detail-section">
                         <h3>Captura</h3>
                         {detail.payment?.screenshot_file_id && proofUrl ? (
-                          <div className="orders-proof">
-                            <img
-                              src={proofUrl}
-                              alt="Captura de pago"
-                              className="payment-proof"
-                              onClick={() => setPreviewUrl(proofUrl)}
-                              role="button"
-                              tabIndex={0}
-                              onKeyDown={(event) => {
-                                if (event.key === "Enter" || event.key === " ") {
-                                  setPreviewUrl(proofUrl);
-                                }
-                              }}
-                            />
-                            <button
-                              type="button"
-                              onClick={() => handleDownload(detail.order.id)}
-                            >
-                              Descargar
-                            </button>
+                          <div
+                            className={`orders-proof${receiptUrl ? " orders-proof--side" : ""}`}
+                          >
+                            <div>
+                              <img
+                                src={proofUrl}
+                                alt="Captura de pago"
+                                className="payment-proof"
+                                onClick={() => setPreviewUrl(proofUrl)}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    setPreviewUrl(proofUrl);
+                                  }
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleDownload(detail.order.id)}
+                              >
+                                Descargar
+                              </button>
+                            </div>
+                            {receiptUrl && (
+                              <div>
+                                <img
+                                  src={receiptUrl}
+                                  alt="Recibo"
+                                  className="payment-proof"
+                                  onClick={() => setPreviewUrl(receiptUrl)}
+                                  role="button"
+                                  tabIndex={0}
+                                  onKeyDown={(event) => {
+                                    if (event.key === "Enter" || event.key === " ") {
+                                      setPreviewUrl(receiptUrl);
+                                    }
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  onClick={() => handleReceiptDownload(detail.order.id)}
+                                >
+                                  Descargar
+                                </button>
+                              </div>
+                            )}
                           </div>
                         ) : (
                           <p>No hay captura.</p>
@@ -835,7 +922,7 @@ export default function OrdersPage() {
                                 {detail.commission.affiliate_telegram_id || "-"}
                               </button>
                             </p>
-                            <p className="orders-username">
+                            <p className="orders-inline-line">
                               <span className="orders-copy-label">Username:</span>
                               <button
                                 type="button"
@@ -895,14 +982,14 @@ export default function OrdersPage() {
                         <button
                           type="button"
                           onClick={() => handleReject(orderId, "retry")}
-                          disabled={!detail.payment?.screenshot_file_id}
+                          disabled={!detail.payment?.screenshot_file_id || isApproved}
                         >
                           Reintentar
                         </button>
                         <button
                           type="button"
                           onClick={() => handleReject(orderId, "cancel")}
-                          disabled={!detail.payment?.screenshot_file_id}
+                          disabled={!detail.payment?.screenshot_file_id || isApproved}
                         >
                           Cancelar
                         </button>

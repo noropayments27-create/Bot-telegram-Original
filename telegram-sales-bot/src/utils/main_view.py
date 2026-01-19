@@ -105,6 +105,9 @@ async def render_main_view(
     chat_id = message.chat.id
     message_id = _MAIN_MESSAGE_BY_USER.get(user_id)
 
+    def _should_fallback_to_new_message(error_text: str) -> bool:
+        return "caption is too long" in error_text or "message is too long" in error_text
+
     if message_id:
         try:
             await message.bot.edit_message_text(
@@ -143,7 +146,11 @@ async def render_main_view(
                     caption_error = str(caption_exc).lower()
                     if "message is not modified" in caption_error:
                         return message
-                    if "message to edit not found" not in caption_error and "message can't be edited" not in caption_error:
+                    if (
+                        "message to edit not found" not in caption_error
+                        and "message can't be edited" not in caption_error
+                        and not _should_fallback_to_new_message(caption_error)
+                    ):
                         return message
 
     sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)

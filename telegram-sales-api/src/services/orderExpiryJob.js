@@ -29,6 +29,9 @@ async function expireWaitingPaymentOrders() {
        JOIN users u ON u.id = o.user_id
        WHERE o.status = 'WAITING_PAYMENT'
          AND o.created_at <= now() - ($1 * interval '1 second')
+         AND NOT EXISTS (
+           SELECT 1 FROM order_payments op WHERE op.order_id = o.id
+         )
        FOR UPDATE SKIP LOCKED`,
       [expirySeconds]
     );

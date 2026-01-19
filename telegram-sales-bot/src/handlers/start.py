@@ -137,6 +137,17 @@ async def handle_nav_back(callback: CallbackQuery) -> None:
         return
     previous = pop_previous_view(callback.from_user.id)
     if not previous:
+        locale = await get_user_locale(
+            api_client, callback.from_user.id, callback.from_user.language_code
+        )
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            build_home_text(locale),
+            reply_markup=build_main_keyboard(locale),
+            parse_mode="HTML",
+            push_history=False,
+        )
         await callback.answer()
         return
     await render_main_view(

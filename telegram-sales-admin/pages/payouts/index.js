@@ -449,7 +449,7 @@ export default function PayoutsPage() {
                           onClick={() => handleMarkSent(payoutId)}
                           disabled={isSent || isCancelled}
                         >
-                          Marcar como ENVIADO
+                          Enviado
                         </button>
                         <button
                           type="button"

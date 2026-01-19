@@ -69,8 +69,8 @@ def _build_affiliate_keyboard(
     buttons.append(
         [
             InlineKeyboardButton(
-                text=t(locale, "btn_back"),
-                callback_data="nav:back",
+                text=t(locale, "btn_home"),
+                callback_data="home:show",
             )
         ]
     )
@@ -94,7 +94,11 @@ def _build_method_keyboard(locale: str | None, action: str) -> InlineKeyboardMar
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
-                )
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
@@ -245,7 +249,11 @@ def _build_panel_keyboard(locale: str | None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
-                )
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
@@ -270,6 +278,10 @@ def _build_top_keyboard(locale: str | None) -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
                 )
             ],
         ]
@@ -319,8 +331,8 @@ def _build_withdraw_confirm_keyboard(locale: str | None) -> InlineKeyboardMarkup
             ],
             [
                 InlineKeyboardButton(
-                    text=t(locale, "btn_back"),
-                    callback_data="nav:back",
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
                 )
             ],
         ]
@@ -471,17 +483,15 @@ async def handle_affiliate_info(callback: CallbackQuery, state: FSMContext) -> N
     await callback.answer()
 
 
-@router.callback_query(F.data == "affiliate:faq")
-async def handle_affiliate_faq(callback: CallbackQuery, state: FSMContext) -> None:
-    if not callback.message or not callback.from_user:
-        return
-    locale = await get_user_locale(
-        api_client, callback.from_user.id, callback.from_user.language_code
-    )
+async def _render_affiliate_faq(
+    message: Message,
+    user_id: int,
+    locale: str | None,
+) -> None:
     has_affiliate = False
     is_approved = False
     try:
-        data = await api_client.get_affiliate_status(callback.from_user.id)
+        data = await api_client.get_affiliate_status(user_id)
         affiliate = data.get("affiliate")
         if affiliate:
             has_affiliate = True
@@ -489,13 +499,33 @@ async def handle_affiliate_faq(callback: CallbackQuery, state: FSMContext) -> No
     except Exception:
         pass
     await render_main_view(
-        callback.message,
-        callback.from_user.id,
+        message,
+        user_id,
         t(locale, "affiliate_faq_text"),
         reply_markup=_build_affiliate_keyboard(locale, has_affiliate, is_approved),
         parse_mode=ParseMode.HTML,
     )
+
+
+@router.callback_query(F.data == "affiliate:faq")
+async def handle_affiliate_faq(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_faq(callback.message, callback.from_user.id, locale)
     await callback.answer()
+
+
+@router.message(F.text.in_(["❓ Preguntas Frecuentes", "❓ FAQs"]))
+async def handle_affiliate_faq_text(message: Message, state: FSMContext) -> None:
+    if not message.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
+    await _render_affiliate_faq(message, message.from_user.id, locale)
 
 
 @router.callback_query(F.data == "affiliate:panel")

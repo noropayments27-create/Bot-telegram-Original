@@ -1638,6 +1638,21 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
+    await _process_payment_proof(message, state, message.photo[-1].file_id)
+
+
+@router.message(F.document)
+async def handle_payment_document(message: Message, state: FSMContext) -> None:
+    if not message.document or not message.from_user:
+        return
+    if not message.document.mime_type or not message.document.mime_type.startswith("image/"):
+        return
+    await _process_payment_proof(message, state, message.document.file_id)
+
+
+async def _process_payment_proof(
+    message: Message, state: FSMContext, screenshot_file_id: str
+) -> None:
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
@@ -1672,7 +1687,6 @@ async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not payment_method or payment_method_order_id != order_id:
         await message.answer(t(locale, "select_payment_method_first"))
         return
-    screenshot_file_id = message.photo[-1].file_id
     payload = {
         "telegram_id": message.from_user.id,
         "screenshot_file_id": screenshot_file_id,

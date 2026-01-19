@@ -1,4 +1,5 @@
 const express = require("express");
+const fs = require("fs/promises");
 const { getPool } = require("../db");
 const requireAdmin = require("../middlewares/requireAdmin");
 const {
@@ -2178,6 +2179,331 @@ router.get("/orders/:id/payment-proof/download", async (req, res, next) => {
   await handlePaymentProof(req, res, next, true);
 });
 
+router.get("/orders/:id/receipt", async (req, res, next) => {
+  const orderId = req.params.id;
+  const pool = getPool();
+
+  try {
+    const orderRes = await pool.query(
+      `SELECT o.*, u.telegram_id, u.telegram_username,
+              p.name AS product_name,
+              p.price AS product_price,
+              op.payment_method,
+              op.review_status
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       JOIN products p ON p.id = o.product_id
+       LEFT JOIN order_payments op ON op.order_id = o.id
+       WHERE o.id = $1`,
+      [orderId]
+    );
+
+    if (orderRes.rowCount === 0) {
+      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+    }
+
+    const order = orderRes.rows[0];
+    const isApproved =
+      order.status === "PAID"
+      || order.status === "DELIVERED"
+      || order.review_status === "APPROVED";
+    if (!isApproved) {
+      return res.status(400).json({ error: "ORDER_NOT_PAID" });
+    }
+
+    const paymentRes = await pool.query(
+      "SELECT * FROM order_payments WHERE order_id = $1",
+      [orderId]
+    );
+    if (paymentRes.rowCount === 0) {
+      return res.status(404).json({ error: "NO_PAYMENT_PROOF" });
+    }
+
+    let items = [];
+    let subtotal = Number(order.unit_price_at_purchase || 0);
+    let commissionAmount = 0;
+    let referredBy = "N/A";
+    try {
+      const itemsRes = await pool.query(
+        `SELECT
+           p.name,
+           oi.qty,
+           oi.unit_price_usd,
+           oi.line_total_usd
+         FROM order_items oi
+         JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1
+         ORDER BY oi.created_at ASC`,
+        [orderId]
+      );
+      if (itemsRes.rowCount > 0) {
+        subtotal = 0;
+        items = itemsRes.rows.map((row) => {
+          const itemName = row.qty > 1 ? `${row.name} x${row.qty}` : row.name;
+          const lineTotal =
+            row.line_total_usd != null
+              ? Number(row.line_total_usd)
+              : Number(row.unit_price_usd || 0) * Number(row.qty || 0);
+          subtotal += Number.isFinite(lineTotal) ? lineTotal : 0;
+          return {
+            name: itemName,
+            price: row.line_total_usd,
+          };
+        });
+        subtotal = Number(subtotal.toFixed(2));
+      }
+    } catch (err) {
+      console.error("Receipt items query failed", err);
+    }
+
+    if (items.length === 0) {
+      items = [{ name: order.product_name, price: order.product_price }];
+      subtotal = Number(order.unit_price_at_purchase || order.product_price || 0);
+    }
+
+    try {
+      const commissionRes = await pool.query(
+        `SELECT c.amount, u.telegram_username, u.telegram_id
+         FROM commissions c
+         JOIN affiliates a ON a.id = c.affiliate_id
+         JOIN users u ON u.id = a.user_id
+         WHERE c.order_id = $1`,
+        [orderId]
+      );
+      if (commissionRes.rowCount > 0) {
+        const row = commissionRes.rows[0];
+        commissionAmount = Number(row.amount || 0);
+        const adminIds = parseAdminTelegramIds();
+        const adminId = adminIds.length > 0 ? adminIds[0] : null;
+        const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+        const isPlaceholderAffiliate =
+          row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
+        if (isPlaceholderAffiliate) {
+          referredBy = adminUsername
+            ? `@${adminUsername}`
+            : adminId
+            ? String(adminId)
+            : "N/A";
+        } else {
+          referredBy = row.telegram_username
+            ? `@${row.telegram_username}`
+            : row.telegram_id
+            ? String(row.telegram_id)
+            : "N/A";
+        }
+      }
+    } catch (err) {
+      console.error("Receipt commission query failed", err);
+    }
+
+    const orderNumberText = order.order_number
+      ? String(order.order_number).padStart(5, "0")
+      : "-";
+
+    let localTotal = null;
+    try {
+      const localData = await calculateLocalAmount(subtotal, order.payment_method);
+      if (localData) {
+        localTotal = {
+          currency: localData.currency,
+          amount: localData.amount,
+        };
+      }
+    } catch (err) {
+      console.error("Failed to calculate local total", err);
+    }
+
+    const receiptPng = await renderReceiptPng({
+      orderId: order.id,
+      orderNumber: orderNumberText,
+      telegramId: order.telegram_id,
+      username: order.telegram_username,
+      dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
+      items,
+      subtotal,
+      commission: commissionAmount,
+      total: subtotal,
+      referredBy,
+      localTotal,
+      locale: "es",
+    });
+
+    try {
+      const buffer = await fs.readFile(receiptPng.pngPath);
+      res.setHeader("Content-Type", "image/png");
+      res.send(buffer);
+    } finally {
+      await receiptPng.cleanup();
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/orders/:id/receipt/download", async (req, res, next) => {
+  const orderId = req.params.id;
+  const pool = getPool();
+
+  try {
+    const receiptRes = await pool.query(
+      `SELECT order_number
+       FROM orders
+       WHERE id = $1`,
+      [orderId]
+    );
+    if (receiptRes.rowCount === 0) {
+      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+    }
+
+    const receiptResponse = await pool.query(
+      `SELECT o.*, u.telegram_id, u.telegram_username,
+              p.name AS product_name,
+              p.price AS product_price,
+              op.payment_method,
+              op.review_status
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       JOIN products p ON p.id = o.product_id
+       LEFT JOIN order_payments op ON op.order_id = o.id
+       WHERE o.id = $1`,
+      [orderId]
+    );
+    if (receiptResponse.rowCount === 0) {
+      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+    }
+
+    const order = receiptResponse.rows[0];
+    const isApproved =
+      order.status === "PAID"
+      || order.status === "DELIVERED"
+      || order.review_status === "APPROVED";
+    if (!isApproved) {
+      return res.status(400).json({ error: "ORDER_NOT_PAID" });
+    }
+
+    let items = [];
+    let subtotal = Number(order.unit_price_at_purchase || 0);
+    let commissionAmount = 0;
+    let referredBy = "N/A";
+    try {
+      const itemsRes = await pool.query(
+        `SELECT
+           p.name,
+           oi.qty,
+           oi.unit_price_usd,
+           oi.line_total_usd
+         FROM order_items oi
+         JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1
+         ORDER BY oi.created_at ASC`,
+        [orderId]
+      );
+      if (itemsRes.rowCount > 0) {
+        subtotal = 0;
+        items = itemsRes.rows.map((row) => {
+          const itemName = row.qty > 1 ? `${row.name} x${row.qty}` : row.name;
+          const lineTotal =
+            row.line_total_usd != null
+              ? Number(row.line_total_usd)
+              : Number(row.unit_price_usd || 0) * Number(row.qty || 0);
+          subtotal += Number.isFinite(lineTotal) ? lineTotal : 0;
+          return {
+            name: itemName,
+            price: row.line_total_usd,
+          };
+        });
+        subtotal = Number(subtotal.toFixed(2));
+      }
+    } catch (err) {
+      console.error("Receipt items query failed", err);
+    }
+
+    if (items.length === 0) {
+      items = [{ name: order.product_name, price: order.product_price }];
+      subtotal = Number(order.unit_price_at_purchase || order.product_price || 0);
+    }
+
+    try {
+      const commissionRes = await pool.query(
+        `SELECT c.amount, u.telegram_username, u.telegram_id
+         FROM commissions c
+         JOIN affiliates a ON a.id = c.affiliate_id
+         JOIN users u ON u.id = a.user_id
+         WHERE c.order_id = $1`,
+        [orderId]
+      );
+      if (commissionRes.rowCount > 0) {
+        const row = commissionRes.rows[0];
+        commissionAmount = Number(row.amount || 0);
+        const adminIds = parseAdminTelegramIds();
+        const adminId = adminIds.length > 0 ? adminIds[0] : null;
+        const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+        const isPlaceholderAffiliate =
+          row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
+        if (isPlaceholderAffiliate) {
+          referredBy = adminUsername
+            ? `@${adminUsername}`
+            : adminId
+            ? String(adminId)
+            : "N/A";
+        } else {
+          referredBy = row.telegram_username
+            ? `@${row.telegram_username}`
+            : row.telegram_id
+            ? String(row.telegram_id)
+            : "N/A";
+        }
+      }
+    } catch (err) {
+      console.error("Receipt commission query failed", err);
+    }
+
+    const orderNumberText = order.order_number
+      ? String(order.order_number).padStart(5, "0")
+      : "-";
+
+    let localTotal = null;
+    try {
+      const localData = await calculateLocalAmount(subtotal, order.payment_method);
+      if (localData) {
+        localTotal = {
+          currency: localData.currency,
+          amount: localData.amount,
+        };
+      }
+    } catch (err) {
+      console.error("Failed to calculate local total", err);
+    }
+
+    const receiptPng = await renderReceiptPng({
+      orderId: order.id,
+      orderNumber: orderNumberText,
+      telegramId: order.telegram_id,
+      username: order.telegram_username,
+      dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
+      items,
+      subtotal,
+      commission: commissionAmount,
+      total: subtotal,
+      referredBy,
+      localTotal,
+      locale: "es",
+    });
+
+    try {
+      const buffer = await fs.readFile(receiptPng.pngPath);
+      const filename = `recibo-${orderNumberText}.png`;
+      res.setHeader("Content-Type", "image/png");
+      res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+      res.send(buffer);
+    } finally {
+      await receiptPng.cleanup();
+    }
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/summary", async (req, res, next) => {
   const pool = getPool();
 
@@ -3501,7 +3827,7 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    const message = `🧾 Recibo de retiro pagado\n\nMonto: ${payout.amount}\nMétodo: ${payout.method}\nDestino: ${payout.destination}`;
+    const message = "🎉 **¡Pago de comisiones realizado con éxito!** 💸\n\nHemos procesado correctamente el pago de tus comisiones. Gracias por tu trabajo y por confiar en nosotros 🙌\n\n🚀 Sigue publicando y promocionando para llegar a más clientes y aumentar tus ganancias.\n\n💼✨ ¡Vamos por más!";
     try {
       const receiptPng = await renderReceiptPng({
         orderId: payout.id,
@@ -3526,7 +3852,7 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
     } catch (err) {
       console.error("Telegram payout receipt failed", err);
       try {
-        await sendMessage(payout.telegram_id, message);
+        await sendMessage(payout.telegram_id, message, { parse_mode: "Markdown" });
       } catch (fallbackError) {
         console.error("Telegram payout receipt fallback failed", fallbackError);
       }

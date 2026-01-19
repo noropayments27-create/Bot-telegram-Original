@@ -632,10 +632,10 @@ body.login-success {
 }
 
 .orders-detail-grid p {
-  margin: 2px 0;
+  margin: 0 0 2px;
   overflow-wrap: anywhere;
   word-break: break-word;
-  line-height: 1.4;
+  line-height: 0.7;
 }
 
 .payouts-detail-grid p {
@@ -919,6 +919,29 @@ body.login-success {
   flex-wrap: wrap;
 }
 
+.orders-proof--side {
+  align-items: flex-start;
+  flex-wrap: nowrap;
+}
+
+.orders-proof--side > div {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  width: 140px;
+}
+
+.orders-proof--side .payment-proof {
+  width: 120px;
+  height: 65px;
+  object-fit: contain;
+  border-radius: 0;
+}
+
+.orders-proof--side button {
+  width: 100%;
+}
+
 .payment-proof {
   cursor: pointer;
 }
@@ -1194,7 +1217,26 @@ body.login-success {
 .orders-inline-line {
   display: flex;
   align-items: center;
-  gap: 0px;
+  gap: 6px;
+  flex-wrap: wrap;
+  align-items: flex-start;
+}
+
+.orders-inline-line .orders-copy {
+  overflow-wrap: anywhere;
+  word-break: break-word;
+}
+
+.orders-detail-section .orders-inline-line {
+  margin-bottom: 6px;
+}
+
+.orders-detail-section .orders-user-telegram {
+  margin-bottom: 6px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+  align-items: flex-start;
 }
 
 .orders-detail-card .actions button {
