@@ -1,6 +1,7 @@
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from aiogram.fsm.context import FSMContext
 
 from ..config import (
     API_BASE_URL,
@@ -17,6 +18,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
 from .menu import build_home_text, build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
+from .support import start_support_flow
 from ..utils.main_view import render_main_view, set_main_message_id, pop_previous_view
 from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
@@ -202,8 +204,12 @@ async def handle_language_panel(callback: CallbackQuery) -> None:
 
 
 @router.callback_query(F.data.startswith("home:soon:"))
-async def handle_home_soon(callback: CallbackQuery) -> None:
+async def handle_home_soon(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
+        return
+    if callback.data == "home:soon:soporte":
+        await start_support_flow(callback.message, callback.from_user, state)
+        await callback.answer()
         return
     locale = await get_user_locale(
         api_client, callback.from_user.id, callback.from_user.language_code

@@ -194,6 +194,7 @@ CREATE TABLE IF NOT EXISTS tickets (
   user_id uuid NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
   status ticket_status NOT NULL DEFAULT 'OPEN',
   subject text NOT NULL,
+  allow_image boolean NOT NULL DEFAULT false,
   created_at timestamptz NOT NULL DEFAULT now(),
   closed_at timestamptz
 );
@@ -222,6 +223,7 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   image_filename text,
   image_mime text,
   buttons jsonb,
+  saved boolean NOT NULL DEFAULT false,
   status broadcast_status NOT NULL DEFAULT 'DRAFT',
   sent_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()

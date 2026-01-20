@@ -29,6 +29,15 @@ const MESSAGES = {
   },
 };
 
+const SUPPORT_MESSAGES = {
+  es: {
+    image_allowed: "🖼️ Ya puedes enviar una imagen en este ticket.",
+  },
+  en: {
+    image_allowed: "🖼️ You can now send one image in this ticket.",
+  },
+};
+
 const router = express.Router();
 
 const DELIVERY_START_DELAY_MS = Math.max(
@@ -46,9 +55,22 @@ async function ensureBroadcastSchema(pool) {
      ADD COLUMN IF NOT EXISTS image_path text,
      ADD COLUMN IF NOT EXISTS image_filename text,
      ADD COLUMN IF NOT EXISTS image_mime text,
-     ADD COLUMN IF NOT EXISTS buttons jsonb`
+     ADD COLUMN IF NOT EXISTS buttons jsonb,
+     ADD COLUMN IF NOT EXISTS saved boolean NOT NULL DEFAULT false`
   );
   broadcastSchemaReady = true;
+}
+
+let ticketSchemaReady = false;
+async function ensureTicketSchema(pool) {
+  if (ticketSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `ALTER TABLE tickets
+     ADD COLUMN IF NOT EXISTS allow_image boolean NOT NULL DEFAULT false`
+  );
+  ticketSchemaReady = true;
 }
 
 // Function to get fiat rate (COP/MXN to USD)
@@ -93,6 +115,22 @@ function normalizePaymentMethod(paymentMethod) {
     return "USDT";
   }
   return raw;
+}
+
+async function getUserLocaleByTelegramId(pool, telegramId) {
+  try {
+    const userRes = await pool.query(
+      "SELECT locale FROM users WHERE telegram_id = $1",
+      [telegramId]
+    );
+    const locale = userRes.rows[0]?.locale;
+    if (locale === "en" || locale === "es") {
+      return locale;
+    }
+  } catch (err) {
+    console.error("Failed to get user locale", err);
+  }
+  return "es";
 }
 
 async function calculateLocalAmount(usdAmount, paymentMethod) {
@@ -327,6 +365,19 @@ function mapBroadcastSegment(segment, hasCustomRecipients) {
   }
   if (segment === "ALL") {
     return "ALL_USERS";
+  }
+  return segment;
+}
+
+function normalizeBroadcastSegmentInput(segment) {
+  if (!segment) {
+    return "";
+  }
+  if (segment === "ALL_USERS") {
+    return "ALL";
+  }
+  if (segment === "CUSTOM") {
+    return "ALL";
   }
   return segment;
 }
@@ -4172,6 +4223,7 @@ router.get("/tickets", async (req, res, next) => {
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
 
   try {
+    await ensureTicketSchema(pool);
     const countRes = await pool.query(
       `SELECT COUNT(*)::int AS total FROM tickets t ${whereClause}`,
       values
@@ -4179,7 +4231,7 @@ router.get("/tickets", async (req, res, next) => {
     const total = countRes.rows[0].total;
 
     const listRes = await pool.query(
-      `SELECT t.id, t.status, t.created_at, t.closed_at,
+      `SELECT t.id, t.status, t.created_at, t.closed_at, t.allow_image,
               u.telegram_id, u.telegram_username,
               lm.created_at AS last_message_at,
               lm.message_text AS last_message_preview,
@@ -4219,6 +4271,7 @@ router.get("/tickets/:id", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    await ensureTicketSchema(pool);
     const ticketRes = await pool.query(
       `SELECT t.*, u.telegram_id, u.telegram_username
        FROM tickets t
@@ -4232,7 +4285,7 @@ router.get("/tickets/:id", async (req, res, next) => {
     }
 
     const messagesRes = await pool.query(
-      `SELECT id, sender, message_text, created_at
+      `SELECT id, sender, message_text, telegram_file_id, created_at
        FROM ticket_messages
        WHERE ticket_id = $1
        ORDER BY created_at ASC`,
@@ -4248,6 +4301,7 @@ router.get("/tickets/:id", async (req, res, next) => {
         subject: ticket.subject,
         created_at: ticket.created_at,
         closed_at: ticket.closed_at,
+        allow_image: ticket.allow_image,
       },
       user: {
         telegram_id: ticket.telegram_id,
@@ -4260,18 +4314,56 @@ router.get("/tickets/:id", async (req, res, next) => {
   }
 });
 
+router.get("/tickets/messages/:id/image", async (req, res, next) => {
+  const messageId = req.params.id;
+  const pool = getPool();
+
+  try {
+    const msgRes = await pool.query(
+      `SELECT telegram_file_id
+       FROM ticket_messages
+       WHERE id = $1`,
+      [messageId]
+    );
+    if (msgRes.rowCount === 0 || !msgRes.rows[0].telegram_file_id) {
+      return res.status(404).json({ error: "MESSAGE_IMAGE_NOT_FOUND" });
+    }
+
+    const fileId = msgRes.rows[0].telegram_file_id;
+    const filePath = await getFilePath(fileId);
+    const file = await downloadFile(filePath);
+
+    res.set("Content-Type", file.contentType || "application/octet-stream");
+    res.set("Cache-Control", "private, max-age=300");
+    return res.send(file.buffer);
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.post("/tickets/:id/reply", async (req, res, next) => {
   const ticketId = req.params.id;
   const messageText = req.body && req.body.message ? String(req.body.message).trim() : "";
+  const imageDataUrl = req.body && req.body.image_data_url
+    ? String(req.body.image_data_url).trim()
+    : "";
+  const imagePayload = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
 
-  if (!messageText) {
+  if (!messageText && !imagePayload) {
     return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+  }
+  if (imageDataUrl && !imagePayload) {
+    return res.status(400).json({ error: "IMAGE_INVALID" });
+  }
+  if (imagePayload && imagePayload.buffer.length > 6 * 1024 * 1024) {
+    return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
   }
 
   const pool = getPool();
   const client = await pool.connect();
 
   try {
+    await ensureTicketSchema(pool);
     await client.query("BEGIN");
 
     const ticketRes = await client.query(
@@ -4294,21 +4386,47 @@ router.post("/tickets/:id/reply", async (req, res, next) => {
       return res.status(400).json({ error: "TICKET_NOT_OPEN" });
     }
 
+    let telegramFileId = null;
+    if (imagePayload) {
+      const extension = getImageExtension(imagePayload.mime);
+      const filename = `ticket-${ticketId}.${extension}`;
+      const tempPath = path.join(
+        path.resolve(__dirname, "..", "..", "uploads", "tickets"),
+        filename
+      );
+      await fs.mkdir(path.dirname(tempPath), { recursive: true });
+      await fs.writeFile(tempPath, imagePayload.buffer);
+      let sentPhoto;
+      try {
+        sentPhoto = await sendPhoto(ticket.telegram_id, {
+          path: tempPath,
+          filename,
+          caption: messageText || undefined,
+          parse_mode: "HTML",
+        });
+      } finally {
+        try {
+          await fs.unlink(tempPath);
+        } catch (err) {
+          // ignore cleanup errors
+        }
+      }
+      if (sentPhoto && Array.isArray(sentPhoto.photo) && sentPhoto.photo.length > 0) {
+        telegramFileId = sentPhoto.photo[sentPhoto.photo.length - 1].file_id;
+      }
+    } else {
+      const text = `📩 Respuesta de soporte:\n\n${messageText}`;
+      await sendMessage(ticket.telegram_id, text);
+    }
+
     const msgRes = await client.query(
-      `INSERT INTO ticket_messages (ticket_id, sender, message_text)
-       VALUES ($1, 'ADMIN', $2)
+      `INSERT INTO ticket_messages (ticket_id, sender, message_text, telegram_file_id)
+       VALUES ($1, 'ADMIN', $2, $3)
        RETURNING *`,
-      [ticketId, messageText]
+      [ticketId, messageText || null, telegramFileId]
     );
 
     await client.query("COMMIT");
-
-    const text = `📩 Respuesta de soporte:\n\n${messageText}`;
-    try {
-      await sendMessage(ticket.telegram_id, text);
-    } catch (err) {
-      console.error("Telegram notification failed", err);
-    }
 
     return res.json({ ok: true, message: msgRes.rows[0] });
   } catch (error) {
@@ -4316,6 +4434,51 @@ router.post("/tickets/:id/reply", async (req, res, next) => {
     return next(error);
   } finally {
     client.release();
+  }
+});
+
+router.post("/tickets/:id/allow-image", async (req, res, next) => {
+  const ticketId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureTicketSchema(pool);
+    const ticketRes = await pool.query(
+      `SELECT t.id, t.status, u.telegram_id
+       FROM tickets t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.id = $1`,
+      [ticketId]
+    );
+    if (ticketRes.rowCount === 0) {
+      return res.status(404).json({ error: "TICKET_NOT_FOUND" });
+    }
+    const ticket = ticketRes.rows[0];
+    if (ticket.status !== "OPEN") {
+      return res.status(400).json({ error: "TICKET_NOT_OPEN" });
+    }
+
+    const updateRes = await pool.query(
+      `UPDATE tickets
+       SET allow_image = true
+       WHERE id = $1
+       RETURNING *`,
+      [ticketId]
+    );
+
+    const userLocale = await getUserLocaleByTelegramId(pool, ticket.telegram_id);
+    try {
+      const text =
+        SUPPORT_MESSAGES[userLocale]?.image_allowed
+        || SUPPORT_MESSAGES.es.image_allowed;
+      await sendMessage(ticket.telegram_id, text);
+    } catch (err) {
+      console.error("Telegram notification failed", err);
+    }
+
+    return res.json({ ok: true, ticket: updateRes.rows[0] });
+  } catch (error) {
+    next(error);
   }
 });
 
@@ -4433,6 +4596,129 @@ router.get("/broadcasts/:id", async (req, res, next) => {
         chat_ids: groupChatIds,
         // Back-compat alias (deprecated):
         custom_telegram_ids: customTelegramIds,
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.patch("/broadcasts/:id", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const messageText = req.body && req.body.message !== undefined
+    ? String(req.body.message).trim()
+    : null;
+  const rawSegment = req.body && req.body.segment ? String(req.body.segment).trim() : "";
+  const imageDataUrl = req.body && req.body.image_data_url
+    ? String(req.body.image_data_url).trim()
+    : "";
+  const clearImage = Boolean(req.body && req.body.clear_image);
+  const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
+  const savedFlag = typeof req.body?.saved === "boolean" ? req.body.saved : null;
+
+  const pool = getPool();
+
+  try {
+    await ensureBroadcastSchema(pool);
+    const broadcastRes = await pool.query("SELECT * FROM broadcasts WHERE id = $1", [
+      broadcastId,
+    ]);
+    if (broadcastRes.rowCount === 0) {
+      return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+    }
+
+    const broadcast = broadcastRes.rows[0];
+    const imagePayload = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
+    if (imageDataUrl && !imagePayload) {
+      return res.status(400).json({ error: "IMAGE_INVALID" });
+    }
+    if (imagePayload && imagePayload.buffer.length > 6 * 1024 * 1024) {
+      return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
+    }
+
+    const nextMessage = messageText !== null ? messageText : broadcast.message_text;
+    const normalizedSegment = rawSegment ? normalizeBroadcastSegmentInput(rawSegment) : "";
+    const nextSegment = normalizedSegment || broadcast.segment;
+    const hasImage = Boolean(broadcast.image_path) && !clearImage;
+    if (!nextMessage && !hasImage && !imagePayload) {
+      return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+    }
+
+    const isGroups = nextSegment === "GROUPS";
+    const isChannels = nextSegment === "CHANNELS";
+    const destination = isGroups || isChannels ? "CHAT" : "DM";
+
+    const updateRes = await pool.query(
+      `UPDATE broadcasts
+       SET message_text = $1,
+           segment = $2,
+           destination = $3,
+           buttons = $4::jsonb,
+           saved = COALESCE($5, saved),
+           image_path = CASE WHEN $6 THEN NULL ELSE image_path END,
+           image_filename = CASE WHEN $6 THEN NULL ELSE image_filename END,
+           image_mime = CASE WHEN $6 THEN NULL ELSE image_mime END
+       WHERE id = $7
+       RETURNING *`,
+      [
+        nextMessage,
+        nextSegment,
+        destination,
+        JSON.stringify(buttons),
+        savedFlag,
+        clearImage,
+        broadcastId,
+      ]
+    );
+
+    let updated = updateRes.rows[0];
+    if (imagePayload) {
+      const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "broadcasts");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      const extension = getImageExtension(imagePayload.mime);
+      const filename = `broadcast-${updated.id}.${extension}`;
+      const filePath = path.join(uploadsDir, filename);
+      await fs.writeFile(filePath, imagePayload.buffer);
+      const imageRes = await pool.query(
+        `UPDATE broadcasts
+         SET image_path = $1, image_filename = $2, image_mime = $3
+         WHERE id = $4
+         RETURNING *`,
+        [filePath, filename, imagePayload.mime, updated.id]
+      );
+      updated = imageRes.rows[0];
+    }
+
+    return res.json({
+      broadcast: {
+        ...updated,
+        segment: mapBroadcastSegment(updated.segment, updated.segment === "ALL"),
+      },
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.delete("/broadcasts/:id", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureBroadcastSchema(pool);
+    const broadcastRes = await pool.query(
+      "DELETE FROM broadcasts WHERE id = $1 RETURNING *",
+      [broadcastId]
+    );
+    if (broadcastRes.rowCount === 0) {
+      return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+    }
+    const deleted = broadcastRes.rows[0];
+    return res.json({
+      ok: true,
+      broadcast: {
+        ...deleted,
+        segment: mapBroadcastSegment(deleted.segment, deleted.segment === "ALL"),
       },
     });
   } catch (error) {

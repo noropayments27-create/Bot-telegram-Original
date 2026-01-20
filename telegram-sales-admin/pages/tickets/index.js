@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/router";
 
-import { apiFetch, getAuthToken } from "../../lib/api";
+import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconTickets } from "../../components/PanelIcons";
 
 const STATUS_OPTIONS = [
@@ -14,8 +14,6 @@ export default function TicketsPage() {
   const router = useRouter();
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("");
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
   const [selectedTicketIds, setSelectedTicketIds] = useState([]);
   const [details, setDetails] = useState({});
@@ -23,6 +21,9 @@ export default function TicketsPage() {
   const [detailErrors, setDetailErrors] = useState({});
   const [detailMessages, setDetailMessages] = useState({});
   const [replyById, setReplyById] = useState({});
+  const [replyImageById, setReplyImageById] = useState({});
+  const [replyImageNameById, setReplyImageNameById] = useState({});
+  const [imageByMessageId, setImageByMessageId] = useState({});
   const [toast, setToast] = useState("");
 
   useEffect(() => {
@@ -35,8 +36,8 @@ export default function TicketsPage() {
     const loadTickets = async () => {
       try {
         const params = new URLSearchParams({
-          page: String(page),
-          page_size: "20",
+          page: "1",
+          page_size: "500",
         });
         if (status) {
           params.set("status", status);
@@ -44,7 +45,6 @@ export default function TicketsPage() {
 
         const data = await apiFetch(`/admin/tickets?${params.toString()}`);
         setItems(data.items || []);
-        setTotalPages(data.total_pages || 1);
         setError("");
       } catch (err) {
         setError("No se pudo cargar tickets.");
@@ -53,7 +53,7 @@ export default function TicketsPage() {
     };
 
     loadTickets();
-  }, [page, status]);
+  }, [status]);
 
   useEffect(() => {
     const markTicketsSeen = async () => {
@@ -73,10 +73,22 @@ export default function TicketsPage() {
 
   const handleStatusChange = (event) => {
     setStatus(event.target.value);
-    setPage(1);
   };
 
   const removeDetail = useCallback((ticketId) => {
+    const messageIds = (details[ticketId]?.messages || []).map((msg) => msg.id);
+    if (messageIds.length) {
+      setImageByMessageId((prev) => {
+        const next = { ...prev };
+        messageIds.forEach((id) => {
+          if (next[id]) {
+            URL.revokeObjectURL(next[id]);
+            delete next[id];
+          }
+        });
+        return next;
+      });
+    }
     setDetails((prev) => {
       const next = { ...prev };
       delete next[ticketId];
@@ -93,6 +105,16 @@ export default function TicketsPage() {
       return next;
     });
     setReplyById((prev) => {
+      const next = { ...prev };
+      delete next[ticketId];
+      return next;
+    });
+    setReplyImageById((prev) => {
+      const next = { ...prev };
+      delete next[ticketId];
+      return next;
+    });
+    setReplyImageNameById((prev) => {
       const next = { ...prev };
       delete next[ticketId];
       return next;
@@ -149,6 +171,31 @@ export default function TicketsPage() {
   }, [detailLoading, details, loadDetail, selectedTicketIds]);
 
   useEffect(() => {
+    selectedTicketIds.forEach((ticketId) => {
+      const detail = details[ticketId];
+      if (!detail || !detail.messages) {
+        return;
+      }
+      detail.messages.forEach((msg) => {
+        if (!msg.telegram_file_id || imageByMessageId[msg.id]) {
+          return;
+        }
+        apiFetchBinary(`/admin/tickets/messages/${msg.id}/image`)
+          .then(({ buffer, contentType }) => {
+            const blob = new Blob([buffer], {
+              type: contentType || "application/octet-stream",
+            });
+            const url = URL.createObjectURL(blob);
+            setImageByMessageId((prev) => ({ ...prev, [msg.id]: url }));
+          })
+          .catch(() => {
+            // ignore image errors
+          });
+      });
+    });
+  }, [details, imageByMessageId, selectedTicketIds]);
+
+  useEffect(() => {
     if (!toast) {
       return undefined;
     }
@@ -158,13 +205,17 @@ export default function TicketsPage() {
 
   const handleReply = async (ticketId) => {
     const message = (replyById[ticketId] || "").trim();
-    if (!message) {
+    const imageDataUrl = replyImageById[ticketId] || "";
+    if (!message && !imageDataUrl) {
       return;
     }
     try {
       await apiFetch(`/admin/tickets/${ticketId}/reply`, {
         method: "POST",
-        body: JSON.stringify({ message }),
+        body: JSON.stringify({
+          message,
+          image_data_url: imageDataUrl || undefined,
+        }),
       });
       setDetailMessages((prev) => ({
         ...prev,
@@ -172,6 +223,8 @@ export default function TicketsPage() {
       }));
       setToast("Respuesta enviada.");
       setReplyById((prev) => ({ ...prev, [ticketId]: "" }));
+      setReplyImageById((prev) => ({ ...prev, [ticketId]: "" }));
+      setReplyImageNameById((prev) => ({ ...prev, [ticketId]: "" }));
       await loadDetail(ticketId);
     } catch (err) {
       setDetailErrors((prev) => ({
@@ -180,6 +233,53 @@ export default function TicketsPage() {
       }));
       setToast("No se pudo enviar la respuesta.");
     }
+  };
+
+  const handleAllowImage = async (ticketId) => {
+    try {
+      const data = await apiFetch(`/admin/tickets/${ticketId}/allow-image`, {
+        method: "POST",
+      });
+      setDetails((prev) => ({
+        ...prev,
+        [ticketId]: {
+          ...prev[ticketId],
+          ticket: {
+            ...prev[ticketId]?.ticket,
+            allow_image: data?.ticket?.allow_image ?? true,
+          },
+        },
+      }));
+      setToast("Imagen permitida.");
+    } catch (err) {
+      setToast("No se pudo permitir la imagen.");
+    }
+  };
+
+  const handleReplyImage = (ticketId, file) => {
+    if (!file) {
+      return;
+    }
+    if (!file.type || !file.type.startsWith("image/")) {
+      setToast("La imagen debe ser un archivo válido.");
+      return;
+    }
+    if (file.size > 6 * 1024 * 1024) {
+      setToast("La imagen supera el límite de 6MB.");
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      setReplyImageById((prev) => ({ ...prev, [ticketId]: reader.result || "" }));
+      setReplyImageNameById((prev) => ({
+        ...prev,
+        [ticketId]: file.name || "imagen",
+      }));
+    };
+    reader.onerror = () => {
+      setToast("No se pudo leer la imagen.");
+    };
+    reader.readAsDataURL(file);
   };
 
   const handleClose = async (ticketId) => {
@@ -198,6 +298,45 @@ export default function TicketsPage() {
       }));
       setToast("No se pudo cerrar el ticket.");
     }
+  };
+
+  const numberById = useMemo(() => {
+    const map = new Map();
+    const sorted = [...items].sort((a, b) => {
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return aTime - bTime;
+    });
+    sorted.forEach((item, index) => {
+      map.set(item.id, String(index + 1).padStart(4, "0"));
+    });
+    return map;
+  }, [items]);
+
+  const getTicketNumber = (ticketId) => numberById.get(ticketId) || "----";
+
+  const handleCopy = async (label, value) => {
+    if (value === undefined || value === null) {
+      return;
+    }
+    try {
+      await navigator.clipboard.writeText(String(value));
+      setToast(`${label} copiado.`);
+    } catch (err) {
+      setToast(`No se pudo copiar ${label}.`);
+    }
+  };
+
+  const formatStatusLabel = (statusValue) => {
+    if (!statusValue) {
+      return "-";
+    }
+    const key = String(statusValue).toUpperCase();
+    const map = {
+      OPEN: "ABIERTO",
+      CLOSED: "CERRADO",
+    };
+    return map[key] || statusValue;
   };
 
   return (
@@ -223,6 +362,7 @@ export default function TicketsPage() {
               <tr>
                 <th align="left">Ticket</th>
                 <th align="left">Estado</th>
+                <th align="left">Username</th>
                 <th align="left">Telegram</th>
                 <th align="left">Último mensaje</th>
                 <th align="left">Admin respondió</th>
@@ -235,11 +375,38 @@ export default function TicketsPage() {
                   key={ticket.id}
                   className={selectedTicketIds.includes(ticket.id) ? "orders-row-active" : ""}
                 >
-                  <td>{ticket.id}</td>
-                  <td>{ticket.status}</td>
-                  <td>{ticket.telegram_id}</td>
-                  <td>{ticket.last_message_preview || "-"}</td>
-                  <td>{ticket.has_admin_reply ? "Si" : "No"}</td>
+                  <td align="left">{getTicketNumber(ticket.id)}</td>
+                  <td align="left">{formatStatusLabel(ticket.status)}</td>
+                  <td align="left">
+                    {ticket.telegram_username ? (
+                      <button
+                        type="button"
+                        className="orders-copy"
+                        onClick={() =>
+                          handleCopy("Username", `@${ticket.telegram_username}`)
+                        }
+                      >
+                        @{ticket.telegram_username}
+                      </button>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td align="left">
+                    {ticket.telegram_id ? (
+                      <button
+                        type="button"
+                        className="orders-copy"
+                        onClick={() => handleCopy("Telegram ID", ticket.telegram_id)}
+                      >
+                        {ticket.telegram_id}
+                      </button>
+                    ) : (
+                      "-"
+                    )}
+                  </td>
+                  <td align="left">{ticket.last_message_preview || "-"}</td>
+                  <td align="left">{ticket.has_admin_reply ? "Si" : "No"}</td>
                   <td>
                     <button
                       type="button"
@@ -254,22 +421,6 @@ export default function TicketsPage() {
             </tbody>
           </table>
         </div>
-        <div className="actions" style={{ marginTop: "16px" }}>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.max(prev - 1, 1))}
-            disabled={page <= 1}
-          >
-            Anterior
-          </button>
-          <button
-            type="button"
-            onClick={() => setPage((prev) => Math.min(prev + 1, totalPages))}
-            disabled={page >= totalPages}
-          >
-            Siguiente
-          </button>
-        </div>
       </section>
       {selectedTicketIds.length > 0 && (
         <div className="orders-detail-wrap">
@@ -281,15 +432,20 @@ export default function TicketsPage() {
             const replyValue = replyById[ticketId] || "";
 
             return (
-              <section key={ticketId} className="card orders-detail-card">
+              <section
+                key={ticketId}
+                className="card orders-detail-card"
+                style={{ position: "relative" }}
+              >
                 {isLoading && <p>Cargando...</p>}
                 {!isLoading && detail && detail.ticket && (
                   <>
                     <div className="orders-detail-header">
-                      <h2>Ticket #{detail.ticket.id}</h2>
+                      <h2>Ticket #{getTicketNumber(detail.ticket.id)}</h2>
                       <button
                         type="button"
                         className="link-button"
+                        style={{ position: "absolute", top: "16px", right: "16px" }}
                         onClick={() => handleViewTicket(detail.ticket.id)}
                       >
                         Cerrar
@@ -301,7 +457,7 @@ export default function TicketsPage() {
                     <div className="orders-detail-grid">
                       <div className="orders-detail-section">
                         <h3>Detalle</h3>
-                        <p>Estado: {detail.ticket.status}</p>
+                        <p>Estado: {formatStatusLabel(detail.ticket.status)}</p>
                         <p>
                           Creado:{" "}
                           {detail.ticket.created_at
@@ -321,14 +477,44 @@ export default function TicketsPage() {
                       </div>
                       <div className="orders-detail-section">
                         <h3>Usuario</h3>
-                        <p>Telegram ID: {detail.user?.telegram_id || "-"}</p>
-                        <p>Username: {detail.user?.telegram_username || "-"}</p>
+                        <div className="orders-inline-line">
+                          <span className="orders-copy-label">Telegram ID:</span>
+                          {detail.user?.telegram_id ? (
+                            <button
+                              type="button"
+                              className="orders-copy"
+                              onClick={() =>
+                                handleCopy("Telegram ID", detail.user.telegram_id)
+                              }
+                            >
+                              {detail.user.telegram_id}
+                            </button>
+                          ) : (
+                            <span>-</span>
+                          )}
+                        </div>
+                        <div className="orders-inline-line">
+                          <span className="orders-copy-label">Username:</span>
+                          {detail.user?.telegram_username ? (
+                            <button
+                              type="button"
+                              className="orders-copy"
+                              onClick={() =>
+                                handleCopy("Username", `@${detail.user.telegram_username}`)
+                              }
+                            >
+                              @{detail.user.telegram_username}
+                            </button>
+                          ) : (
+                            <span>-</span>
+                          )}
+                        </div>
                       </div>
                     </div>
                     <div className="orders-detail-separator"></div>
                     <div className="orders-detail-section">
                       <h3>Conversación</h3>
-                      <div className="ticket-thread">
+                      <div className="ticket-thread" style={{ maxHeight: "220px", overflowY: "auto" }}>
                         {(detail.messages || []).length === 0 && (
                           <p className="muted">Sin mensajes.</p>
                         )}
@@ -339,7 +525,18 @@ export default function TicketsPage() {
                           >
                             <div className="ticket-bubble">
                               <strong>{msg.sender}</strong>
-                              <div>{msg.message_text}</div>
+                              {msg.message_text && <div>{msg.message_text}</div>}
+                              {msg.telegram_file_id && (
+                                imageByMessageId[msg.id] ? (
+                                  <img
+                                    src={imageByMessageId[msg.id]}
+                                    alt="Imagen del ticket"
+                                    style={{ maxWidth: "220px", borderRadius: "8px" }}
+                                  />
+                                ) : (
+                                  <div className="muted">Cargando imagen...</div>
+                                )
+                              )}
                             </div>
                             <span className="ticket-meta">
                               {new Date(msg.created_at).toLocaleString()}
@@ -364,14 +561,36 @@ export default function TicketsPage() {
                             placeholder="Escribe tu respuesta"
                           />
                         </label>
+                        <label>
+                          Imagen (opcional)
+                          <input
+                            type="file"
+                            accept="image/*"
+                            onChange={(event) =>
+                              handleReplyImage(ticketId, event.target.files[0])
+                            }
+                          />
+                          {replyImageNameById[ticketId] && (
+                            <div className="muted">
+                              Archivo: {replyImageNameById[ticketId]}
+                            </div>
+                          )}
+                        </label>
                       </div>
                       <div className="actions">
                         <button
                           type="button"
                           onClick={() => handleReply(ticketId)}
-                          disabled={!replyValue.trim()}
+                          disabled={!replyValue.trim() && !replyImageById[ticketId]}
                         >
                           Enviar
+                        </button>
+                        <button
+                          type="button"
+                          onClick={() => handleAllowImage(ticketId)}
+                          disabled={detail.ticket.allow_image}
+                        >
+                          {detail.ticket.allow_image ? "Imagen permitida" : "Permitir imagen"}
                         </button>
                         <button
                           type="button"

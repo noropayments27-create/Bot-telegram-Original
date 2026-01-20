@@ -287,6 +287,13 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_active_ticket(self, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/tickets/active"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, params={"telegram_id": telegram_id}, timeout=5)
+            response.raise_for_status()
+            return response.json()
+
     async def send_admin_auth_decision(
         self, payload: Dict[str, Any], bot_secret: Optional[str]
     ) -> Dict[str, Any]:

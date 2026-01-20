@@ -63,7 +63,9 @@ export default function BroadcastsPage() {
   const [chatIdsText, setChatIdsText] = useState("");
   const [imageDataUrl, setImageDataUrl] = useState("");
   const [imageName, setImageName] = useState("");
+  const [imageCleared, setImageCleared] = useState(false);
   const [buttons, setButtons] = useState([]);
+  const [editingId, setEditingId] = useState("");
   const [createError, setCreateError] = useState("");
   const [createLoading, setCreateLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
@@ -179,7 +181,12 @@ export default function BroadcastsPage() {
 
   const numberById = useMemo(() => {
     const map = new Map();
-    items.forEach((item, index) => {
+    const sorted = [...items].sort((a, b) => {
+      const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+      const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+      return aTime - bTime;
+    });
+    sorted.forEach((item, index) => {
       map.set(item.id, String(index + 1).padStart(4, "0"));
     });
     return map;
@@ -235,6 +242,7 @@ export default function BroadcastsPage() {
     reader.onload = () => {
       setImageDataUrl(reader.result || "");
       setImageName(file.name || "imagen");
+      setImageCleared(false);
       setCreateError("");
     };
     reader.onerror = () => {
@@ -255,6 +263,70 @@ export default function BroadcastsPage() {
 
   const removeButton = (index) => {
     setButtons((prev) => prev.filter((_, i) => i !== index));
+  };
+
+  const startEdit = (broadcast) => {
+    if (!broadcast) {
+      return;
+    }
+    setEditingId(broadcast.id);
+    setShowCreate(true);
+    setMessage(broadcast.message_text || "");
+    setSegments([broadcast.segment || "ALL_USERS"]);
+    setCustomIdsText("");
+    setChatIdsText("");
+    setButtons(Array.isArray(broadcast.buttons) ? broadcast.buttons : []);
+    setImageDataUrl("");
+    setImageName(broadcast.image_filename ? `Imagen actual: ${broadcast.image_filename}` : "");
+    setImageCleared(false);
+  };
+
+  const resetCreateForm = () => {
+    setEditingId("");
+    setMessage("");
+    setCustomIdsText("");
+    setChatIdsText("");
+    setImageDataUrl("");
+    setImageName("");
+    setImageCleared(false);
+    setButtons([]);
+    setSegments(["ALL_USERS"]);
+    setCreateErrorMessage("");
+    setShowCreate(false);
+  };
+
+    const handleSaveBroadcast = async (broadcastId, nextSaved) => {
+    try {
+      const data = await apiFetch(`/admin/broadcasts/${broadcastId}`, {
+        method: "PATCH",
+        body: JSON.stringify({ saved: nextSaved }),
+      });
+      setItems((prev) =>
+        prev.map((item) => (item.id === broadcastId ? data.broadcast : item))
+      );
+      setToast(nextSaved ? "Difusión guardada." : "Difusión desguardada.");
+    } catch (err) {
+      setToast("No se pudo guardar la difusión.");
+    }
+  };
+
+  const handleDeleteBroadcast = async (broadcast) => {
+    if (!broadcast) {
+      return;
+    }
+    if (broadcast.saved) {
+      const confirmed = window.confirm("Esta difusión está guardada. ¿Eliminar?");
+      if (!confirmed) {
+        return;
+      }
+    }
+    try {
+      await apiFetch(`/admin/broadcasts/${broadcast.id}`, { method: "DELETE" });
+      setItems((prev) => prev.filter((item) => item.id !== broadcast.id));
+      setToast("Difusión eliminada.");
+    } catch (err) {
+      setToast("No se pudo eliminar la difusión.");
+    }
   };
 
   const handleSend = async (broadcastId) => {
@@ -308,15 +380,19 @@ export default function BroadcastsPage() {
 
   const handleCreate = async (event) => {
     event.preventDefault();
-    setCreateError("");
+    setCreateErrorMessage("");
     setCreateLoading(true);
     try {
-      if (!message.trim() && !imageDataUrl) {
+      if (!message.trim() && !imageDataUrl && !imageName) {
         setCreateErrorMessage("Escribe un mensaje o agrega una imagen.");
         return;
       }
       if (segments.length === 0) {
         setCreateErrorMessage("Selecciona al menos un segmento.");
+        return;
+      }
+      if (editingId && segments.length !== 1) {
+        setCreateErrorMessage("Selecciona un solo segmento para editar.");
         return;
       }
       const telegramIds = parseTelegramIds(customIdsText);
@@ -345,6 +421,35 @@ export default function BroadcastsPage() {
         setCreateErrorMessage("Revisa los botones: texto y URL válida (http/https).");
         return;
       }
+      if (editingId) {
+        const payload = {
+          message,
+          segment: segments[0],
+        };
+        if (imageDataUrl) {
+          payload.image_data_url = imageDataUrl;
+        }
+        if (imageCleared) {
+          payload.clear_image = true;
+        }
+        payload.buttons = cleanedButtons;
+        try {
+          const data = await apiFetch(`/admin/broadcasts/${editingId}`, {
+            method: "PATCH",
+            body: JSON.stringify(payload),
+          });
+          setItems((prev) =>
+            prev.map((item) => (item.id === editingId ? data.broadcast : item))
+          );
+          setToast("Difusión actualizada.");
+          resetCreateForm();
+          return;
+        } catch (err) {
+          setCreateErrorMessage("No se pudo actualizar la difusión.");
+          return;
+        }
+      }
+
       const created = [];
       let sentTotal = 0;
       let failedTotal = 0;
@@ -418,15 +523,7 @@ export default function BroadcastsPage() {
       } else {
         setToast("Difusión enviada.");
       }
-      setMessage("");
-      setCustomIdsText("");
-      setChatIdsText("");
-      setImageDataUrl("");
-      setImageName("");
-      setButtons([]);
-      setSegments(["ALL_USERS"]);
-      setCreateErrorMessage("");
-      setShowCreate(false);
+      resetCreateForm();
     } catch (err) {
       setCreateErrorMessage("No se pudo crear la difusión.");
     } finally {
@@ -474,19 +571,44 @@ export default function BroadcastsPage() {
                   className={
                     selectedBroadcastIds.includes(broadcast.id) ? "orders-row-active" : ""
                   }
+                  style={broadcast.saved ? { background: "rgba(34, 197, 94, 0.12)" } : undefined}
                 >
                   <td>Número: {getBroadcastNumber(broadcast.id)}</td>
                   <td>{formatStatusLabel(broadcast.status)}</td>
                   <td>{formatSegmentLabel(broadcast.segment)}</td>
                   <td>{broadcast.created_at ? new Date(broadcast.created_at).toLocaleString() : "-"}</td>
                   <td>
-                    <button
-                      type="button"
-                      className="link-button"
-                      onClick={() => handleViewBroadcast(broadcast.id)}
-                    >
-                      Ver
-                    </button>
+                    <div style={{ display: "flex", gap: "8px", flexWrap: "nowrap" }}>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => handleViewBroadcast(broadcast.id)}
+                      >
+                        Ver
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => handleSaveBroadcast(broadcast.id, !broadcast.saved)}
+                        style={broadcast.saved ? { opacity: 0.6 } : undefined}
+                      >
+                        Guardar
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => startEdit(broadcast)}
+                      >
+                        Editar
+                      </button>
+                      <button
+                        type="button"
+                        className="link-button"
+                        onClick={() => handleDeleteBroadcast(broadcast)}
+                      >
+                        Eliminar
+                      </button>
+                    </div>
                   </td>
                 </tr>
               ))}
@@ -502,9 +624,10 @@ export default function BroadcastsPage() {
             marginTop: "20px",
             marginLeft: 0,
             marginRight: "auto",
+            textAlign: "center",
           }}
         >
-          <h2>Nueva difusión</h2>
+          <h2>{editingId ? "Editar difusión" : "Nueva difusión"}</h2>
           {createError && <p className="error">{createError}</p>}
           <form className="form" onSubmit={handleCreate}>
             <label>
@@ -550,9 +673,11 @@ export default function BroadcastsPage() {
                   <button
                     type="button"
                     className="link-button"
+                    style={{ background: "none" }}
                     onClick={() => {
                       setImageDataUrl("");
                       setImageName("");
+                      setImageCleared(true);
                     }}
                   >
                     Quitar imagen
@@ -583,13 +708,23 @@ export default function BroadcastsPage() {
                     <button
                       type="button"
                       className="link-button"
+                      style={{ background: "none" }}
                       onClick={() => removeButton(index)}
                     >
                       Quitar
                     </button>
                   </div>
                 ))}
-                <button type="button" className="link-button" onClick={addButton}>
+                <button
+                  type="button"
+                  className="link-button"
+                  style={{
+                    border: "1px solid #ff4d00",
+                    width: "30%",
+                    margin: "0 auto",
+                  }}
+                  onClick={addButton}
+                >
                   Agregar botón
                 </button>
               </div>
@@ -631,8 +766,19 @@ export default function BroadcastsPage() {
             )}
             <div className="actions">
               <button type="submit" disabled={createLoading}>
-                {createLoading ? "Enviando..." : "Enviar"}
+                {createLoading
+                  ? editingId
+                    ? "Guardando..."
+                    : "Enviando..."
+                  : editingId
+                  ? "Guardar cambios"
+                  : "Enviar"}
               </button>
+              {editingId && (
+                <button type="button" className="link-button" onClick={resetCreateForm}>
+                  Cancelar
+                </button>
+              )}
             </div>
           </form>
         </section>

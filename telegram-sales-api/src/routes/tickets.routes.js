@@ -3,6 +3,18 @@ const { getPool } = require("../db");
 
 const router = express.Router();
 
+let ticketSchemaReady = false;
+async function ensureTicketSchema(pool) {
+  if (ticketSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `ALTER TABLE tickets
+     ADD COLUMN IF NOT EXISTS allow_image boolean NOT NULL DEFAULT false`
+  );
+  ticketSchemaReady = true;
+}
+
 async function getOrCreateUser(client, telegramId, telegramUsername) {
   const userRes = await client.query(
     "SELECT * FROM users WHERE telegram_id = $1",
@@ -38,6 +50,7 @@ router.post("/open-or-create", async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    await ensureTicketSchema(pool);
     await client.query("BEGIN");
 
     const user = await getOrCreateUser(client, telegramId, telegramUsername);
@@ -77,8 +90,8 @@ router.post("/open-or-create", async (req, res, next) => {
     }
 
     const ticketRes = await client.query(
-      `INSERT INTO tickets (user_id, status, subject)
-       VALUES ($1, 'OPEN', $2)
+      `INSERT INTO tickets (user_id, status, subject, allow_image)
+       VALUES ($1, 'OPEN', $2, false)
        RETURNING *`,
       [user.id, subject]
     );
@@ -112,17 +125,21 @@ router.post("/:id/message", async (req, res, next) => {
   const ticketId = req.params.id;
   const telegramId = Number(req.body.telegram_id);
   const messageText = req.body.message ? String(req.body.message).trim() : "";
+  const telegramFileId = req.body.telegram_file_id
+    ? String(req.body.telegram_file_id).trim()
+    : "";
 
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });
   }
-  if (!messageText) {
+  if (!messageText && !telegramFileId) {
     return res.status(400).json({ error: "message is required" });
   }
 
   const pool = getPool();
 
   try {
+    await ensureTicketSchema(pool);
     const ticketRes = await pool.query(
       `SELECT t.id, t.status
        FROM tickets t
@@ -139,14 +156,57 @@ router.post("/:id/message", async (req, res, next) => {
       return res.status(400).json({ error: "TICKET_NOT_OPEN" });
     }
 
+    if (telegramFileId) {
+      const allowRes = await pool.query(
+        "SELECT allow_image FROM tickets WHERE id = $1",
+        [ticketId]
+      );
+      if (!allowRes.rows[0]?.allow_image) {
+        return res.status(409).json({ error: "IMAGE_NOT_ALLOWED" });
+      }
+    }
+
     const msgRes = await pool.query(
-      `INSERT INTO ticket_messages (ticket_id, sender, message_text)
-       VALUES ($1, 'USER', $2)
+      `INSERT INTO ticket_messages (ticket_id, sender, message_text, telegram_file_id)
+       VALUES ($1, 'USER', $2, $3)
        RETURNING *`,
-      [ticketId, messageText]
+      [ticketId, messageText || null, telegramFileId || null]
     );
 
+    if (telegramFileId) {
+      await pool.query(
+        "UPDATE tickets SET allow_image = false WHERE id = $1",
+        [ticketId]
+      );
+    }
+
     return res.status(201).json({ message: msgRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/active", async (req, res, next) => {
+  const telegramId = Number(req.query.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  const pool = getPool();
+  try {
+    await ensureTicketSchema(pool);
+    const ticketRes = await pool.query(
+      `SELECT t.id, t.status, t.allow_image
+       FROM tickets t
+       JOIN users u ON u.id = t.user_id
+       WHERE u.telegram_id = $1 AND t.status = 'OPEN'
+       ORDER BY t.created_at DESC
+       LIMIT 1`,
+      [telegramId]
+    );
+    if (ticketRes.rowCount === 0) {
+      return res.json({ ticket: null });
+    }
+    return res.json({ ticket: ticketRes.rows[0] });
   } catch (error) {
     return next(error);
   }

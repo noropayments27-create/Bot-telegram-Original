@@ -49,7 +49,7 @@ def build_main_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
                     text=t(locale, "menu_community"), callback_data="home:community"
                 ),
                 InlineKeyboardButton(
-                    text=t(locale, "menu_support"), callback_data="home:soon:soporte"
+                    text=t(locale, "menu_support"), callback_data="home:support"
                 ),
             ],
             [
