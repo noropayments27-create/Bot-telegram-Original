@@ -15,6 +15,22 @@ async function ensureTicketSchema(pool) {
   ticketSchemaReady = true;
 }
 
+let supportBanSchemaReady = false;
+async function ensureSupportBanSchema(pool) {
+  if (supportBanSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS support_bans (
+       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+       telegram_id bigint NOT NULL UNIQUE,
+       reason text,
+       banned_at timestamptz NOT NULL DEFAULT now()
+     )`
+  );
+  supportBanSchemaReady = true;
+}
+
 async function getOrCreateUser(client, telegramId, telegramUsername) {
   const userRes = await client.query(
     "SELECT * FROM users WHERE telegram_id = $1",
@@ -51,7 +67,16 @@ router.post("/open-or-create", async (req, res, next) => {
 
   try {
     await ensureTicketSchema(pool);
+    await ensureSupportBanSchema(pool);
     await client.query("BEGIN");
+    const banRes = await client.query(
+      "SELECT 1 FROM support_bans WHERE telegram_id = $1 LIMIT 1",
+      [telegramId]
+    );
+    if (banRes.rowCount > 0) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "USER_BANNED" });
+    }
 
     const user = await getOrCreateUser(client, telegramId, telegramUsername);
 
@@ -140,6 +165,14 @@ router.post("/:id/message", async (req, res, next) => {
 
   try {
     await ensureTicketSchema(pool);
+    await ensureSupportBanSchema(pool);
+    const banRes = await pool.query(
+      "SELECT 1 FROM support_bans WHERE telegram_id = $1 LIMIT 1",
+      [telegramId]
+    );
+    if (banRes.rowCount > 0) {
+      return res.status(403).json({ error: "USER_BANNED" });
+    }
     const ticketRes = await pool.query(
       `SELECT t.id, t.status
        FROM tickets t

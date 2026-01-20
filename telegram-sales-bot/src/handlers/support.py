@@ -76,6 +76,11 @@ async def start_support_flow(message: Message, user: User, state: FSMContext) ->
 
     result = await api_client.open_or_create_ticket(payload)
 
+    if result.get("status_code") == 403:
+        await state.clear()
+        await message.answer(t(locale, "support_banned"))
+        return
+
     if result.get("status_code") == 409:
         await state.clear()
         await message.answer(
@@ -147,7 +152,11 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
         "message": text,
     }
 
-    await api_client.send_ticket_message(ticket_id, payload)
+    result = await api_client.send_ticket_message(ticket_id, payload)
+    if result.get("status_code") == 403:
+        await message.answer(t(locale, "support_banned"))
+        await state.clear()
+        return
     await message.answer(t(locale, "support_message_received"))
     await state.clear()
 
@@ -155,9 +164,6 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
 @router.message(F.photo)
 async def handle_support_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
-        return
-    current_state = await state.get_state()
-    if current_state and current_state != SupportStates.active.state:
         return
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
@@ -189,7 +195,11 @@ async def handle_support_photo(message: Message, state: FSMContext) -> None:
         "telegram_id": message.from_user.id,
         "telegram_file_id": file_id,
     }
-    await api_client.send_ticket_message(ticket["id"], payload)
+    result = await api_client.send_ticket_message(ticket["id"], payload)
+    if result.get("status_code") == 403:
+        await message.answer(t(locale, "support_banned"))
+        await state.clear()
+        return
     await message.answer(t(locale, "support_image_received"))
 
 
@@ -198,9 +208,6 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
     if not message.document or not message.from_user:
         return
     if not message.document.mime_type or not message.document.mime_type.startswith("image/"):
-        return
-    current_state = await state.get_state()
-    if current_state and current_state != SupportStates.active.state:
         return
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
@@ -231,5 +238,9 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
         "telegram_id": message.from_user.id,
         "telegram_file_id": message.document.file_id,
     }
-    await api_client.send_ticket_message(ticket["id"], payload)
+    result = await api_client.send_ticket_message(ticket["id"], payload)
+    if result.get("status_code") == 403:
+        await message.answer(t(locale, "support_banned"))
+        await state.clear()
+        return
     await message.answer(t(locale, "support_image_received"))

@@ -5,6 +5,7 @@ import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconTickets } from "../../components/PanelIcons";
 
 const STATUS_OPTIONS = [
+  { value: "NEW", label: "Nuevo" },
   { value: "", label: "Todos" },
   { value: "OPEN", label: "ABIERTO" },
   { value: "CLOSED", label: "CERRADO" },
@@ -13,7 +14,8 @@ const STATUS_OPTIONS = [
 export default function TicketsPage() {
   const router = useRouter();
   const [items, setItems] = useState([]);
-  const [status, setStatus] = useState("");
+  const [allItems, setAllItems] = useState([]);
+  const [status, setStatus] = useState("NEW");
   const [error, setError] = useState("");
   const [selectedTicketIds, setSelectedTicketIds] = useState([]);
   const [details, setDetails] = useState({});
@@ -24,6 +26,7 @@ export default function TicketsPage() {
   const [replyImageById, setReplyImageById] = useState({});
   const [replyImageNameById, setReplyImageNameById] = useState({});
   const [imageByMessageId, setImageByMessageId] = useState({});
+  const [previewImageUrl, setPreviewImageUrl] = useState("");
   const [toast, setToast] = useState("");
 
   useEffect(() => {
@@ -39,12 +42,22 @@ export default function TicketsPage() {
           page: "1",
           page_size: "500",
         });
-        if (status) {
+        if (status && status !== "NEW") {
           params.set("status", status);
         }
 
-        const data = await apiFetch(`/admin/tickets?${params.toString()}`);
-        setItems(data.items || []);
+        const [data, allData] = await Promise.all([
+          apiFetch(`/admin/tickets?${params.toString()}`),
+          apiFetch("/admin/tickets?page=1&page_size=500"),
+        ]);
+        let nextItems = data.items || [];
+        if (status === "NEW") {
+          nextItems = nextItems.filter(
+            (ticket) => ticket.status === "OPEN" && !ticket.has_admin_reply
+          );
+        }
+        setItems(nextItems);
+        setAllItems(allData.items || []);
         setError("");
       } catch (err) {
         setError("No se pudo cargar tickets.");
@@ -121,23 +134,30 @@ export default function TicketsPage() {
     });
   }, []);
 
-  const loadDetail = useCallback(async (ticketId) => {
+  const loadDetail = useCallback(async (ticketId, options = {}) => {
     if (!ticketId) {
       return;
     }
-    setDetailLoading((prev) => ({ ...prev, [ticketId]: true }));
-    setDetailErrors((prev) => ({ ...prev, [ticketId]: "" }));
+    const { silent = false } = options;
+    if (!silent) {
+      setDetailLoading((prev) => ({ ...prev, [ticketId]: true }));
+      setDetailErrors((prev) => ({ ...prev, [ticketId]: "" }));
+    }
     try {
       const data = await apiFetch(`/admin/tickets/${ticketId}`);
       setDetails((prev) => ({ ...prev, [ticketId]: data }));
     } catch (err) {
-      setDetailErrors((prev) => ({
-        ...prev,
-        [ticketId]: "No se pudo cargar el ticket.",
-      }));
-      setToast("No se pudo cargar el ticket.");
+      if (!silent) {
+        setDetailErrors((prev) => ({
+          ...prev,
+          [ticketId]: "No se pudo cargar el ticket.",
+        }));
+        setToast("No se pudo cargar el ticket.");
+      }
     } finally {
-      setDetailLoading((prev) => ({ ...prev, [ticketId]: false }));
+      if (!silent) {
+        setDetailLoading((prev) => ({ ...prev, [ticketId]: false }));
+      }
     }
   }, []);
 
@@ -163,12 +183,50 @@ export default function TicketsPage() {
   };
 
   useEffect(() => {
+    const ticketId =
+      typeof router.query.ticketId === "string" ? router.query.ticketId : "";
+    if (!ticketId) {
+      return;
+    }
+    setSelectedTicketIds((prev) => {
+      if (prev.includes(ticketId)) {
+        return prev;
+      }
+      const next = [ticketId, ...prev.filter((id) => id !== ticketId)];
+      if (next.length > 3) {
+        const removed = next.pop();
+        if (removed) {
+          removeDetail(removed);
+        }
+      }
+      return next;
+    });
+    loadDetail(ticketId);
+  }, [loadDetail, removeDetail, router.query.ticketId]);
+
+  useEffect(() => {
     selectedTicketIds.forEach((ticketId) => {
       if (!details[ticketId] && !detailLoading[ticketId]) {
         loadDetail(ticketId);
       }
     });
   }, [detailLoading, details, loadDetail, selectedTicketIds]);
+
+  useEffect(() => {
+    if (selectedTicketIds.length === 0) {
+      return undefined;
+    }
+    const interval = setInterval(() => {
+      selectedTicketIds.forEach((ticketId) => {
+        const detail = details[ticketId];
+        if (detail?.ticket?.status === "CLOSED") {
+          return;
+        }
+        loadDetail(ticketId, { silent: true });
+      });
+    }, 4000);
+    return () => clearInterval(interval);
+  }, [details, loadDetail, selectedTicketIds]);
 
   useEffect(() => {
     selectedTicketIds.forEach((ticketId) => {
@@ -256,6 +314,21 @@ export default function TicketsPage() {
     }
   };
 
+  const handleBanUser = async (ticketId) => {
+    const confirmed = window.confirm("¿Cambiar el estado de baneo de este usuario?");
+    if (!confirmed) {
+      return;
+    }
+    try {
+      const data = await apiFetch(`/admin/tickets/${ticketId}/ban-user`, {
+        method: "POST",
+      });
+      setToast(data?.banned ? "Usuario baneado." : "Usuario desbaneado.");
+    } catch (err) {
+      setToast("No se pudo banear al usuario.");
+    }
+  };
+
   const handleReplyImage = (ticketId, file) => {
     if (!file) {
       return;
@@ -302,7 +375,7 @@ export default function TicketsPage() {
 
   const numberById = useMemo(() => {
     const map = new Map();
-    const sorted = [...items].sort((a, b) => {
+    const sorted = [...allItems].sort((a, b) => {
       const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
       const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
       return aTime - bTime;
@@ -311,7 +384,7 @@ export default function TicketsPage() {
       map.set(item.id, String(index + 1).padStart(4, "0"));
     });
     return map;
-  }, [items]);
+  }, [allItems]);
 
   const getTicketNumber = (ticketId) => numberById.get(ticketId) || "----";
 
@@ -333,10 +406,21 @@ export default function TicketsPage() {
     }
     const key = String(statusValue).toUpperCase();
     const map = {
+      NEW: "Nuevo",
       OPEN: "ABIERTO",
       CLOSED: "CERRADO",
     };
     return map[key] || statusValue;
+  };
+
+  const getRowStatusLabel = (ticket) => {
+    if (!ticket) {
+      return "-";
+    }
+    if (ticket.status === "OPEN" && !ticket.has_admin_reply) {
+      return "Nuevo";
+    }
+    return formatStatusLabel(ticket.status);
   };
 
   return (
@@ -364,7 +448,7 @@ export default function TicketsPage() {
                 <th align="left">Estado</th>
                 <th align="left">Username</th>
                 <th align="left">Telegram</th>
-                <th align="left">Último mensaje</th>
+                <th align="left" className="last-message-cell">Último mensaje</th>
                 <th align="left">Admin respondió</th>
                 <th></th>
               </tr>
@@ -376,7 +460,7 @@ export default function TicketsPage() {
                   className={selectedTicketIds.includes(ticket.id) ? "orders-row-active" : ""}
                 >
                   <td align="left">{getTicketNumber(ticket.id)}</td>
-                  <td align="left">{formatStatusLabel(ticket.status)}</td>
+                  <td align="left">{getRowStatusLabel(ticket)}</td>
                   <td align="left">
                     {ticket.telegram_username ? (
                       <button
@@ -405,7 +489,11 @@ export default function TicketsPage() {
                       "-"
                     )}
                   </td>
-                  <td align="left">{ticket.last_message_preview || "-"}</td>
+                  <td align="left" className="last-message-cell">
+                    <span title={ticket.last_message_preview || ""}>
+                      {ticket.last_message_preview || "-"}
+                    </span>
+                  </td>
                   <td align="left">{ticket.has_admin_reply ? "Si" : "No"}</td>
                   <td>
                     <button
@@ -440,12 +528,19 @@ export default function TicketsPage() {
                 {isLoading && <p>Cargando...</p>}
                 {!isLoading && detail && detail.ticket && (
                   <>
-                    <div className="orders-detail-header">
+                    <div
+                      className="orders-detail-header"
+                      style={{
+                        display: "flex",
+                        alignItems: "center",
+                        justifyContent: "space-between",
+                        gap: "12px",
+                      }}
+                    >
                       <h2>Ticket #{getTicketNumber(detail.ticket.id)}</h2>
                       <button
                         type="button"
                         className="link-button"
-                        style={{ position: "absolute", top: "16px", right: "16px" }}
                         onClick={() => handleViewTicket(detail.ticket.id)}
                       >
                         Cerrar
@@ -476,7 +571,26 @@ export default function TicketsPage() {
                         </p>
                       </div>
                       <div className="orders-detail-section">
-                        <h3>Usuario</h3>
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <h3>Usuario</h3>
+                          <button
+                            type="button"
+                            className="link-button ban-button"
+                            style={{
+                              background: "#ff2400",
+                              color: "#ffffff",
+                              WebkitTextFillColor: "#ffffff",
+                              padding: "6px 12px",
+                              borderRadius: "999px",
+                              marginLeft: "6px",
+                              position: "relative",
+                              top: "-2px",
+                            }}
+                            onClick={() => handleBanUser(detail.ticket.id)}
+                          >
+                            Banear
+                          </button>
+                        </div>
                         <div className="orders-inline-line">
                           <span className="orders-copy-label">Telegram ID:</span>
                           {detail.user?.telegram_id ? (
@@ -549,8 +663,8 @@ export default function TicketsPage() {
                       <div className="form">
                         <label>
                           Respuesta
-                          <input
-                            type="text"
+                          <textarea
+                            style={{ width: "100%", height: "100px", resize: "vertical" }}
                             value={replyValue}
                             onChange={(event) =>
                               setReplyById((prev) => ({
@@ -566,6 +680,7 @@ export default function TicketsPage() {
                           <input
                             type="file"
                             accept="image/*"
+                            style={{ width: "60%" }}
                             onChange={(event) =>
                               handleReplyImage(ticketId, event.target.files[0])
                             }
@@ -574,6 +689,18 @@ export default function TicketsPage() {
                             <div className="muted">
                               Archivo: {replyImageNameById[ticketId]}
                             </div>
+                          )}
+                          {replyImageById[ticketId] && (
+                            <img
+                              src={replyImageById[ticketId]}
+                              alt="Vista previa"
+                              style={{ maxWidth: "160px", borderRadius: "8px", cursor: "zoom-in" }}
+                              onClick={(event) => {
+                                event.preventDefault();
+                                event.stopPropagation();
+                                setPreviewImageUrl(replyImageById[ticketId]);
+                              }}
+                            />
                           )}
                         </label>
                       </div>
@@ -633,6 +760,35 @@ export default function TicketsPage() {
             </svg>
           </span>
           <span>{toast}</span>
+        </div>
+      )}
+      {previewImageUrl && (
+        <div
+          role="dialog"
+          aria-modal="true"
+          onClick={() => setPreviewImageUrl("")}
+          style={{
+            position: "fixed",
+            inset: 0,
+            background: "rgba(0, 0, 0, 0.7)",
+            display: "flex",
+            alignItems: "center",
+            justifyContent: "center",
+            zIndex: 9999,
+            padding: "24px",
+          }}
+        >
+          <img
+            src={previewImageUrl}
+            alt="Vista previa"
+            onClick={(event) => event.stopPropagation()}
+            style={{
+              maxWidth: "90%",
+              maxHeight: "90%",
+              borderRadius: "10px",
+              boxShadow: "0 12px 30px rgba(0, 0, 0, 0.45)",
+            }}
+          />
         </div>
       )}
     </main>

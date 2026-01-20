@@ -1,6 +1,8 @@
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
+from aiogram.types import FSInputFile
+import os
 from aiogram.fsm.context import FSMContext
 
 from ..config import (
@@ -91,9 +93,11 @@ async def handle_start(message: Message) -> None:
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
-    photo_url = "https://i.ibb.co/356LrnLr/bot.png"
+    photo_path = os.path.join(
+        os.path.dirname(__file__), "..", "..", "assets", "bot-noropayments.png"
+    )
     sent = await message.answer_photo(
-        photo=photo_url,
+        photo=FSInputFile(photo_path),
         caption=build_home_text(locale),
         reply_markup=build_main_keyboard(locale),
         parse_mode="HTML",

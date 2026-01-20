@@ -582,6 +582,20 @@ body.login-success {
   vertical-align: middle;
 }
 
+.orders-table .last-message-cell {
+  width: 220px;
+  max-width: 220px;
+}
+
+.orders-table .last-message-cell span {
+  display: inline-block;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  vertical-align: bottom;
+}
+
 .payouts-table th,
 .payouts-table td {
   text-align: center;
@@ -1066,6 +1080,10 @@ body.login-success {
 
 .orders-detail-section .orders-copy-label {
   white-space: nowrap;
+}
+
+.ban-button {
+  color: #ffffff !important;
 }
 
 .orders-username {

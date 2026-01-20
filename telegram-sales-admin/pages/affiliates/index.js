@@ -278,6 +278,28 @@ export default function AffiliatesPage() {
     }
   };
 
+  const handleDeleteAffiliate = async (affiliateId) => {
+    const confirmed = window.confirm(
+      "¿Eliminar este afiliado y borrar todo su registro?"
+    );
+    if (!confirmed) {
+      return;
+    }
+    try {
+      await apiFetch(`/admin/affiliates/${affiliateId}`, { method: "DELETE" });
+      setItems((prev) => prev.filter((item) => item.id !== affiliateId));
+      setDetails((prev) => {
+        const next = { ...prev };
+        delete next[affiliateId];
+        return next;
+      });
+      setSelectedAffiliateIds((prev) => prev.filter((id) => id !== affiliateId));
+      setToast("Afiliado eliminado.");
+    } catch (err) {
+      setToast("No se pudo eliminar el afiliado.");
+    }
+  };
+
   const handleCopy = async (label, value) => {
     try {
       await navigator.clipboard.writeText(String(value ?? ""));
@@ -849,7 +871,17 @@ export default function AffiliatesPage() {
                         </p>
                       </div>
                       <div className="orders-detail-section">
-                        <h3>Usuario</h3>
+                        <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
+                          <h3>Usuario</h3>
+                          <button
+                            type="button"
+                            className="link-button"
+                            style={{ marginLeft: "2cm" }}
+                            onClick={() => handleDeleteAffiliate(affiliate.id)}
+                          >
+                            Eliminar afiliado
+                          </button>
+                        </div>
                         <p>
                           Telegram ID:{" "}
                           <button
@@ -876,13 +908,18 @@ export default function AffiliatesPage() {
                           Metodo:{" "}
                           {affiliate.wallet_usdt_bsc
                             ? "USDT"
+                            : affiliate.wallet_nequi
+                            ? "Nequi"
                             : affiliate.binance_id
                             ? "ID de Binance"
                             : "-"}
                         </p>
                         <p>
                           Destino:{" "}
-                          {affiliate.wallet_usdt_bsc || affiliate.binance_id || "-"}
+                          {affiliate.wallet_usdt_bsc
+                            || affiliate.wallet_nequi
+                            || affiliate.binance_id
+                            || "-"}
                         </p>
                       </div>
                     </div>

@@ -32,9 +32,22 @@ const MESSAGES = {
 const SUPPORT_MESSAGES = {
   es: {
     image_allowed: "🖼️ Ya puedes enviar una imagen en este ticket.",
+    user_banned: "⛔️ Has sido baneado de soporte por uso indebido de mensajes.",
   },
   en: {
     image_allowed: "🖼️ You can now send one image in this ticket.",
+    user_banned: "⛔️ You have been banned from support for misuse of messages.",
+  },
+};
+
+const AFFILIATE_MESSAGES = {
+  es: {
+    approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
+    rejected: "❌ Tu solicitud para ser afiliado fue rechazada por el admin.",
+  },
+  en: {
+    approved: "✅ Your affiliate request was approved by the admin.",
+    rejected: "❌ Your affiliate request was rejected by the admin.",
   },
 };
 
@@ -71,6 +84,22 @@ async function ensureTicketSchema(pool) {
      ADD COLUMN IF NOT EXISTS allow_image boolean NOT NULL DEFAULT false`
   );
   ticketSchemaReady = true;
+}
+
+let supportBanSchemaReady = false;
+async function ensureSupportBanSchema(pool) {
+  if (supportBanSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS support_bans (
+       id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+       telegram_id bigint NOT NULL UNIQUE,
+       reason text,
+       banned_at timestamptz NOT NULL DEFAULT now()
+     )`
+  );
+  supportBanSchemaReady = true;
 }
 
 // Function to get fiat rate (COP/MXN to USD)
@@ -3804,9 +3833,74 @@ router.patch("/affiliates/:id", async (req, res, next) => {
       return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
     }
 
-    return res.json({ affiliate: updateRes.rows[0] });
+    const updated = updateRes.rows[0];
+    if (normalizedStatus === "APPROVED" || normalizedStatus === "REJECTED") {
+      try {
+        const userRes = await pool.query(
+          `SELECT u.telegram_id
+           FROM affiliates a
+           JOIN users u ON u.id = a.user_id
+           WHERE a.id = $1`,
+          [affiliateId]
+        );
+        const telegramId = userRes.rows[0]?.telegram_id;
+        if (telegramId) {
+          const userLocale = await getUserLocaleByTelegramId(pool, telegramId);
+          const text =
+            normalizedStatus === "APPROVED"
+              ? (AFFILIATE_MESSAGES[userLocale]?.approved
+                || AFFILIATE_MESSAGES.es.approved)
+              : (AFFILIATE_MESSAGES[userLocale]?.rejected
+                || AFFILIATE_MESSAGES.es.rejected);
+          await sendMessage(telegramId, text);
+        }
+      } catch (err) {
+        console.error("Affiliate notification failed", err);
+      }
+    }
+
+    return res.json({ affiliate: updated });
   } catch (error) {
     return next(error);
+  }
+});
+
+router.delete("/affiliates/:id", async (req, res, next) => {
+  const affiliateId = req.params.id;
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const affiliateRes = await client.query(
+      "SELECT id FROM affiliates WHERE id = $1",
+      [affiliateId]
+    );
+    if (affiliateRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
+    }
+
+    await client.query(
+      `DELETE FROM payout_items
+       WHERE payout_id IN (SELECT id FROM payouts WHERE affiliate_id = $1)
+          OR commission_id IN (SELECT id FROM commissions WHERE affiliate_id = $1)`,
+      [affiliateId]
+    );
+    await client.query("DELETE FROM payouts WHERE affiliate_id = $1", [affiliateId]);
+    await client.query("DELETE FROM commissions WHERE affiliate_id = $1", [
+      affiliateId,
+    ]);
+    await client.query("DELETE FROM affiliates WHERE id = $1", [affiliateId]);
+
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -3872,7 +3966,7 @@ router.get("/payouts/:id", async (req, res, next) => {
          FROM payouts p
        )
        SELECT numbered.*, a.status AS affiliate_status, a.commission_rate,
-              a.wallet_usdt_bsc, a.binance_id,
+              a.wallet_usdt_bsc, a.wallet_nequi, a.binance_id,
               u.telegram_id, u.telegram_username
        FROM numbered
        JOIN affiliates a ON a.id = numbered.affiliate_id
@@ -3895,13 +3989,14 @@ router.get("/payouts/:id", async (req, res, next) => {
 
     return res.json({
       payout,
-      affiliate: {
-        id: payout.affiliate_id,
-        status: payout.affiliate_status,
-        commission_rate: payout.commission_rate,
-        wallet_usdt_bsc: payout.wallet_usdt_bsc,
-        binance_id: payout.binance_id,
-      },
+        affiliate: {
+          id: payout.affiliate_id,
+          status: payout.affiliate_status,
+          commission_rate: payout.commission_rate,
+          wallet_usdt_bsc: payout.wallet_usdt_bsc,
+          wallet_nequi: payout.wallet_nequi,
+          binance_id: payout.binance_id,
+        },
       user: {
         telegram_id: payout.telegram_id,
         telegram_username: payout.telegram_username,
@@ -3921,7 +4016,7 @@ router.post("/payouts", async (req, res, next) => {
     return res.status(400).json({ error: "AFFILIATE_REQUIRED" });
   }
 
-  if (!method || (method !== "USDT_BSC" && method !== "BINANCE_ID")) {
+  if (!method || (method !== "USDT_BSC" && method !== "BINANCE_ID" && method !== "NEQUI")) {
     return res.status(400).json({ error: "INVALID_METHOD" });
   }
 
@@ -3930,7 +4025,7 @@ router.post("/payouts", async (req, res, next) => {
     await client.query("BEGIN");
 
     const affiliateRes = await client.query(
-      "SELECT id, wallet_usdt_bsc, binance_id FROM affiliates WHERE id = $1",
+      "SELECT id, wallet_usdt_bsc, wallet_nequi, binance_id FROM affiliates WHERE id = $1",
       [affiliateId]
     );
 
@@ -3942,7 +4037,11 @@ router.post("/payouts", async (req, res, next) => {
     const affiliate = affiliateRes.rows[0];
     const resolvedDestination =
       destination ||
-      (method === "USDT_BSC" ? affiliate.wallet_usdt_bsc : affiliate.binance_id);
+      (method === "USDT_BSC"
+        ? affiliate.wallet_usdt_bsc
+        : method === "NEQUI"
+        ? affiliate.wallet_nequi
+        : affiliate.binance_id);
 
     if (!resolvedDestination) {
       await client.query("ROLLBACK");
@@ -4477,6 +4576,59 @@ router.post("/tickets/:id/allow-image", async (req, res, next) => {
     }
 
     return res.json({ ok: true, ticket: updateRes.rows[0] });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/tickets/:id/ban-user", async (req, res, next) => {
+  const ticketId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureSupportBanSchema(pool);
+    const ticketRes = await pool.query(
+      `SELECT u.telegram_id
+       FROM tickets t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.id = $1`,
+      [ticketId]
+    );
+    if (ticketRes.rowCount === 0) {
+      return res.status(404).json({ error: "TICKET_NOT_FOUND" });
+    }
+    const telegramId = ticketRes.rows[0].telegram_id;
+    if (!telegramId) {
+      return res.status(400).json({ error: "TELEGRAM_ID_REQUIRED" });
+    }
+
+    const banRes = await pool.query(
+      "SELECT 1 FROM support_bans WHERE telegram_id = $1 LIMIT 1",
+      [telegramId]
+    );
+    if (banRes.rowCount > 0) {
+      await pool.query("DELETE FROM support_bans WHERE telegram_id = $1", [
+        telegramId,
+      ]);
+      return res.json({ ok: true, banned: false });
+    }
+
+    await pool.query(
+      "INSERT INTO support_bans (telegram_id, reason) VALUES ($1, $2)",
+      [telegramId, "Banned from support tickets"]
+    );
+
+    const userLocale = await getUserLocaleByTelegramId(pool, telegramId);
+    try {
+      const text =
+        SUPPORT_MESSAGES[userLocale]?.user_banned
+        || SUPPORT_MESSAGES.es.user_banned;
+      await sendMessage(telegramId, text);
+    } catch (err) {
+      console.error("Telegram notification failed", err);
+    }
+
+    return res.json({ ok: true, banned: true });
   } catch (error) {
     next(error);
   }

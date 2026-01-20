@@ -165,6 +165,23 @@ class ApiClient:
 
         return await _request_with_retry(_do)
 
+    async def decide_affiliate(self, affiliate_id: str, status: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/affiliates/{affiliate_id}/decision"
+        payload = {"status": status}
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers=self._headers(),
+                    timeout=15,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
     async def set_user_locale(self, telegram_id: int, locale: str) -> Dict[str, Any]:
         url = f"{self.base_url}/users/{telegram_id}/locale"
         payload = {"locale": locale}
@@ -244,8 +261,8 @@ class ApiClient:
         url = f"{self.base_url}/tickets/open-or-create"
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=5)
-            if response.status_code == 409:
-                return {"status_code": 409, "data": response.json()}
+            if response.status_code in (403, 409):
+                return {"status_code": response.status_code, "data": response.json()}
             response.raise_for_status()
             return {"status_code": response.status_code, "data": response.json()}
 
@@ -284,8 +301,10 @@ class ApiClient:
         url = f"{self.base_url}/tickets/{ticket_id}/message"
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=5)
+            if response.status_code == 403:
+                return {"status_code": 403, "data": response.json()}
             response.raise_for_status()
-            return response.json()
+            return {"status_code": response.status_code, "data": response.json()}
 
     async def get_active_ticket(self, telegram_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/tickets/active"

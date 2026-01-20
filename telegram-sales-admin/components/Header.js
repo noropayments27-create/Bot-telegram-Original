@@ -104,10 +104,19 @@ export default function Header() {
   useEffect(() => {
     const loadNotifications = async () => {
       try {
-        const ordersRes = await apiFetch("/admin/orders?page=1&page_size=5");
-        const ticketsRes = await apiFetch("/admin/tickets?status=OPEN&page=1&page_size=5");
-        const payoutsRes = await apiFetch("/admin/payouts?status=REQUESTED&page=1&page_size=5");
-        const affiliatesRes = await apiFetch("/admin/affiliates?status=PENDING&page=1&page_size=5");
+        const [
+          ordersRes,
+          ticketsRes,
+          ticketsAllRes,
+          payoutsRes,
+          affiliatesRes,
+        ] = await Promise.all([
+          apiFetch("/admin/orders?page=1&page_size=5"),
+          apiFetch("/admin/tickets?status=OPEN&page=1&page_size=5"),
+          apiFetch("/admin/tickets?page=1&page_size=500"),
+          apiFetch("/admin/payouts?status=REQUESTED&page=1&page_size=5"),
+          apiFetch("/admin/affiliates?status=PENDING&page=1&page_size=5"),
+        ]);
 
         const orders = (ordersRes.items || [])
           .filter((item) => item.status === "WAITING_PAYMENT")
@@ -120,13 +129,27 @@ export default function Header() {
           href: `/orders/${item.id}`,
         }));
 
-        const tickets = (ticketsRes.items || []).map((item) => ({
+        const allTickets = ticketsAllRes.items || [];
+        const ticketNumberMap = new Map();
+        [...allTickets]
+          .sort((a, b) => {
+            const aTime = a.created_at ? new Date(a.created_at).getTime() : 0;
+            const bTime = b.created_at ? new Date(b.created_at).getTime() : 0;
+            return aTime - bTime;
+          })
+          .forEach((item, index) => {
+            ticketNumberMap.set(item.id, String(index + 1).padStart(4, "0"));
+          });
+
+        const tickets = (ticketsRes.items || [])
+          .filter((item) => item.last_message_at || item.last_message_preview)
+          .map((item) => ({
           id: item.id,
           type: "Ticket",
           status: item.status,
           created_at: item.last_message_at || item.created_at,
-          text: `Ticket #${item.id}`,
-          href: `/tickets/${item.id}`,
+          text: `Ticket #${ticketNumberMap.get(item.id) || "----"}`,
+          href: `/tickets?ticketId=${item.id}`,
         }));
 
         const payouts = (payoutsRes.items || []).map((item) => ({

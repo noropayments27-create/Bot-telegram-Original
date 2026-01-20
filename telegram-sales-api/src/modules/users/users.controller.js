@@ -1,5 +1,15 @@
 const { getPool } = require("../../db");
 const { sendMessage } = require("../../services/telegram");
+const AFFILIATE_MESSAGES = {
+  es: {
+    approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
+    rejected: "❌ Tu solicitud para ser afiliado fue rechazada por el admin.",
+  },
+  en: {
+    approved: "✅ Your affiliate request was approved by the admin.",
+    rejected: "❌ Your affiliate request was rejected by the admin.",
+  },
+};
 
 function parseAdminTelegramIds() {
   const value = process.env.ADMIN_TELEGRAM_IDS || "";
@@ -39,6 +49,22 @@ function normalizeLocale(input, languageCode) {
     return "es";
   }
   return "en";
+}
+
+async function getUserLocaleByTelegramId(pool, telegramId) {
+  try {
+    const userRes = await pool.query(
+      "SELECT locale FROM users WHERE telegram_id = $1",
+      [telegramId]
+    );
+    const locale = userRes.rows[0]?.locale;
+    if (locale === "en" || locale === "es") {
+      return locale;
+    }
+  } catch (err) {
+    // ignore locale errors
+  }
+  return "es";
 }
 
 async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
@@ -514,26 +540,34 @@ async function applyAffiliate(req, res, next) {
   const photoFileId = req.body.telegram_photo_file_id || null;
   const method = String(req.body.method || "").toUpperCase();
   const walletUsdtBsc = req.body.wallet_usdt_bsc || null;
+  const walletNequi = req.body.wallet_nequi || null;
   const binanceId = req.body.binance_id || null;
   const isWalletProvided = Boolean(walletUsdtBsc);
+  const isNequiProvided = Boolean(walletNequi);
   const isBinanceProvided = Boolean(binanceId);
 
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });
   }
-  if (method !== "USDT_BSC" && method !== "BINANCE_ID") {
+  if (method !== "USDT_BSC" && method !== "BINANCE_ID" && method !== "NEQUI") {
     return res.status(400).json({ error: "INVALID_METHOD" });
   }
-  if (isWalletProvided && isBinanceProvided) {
+  if ((isWalletProvided && isBinanceProvided)
+    || (isWalletProvided && isNequiProvided)
+    || (isNequiProvided && isBinanceProvided)) {
     return res.status(400).json({ error: "ONLY_ONE_METHOD_ALLOWED" });
   }
   if (method === "USDT_BSC" && !walletUsdtBsc) {
     return res.status(400).json({ error: "WALLET_REQUIRED" });
   }
+  if (method === "NEQUI" && !walletNequi) {
+    return res.status(400).json({ error: "WALLET_NEQUI_REQUIRED" });
+  }
   if (method === "BINANCE_ID" && !binanceId) {
     return res.status(400).json({ error: "BINANCE_ID_REQUIRED" });
   }
   const resolvedWallet = method === "USDT_BSC" ? walletUsdtBsc : null;
+  const resolvedNequi = method === "NEQUI" ? walletNequi : null;
   const resolvedBinance = method === "BINANCE_ID" ? binanceId : null;
 
   const pool = getPool();
@@ -586,30 +620,52 @@ async function applyAffiliate(req, res, next) {
       const updateRes = await client.query(
         `UPDATE affiliates
          SET wallet_usdt_bsc = $2,
-             binance_id = $3
+             wallet_nequi = $3,
+             binance_id = $4
          WHERE id = $1
          RETURNING *`,
-        [existing.id, resolvedWallet, resolvedBinance]
+        [existing.id, resolvedWallet, resolvedNequi, resolvedBinance]
       );
       await client.query("COMMIT");
       return res.json({ status: "updated", affiliate: updateRes.rows[0] });
     }
 
     const affiliateRes = await client.query(
-      `INSERT INTO affiliates (user_id, status, wallet_usdt_bsc, binance_id)
-       VALUES ($1, 'PENDING', $2, $3)
+      `INSERT INTO affiliates (user_id, status, wallet_usdt_bsc, wallet_nequi, binance_id)
+       VALUES ($1, 'PENDING', $2, $3, $4)
        RETURNING *`,
-      [userId, resolvedWallet, resolvedBinance]
+      [userId, resolvedWallet, resolvedNequi, resolvedBinance]
     );
 
     await client.query("COMMIT");
 
     const admins = parseAdminTelegramIds();
-    const notice = `📢 Nueva solicitud de afiliado\nTelegram ID: ${telegramId}\nUsuario: ${username || "-"}\nMétodo: ${method}\nDestino: ${method === "USDT_BSC" ? resolvedWallet : resolvedBinance}`;
+    const destination =
+      method === "USDT_BSC"
+        ? resolvedWallet
+        : method === "NEQUI"
+        ? resolvedNequi
+        : resolvedBinance;
+    const notice = [
+      "🆕 <b>Nueva solicitud de afiliado</b>",
+      "",
+      `🆔 Telegram ID: <code>${telegramId}</code>`,
+      `👤 Usuario: <code>${username ? `@${username}` : "-"}</code>`,
+      `💳 Método: <b>${method}</b>`,
+      `📥 Destino: <code>${destination || "-"}</code>`,
+    ].join("\n");
+    const keyboard = {
+      inline_keyboard: [
+        [
+          { text: "✅ Aprobar", callback_data: `affiliate_admin:approve:${affiliateRes.rows[0].id}` },
+          { text: "❌ Cancelar", callback_data: `affiliate_admin:reject:${affiliateRes.rows[0].id}` },
+        ],
+      ],
+    };
     await Promise.all(
       admins.map(async (adminId) => {
         try {
-          await sendMessage(adminId, notice);
+          await sendMessage(adminId, notice, { parse_mode: "HTML", reply_markup: keyboard });
         } catch (err) {
           // ignore admin notification errors
         }
@@ -651,9 +707,13 @@ async function requestAffiliatePayout(req, res, next) {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "AFFILIATE_NOT_APPROVED" });
     }
-    const method = affiliate.wallet_usdt_bsc ? "USDT_BSC" : "BINANCE_ID";
+    const method = affiliate.wallet_usdt_bsc
+      ? "USDT_BSC"
+      : affiliate.wallet_nequi
+      ? "NEQUI"
+      : "BINANCE_ID";
     const destination =
-      affiliate.wallet_usdt_bsc || affiliate.binance_id || null;
+      affiliate.wallet_usdt_bsc || affiliate.wallet_nequi || affiliate.binance_id || null;
     if (!destination) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "DESTINATION_REQUIRED" });
@@ -729,6 +789,59 @@ async function requestAffiliatePayout(req, res, next) {
   }
 }
 
+async function decideAffiliateStatus(req, res, next) {
+  const affiliateId = req.params.id;
+  const status = String(req.body?.status || "").toUpperCase();
+  if (!affiliateId) {
+    return res.status(400).json({ error: "AFFILIATE_ID_REQUIRED" });
+  }
+  if (status !== "APPROVED" && status !== "REJECTED") {
+    return res.status(400).json({ error: "INVALID_STATUS" });
+  }
+  const pool = getPool();
+  try {
+    const updateRes = await pool.query(
+      `UPDATE affiliates
+       SET status = $2,
+           approved_at = CASE
+             WHEN $2 = 'APPROVED' THEN COALESCE(approved_at, now())
+             WHEN $2 = 'REJECTED' THEN approved_at
+             ELSE approved_at
+           END
+       WHERE id = $1
+       RETURNING *`,
+      [affiliateId, status]
+    );
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
+    }
+    const affiliate = updateRes.rows[0];
+    try {
+      const userRes = await pool.query(
+        `SELECT u.telegram_id
+         FROM users u
+         JOIN affiliates a ON a.user_id = u.id
+         WHERE a.id = $1`,
+        [affiliateId]
+      );
+      const telegramId = userRes.rows[0]?.telegram_id;
+      if (telegramId) {
+        const locale = await getUserLocaleByTelegramId(pool, telegramId);
+        const text =
+          status === "APPROVED"
+            ? (AFFILIATE_MESSAGES[locale]?.approved || AFFILIATE_MESSAGES.es.approved)
+            : (AFFILIATE_MESSAGES[locale]?.rejected || AFFILIATE_MESSAGES.es.rejected);
+        await sendMessage(telegramId, text);
+      }
+    } catch (err) {
+      // ignore notify errors
+    }
+    return res.json({ affiliate });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 async function getUserBanStatus(req, res, next) {
   const telegramId = Number(req.params.telegram_id);
 
@@ -754,4 +867,5 @@ module.exports = {
   getAffiliateTop,
   applyAffiliate,
   requestAffiliatePayout,
+  decideAffiliateStatus,
 };

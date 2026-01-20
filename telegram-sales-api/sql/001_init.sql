@@ -36,7 +36,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE payout_method AS ENUM ('USDT_BSC','BINANCE_ID');
+  CREATE TYPE payout_method AS ENUM ('USDT_BSC','BINANCE_ID','NEQUI');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -85,6 +85,7 @@ CREATE TABLE IF NOT EXISTS affiliates (
   user_id uuid NOT NULL UNIQUE REFERENCES users(id) ON DELETE CASCADE,
   status affiliate_status NOT NULL DEFAULT 'PENDING',
   wallet_usdt_bsc text,
+  wallet_nequi text,
   binance_id text,
   commission_rate numeric(6,4) NOT NULL DEFAULT 0.2000,
   approved_at timestamptz,
@@ -231,6 +232,14 @@ CREATE TABLE IF NOT EXISTS broadcasts (
 
 -- USER BANS
 CREATE TABLE IF NOT EXISTS user_bans (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  telegram_id bigint NOT NULL UNIQUE,
+  reason text,
+  banned_at timestamptz NOT NULL DEFAULT now()
+);
+
+-- SUPPORT BANS
+CREATE TABLE IF NOT EXISTS support_bans (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   telegram_id bigint NOT NULL UNIQUE,
   reason text,

@@ -8,6 +8,7 @@ const {
   getAffiliateTop,
   applyAffiliate,
   requestAffiliatePayout,
+  decideAffiliateStatus,
 } = require("./users.controller");
 
 const router = express.Router();
@@ -25,6 +26,7 @@ router.get("/affiliates/status", requireBotSecret, getAffiliateStatus);
 router.get("/affiliates/top", requireBotSecret, getAffiliateTop);
 router.post("/affiliates/apply", requireBotSecret, applyAffiliate);
 router.post("/affiliates/withdraw", requireBotSecret, requestAffiliatePayout);
+router.post("/affiliates/:id/decision", requireBotSecret, decideAffiliateStatus);
 router.post("/telegram/upsert", upsertTelegramUser);
 router.get("/:telegram_id", getUserByTelegramId);
 router.get("/:telegram_id/ban", getUserBanStatus);

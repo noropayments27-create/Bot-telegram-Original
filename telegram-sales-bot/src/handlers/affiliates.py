@@ -7,11 +7,12 @@ from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
 from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 
-from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET, BOT_USERNAME
+from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET, BOT_USERNAME, ADMIN_TELEGRAM_IDS
 from ..services.api_client import ApiClient
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from ..utils.main_view import render_main_view, set_main_message_id
+from .menu import build_main_keyboard
 from ..utils.rate_limit import check_global_rate_limit
 from ..config import (
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
@@ -84,6 +85,10 @@ def _build_method_keyboard(locale: str | None, action: str) -> InlineKeyboardMar
                 InlineKeyboardButton(
                     text=t(locale, "affiliate_method_usdt"),
                     callback_data=f"affiliate:method:{action}:USDT_BSC",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_method_nequi"),
+                    callback_data=f"affiliate:method:{action}:NEQUI",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "affiliate_method_binance"),
@@ -386,6 +391,17 @@ async def _render_affiliates_home(
             is_approved = affiliate_status == "APPROVED"
     except Exception:
         data = {}
+
+    if affiliate_status == "REJECTED":
+        await state.clear()
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            t(locale, "affiliate_blocked_notice"),
+            reply_markup=build_main_keyboard(locale),
+            parse_mode="HTML",
+        )
+        return
 
     if is_approved and affiliate:
         affiliate_code = (data.get("user") or {}).get("telegram_id") or affiliate.get("id")
@@ -868,6 +884,28 @@ async def handle_affiliate_start(callback: CallbackQuery, state: FSMContext) -> 
             show_alert=True,
         )
         return
+    if not callback.from_user.username:
+        await callback.answer(
+            t(locale, "affiliate_apply_missing_username"),
+            show_alert=True,
+        )
+        return
+    try:
+        photos = await callback.message.bot.get_user_profile_photos(
+            callback.from_user.id, limit=1
+        )
+        if photos.total_count == 0:
+            await callback.answer(
+                t(locale, "affiliate_apply_missing_photo"),
+                show_alert=True,
+            )
+            return
+    except Exception:
+        await callback.answer(
+            t(locale, "affiliate_apply_missing_photo"),
+            show_alert=True,
+        )
+        return
     action = callback.data.split(":")[-1]
     await state.update_data(affiliate_action=action)
     await state.set_state(AffiliateStates.waiting_method)
@@ -902,11 +940,15 @@ async def handle_affiliate_method(callback: CallbackQuery, state: FSMContext) ->
     _, _, action, method = callback.data.split(":", 3)
     await state.update_data(affiliate_method=method, affiliate_action=action)
     await state.set_state(AffiliateStates.waiting_destination)
-    prompt_key = "affiliate_enter_wallet" if method == "USDT_BSC" else "affiliate_enter_binance"
+    method_label = {
+        "USDT_BSC": t(locale, "affiliate_method_usdt"),
+        "NEQUI": t(locale, "affiliate_method_nequi"),
+        "BINANCE_ID": t(locale, "affiliate_method_binance"),
+    }.get(method, method)
     await render_main_view(
         callback.message,
         callback.from_user.id,
-        t(locale, prompt_key),
+        t(locale, "affiliate_withdraw_prompt").format(method=method_label),
         reply_markup=InlineKeyboardMarkup(
             inline_keyboard=[
                 [
@@ -919,6 +961,49 @@ async def handle_affiliate_method(callback: CallbackQuery, state: FSMContext) ->
         ),
     )
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("affiliate_admin:"))
+async def handle_affiliate_admin_action(callback: CallbackQuery) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
+        )
+        return
+    if callback.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await callback.answer(t(locale, "admin_not_authorized"), show_alert=True)
+        return
+    parts = callback.data.split(":")
+    if len(parts) < 3:
+        await callback.answer(t(locale, "admin_invalid_request"), show_alert=True)
+        return
+    action = parts[1].upper()
+    affiliate_id = parts[2]
+    if action not in {"APPROVE", "REJECT"}:
+        await callback.answer(t(locale, "admin_invalid_decision"), show_alert=True)
+        return
+    status = "APPROVED" if action == "APPROVE" else "REJECTED"
+    try:
+        await api_client.decide_affiliate(affiliate_id, status)
+        try:
+            await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception:
+            pass
+        await callback.answer(t(locale, "admin_confirm_sent"))
+    except Exception:
+        await callback.answer(t(locale, "admin_decision_failed"), show_alert=True)
 
 
 @router.message(AffiliateStates.waiting_destination)
@@ -961,6 +1046,7 @@ async def handle_affiliate_destination(message: Message, state: FSMContext) -> N
         "telegram_photo_file_id": photo_file_id,
         "method": method,
         "wallet_usdt_bsc": destination if method == "USDT_BSC" else None,
+        "wallet_nequi": destination if method == "NEQUI" else None,
         "binance_id": destination if method == "BINANCE_ID" else None,
     }
     result = await api_client.apply_affiliate(payload)
