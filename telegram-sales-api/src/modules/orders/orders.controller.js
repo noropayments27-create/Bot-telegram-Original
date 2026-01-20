@@ -63,7 +63,34 @@ async function createOrder(req, res, next) {
     }
 
     if (product.stock_mode === "SIMPLE") {
-      if (product.stock_qty !== null && product.stock_qty !== undefined) {
+      if (product.unique_purchase) {
+        if (qty > 1) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            ok: false,
+            error: "UNIQUE_LIMIT",
+            message: "❌ Este producto solo lo puedes reclamar una vez.",
+          });
+        }
+        const alreadyPurchasedRes = await client.query(
+          `SELECT 1
+           FROM orders o
+           WHERE o.user_id = $1
+             AND o.product_id = $2
+             AND o.status IN ('PAID', 'DELIVERED')
+           LIMIT 1`,
+          [user.id, product.id]
+        );
+        if (alreadyPurchasedRes.rowCount > 0) {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            ok: false,
+            error: "UNIQUE_ALREADY_PURCHASED",
+            message: "❌ Este producto solo lo puedes reclamar una vez.",
+          });
+        }
+      }
+      if (!product.unique_purchase && product.stock_qty !== null && product.stock_qty !== undefined) {
         const holdsRes = await client.query(
           `SELECT COALESCE(SUM(qty), 0)::int AS held_qty
            FROM product_stock_holds

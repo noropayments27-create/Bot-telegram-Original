@@ -262,7 +262,11 @@ async function addToCart(req, res, next) {
     let availableStock = null;
     let isUnlimited = false;
     if (product.stock_mode === "SIMPLE") {
-      if (product.stock_qty === null || product.stock_qty === undefined) {
+      if (
+        product.unique_purchase
+        || product.stock_qty === null
+        || product.stock_qty === undefined
+      ) {
         isUnlimited = true;
       } else {
         const heldQty = Number(product.held_qty || 0);
@@ -509,6 +513,9 @@ async function checkoutCart(req, res, next) {
     for (const item of itemsRes.rows) {
       const qty = Number(item.qty);
       if (item.stock_mode === "SIMPLE") {
+        if (item.unique_purchase) {
+          continue;
+        }
         if (item.stock_qty !== null && item.stock_qty !== undefined) {
           const heldQty = holdsMap.get(item.product_id) || 0;
           const available = Math.max(Number(item.stock_qty) - heldQty, 0);

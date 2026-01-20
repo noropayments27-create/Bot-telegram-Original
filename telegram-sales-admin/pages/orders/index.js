@@ -443,9 +443,21 @@ export default function OrdersPage() {
       if (!response.ok) {
         throw new Error("APPROVE_FAILED");
       }
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (err) {
+        payload = null;
+      }
+      let message = "Pago aprobado.";
+      if (payload?.status === "delivery_retry") {
+        message = payload.delivered
+          ? "Entrega reenviada."
+          : "Pago ya aprobado. No se pudo reenviar la entrega.";
+      }
       setDetailMessages((prev) => ({
         ...prev,
-        [orderId]: "Pago aprobado.",
+        [orderId]: message,
       }));
       await loadDetail(detail.order.id);
       await loadOrders();
@@ -1043,7 +1055,30 @@ export default function OrdersPage() {
           </div>
         </div>
       )}
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          <span className="toast__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M12 8v5M12 16h.01"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+          <span>{toast}</span>
+        </div>
+      )}
     </main>
   );
 }

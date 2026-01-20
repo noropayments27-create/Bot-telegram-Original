@@ -166,6 +166,81 @@ export default function NotificationsBell({ variant = "sidebar" }) {
     () => notifications.slice(0, 5),
     [notifications]
   );
+  const renderNotificationIcon = (type) => {
+    const commonProps = {
+      className: styles.itemIconSvg,
+      viewBox: "0 0 24 24",
+      "aria-hidden": "true",
+    };
+    if (type === "Orden") {
+      return (
+        <svg {...commonProps}>
+          <rect
+            x="4"
+            y="6"
+            width="16"
+            height="12"
+            rx="2"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          />
+          <path
+            d="M8 10h8M8 14h6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    }
+    if (type === "Ticket") {
+      return (
+        <svg {...commonProps}>
+          <path
+            d="M5 5h14v7a3 3 0 0 1-3 3H9l-4 4V5z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    }
+    if (type === "Pago") {
+      return (
+        <svg {...commonProps}>
+          <path
+            d="M12 4v16M8.5 8.5c0-1.4 1.6-2.5 3.5-2.5s3.5 1.1 3.5 2.5-1.6 2.5-3.5 2.5-3.5 1.1-3.5 2.5 1.6 2.5 3.5 2.5 3.5-1.1 3.5-2.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    }
+    return (
+      <svg {...commonProps}>
+        <circle
+          cx="12"
+          cy="8"
+          r="3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M5 19a7 7 0 0 1 14 0"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  };
 
   return (
     <div
@@ -265,13 +340,18 @@ export default function NotificationsBell({ variant = "sidebar" }) {
                 router.push(item.href);
               }}
             >
-              <div className={styles.itemTitle}>{item.text}</div>
-              <div className={styles.itemMeta}>
-                {item.type} · {item.status}
-              </div>
-              <div className={styles.itemTime}>
-                {new Date(item.created_at).toLocaleString()}
-              </div>
+              <span className={styles.itemIcon}>
+                {renderNotificationIcon(item.type)}
+              </span>
+              <span className={styles.itemContent}>
+                <div className={styles.itemTitle}>{item.text}</div>
+                <div className={styles.itemMeta}>
+                  {item.type} · {item.status}
+                </div>
+                <div className={styles.itemTime}>
+                  {new Date(item.created_at).toLocaleString()}
+                </div>
+              </span>
             </button>
           ))}
         </div>

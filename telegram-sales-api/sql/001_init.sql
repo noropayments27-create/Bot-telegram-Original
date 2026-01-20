@@ -44,7 +44,17 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE broadcast_segment AS ENUM ('ALL','CLIENTS','AFFILIATES','LEADS','BY_PRODUCT');
+  CREATE TYPE broadcast_segment AS ENUM (
+    'ALL',
+    'CLIENTS',
+    'AFFILIATES',
+    'LEADS',
+    'BY_PRODUCT',
+    'BUYERS',
+    'BUYERS_AFFILIATES',
+    'GROUPS',
+    'CHANNELS'
+  );
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -208,6 +218,10 @@ CREATE TABLE IF NOT EXISTS broadcasts (
   product_id uuid NULL REFERENCES products(id) ON DELETE SET NULL,
   destination broadcast_destination NOT NULL,
   message_text text NOT NULL,
+  image_path text,
+  image_filename text,
+  image_mime text,
+  buttons jsonb,
   status broadcast_status NOT NULL DEFAULT 'DRAFT',
   sent_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()

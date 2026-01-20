@@ -105,7 +105,19 @@ export default function OrderDetail() {
       if (!response.ok) {
         throw new Error("APPROVE_FAILED");
       }
-      setMessage("Pago aprobado.");
+      let payload = null;
+      try {
+        payload = await response.json();
+      } catch (err) {
+        payload = null;
+      }
+      let nextMessage = "Pago aprobado.";
+      if (payload?.status === "delivery_retry") {
+        nextMessage = payload.delivered
+          ? "Entrega reenviada."
+          : "Pago ya aprobado. No se pudo reenviar la entrega.";
+      }
+      setMessage(nextMessage);
       await loadDetail();
     } catch (err) {
       setError("No se pudo aprobar el pago.");

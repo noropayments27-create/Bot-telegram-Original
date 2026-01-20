@@ -1,4 +1,4 @@
-from datetime import datetime
+from datetime import datetime, timezone
 import asyncio
 
 from aiogram import F, Router
@@ -127,6 +127,27 @@ def _format_date(value: str | None) -> str:
         return "-"
 
 
+def _parse_iso_datetime(value: str | None) -> datetime | None:
+    if not value:
+        return None
+    try:
+        parsed = datetime.fromisoformat(value.replace("Z", "+00:00"))
+    except Exception:
+        return None
+    if parsed.tzinfo is None:
+        return parsed.replace(tzinfo=timezone.utc)
+    return parsed.astimezone(timezone.utc)
+
+
+def _days_since_date(value: str | None) -> int | None:
+    parsed = _parse_iso_datetime(value)
+    if not parsed:
+        return None
+    today = datetime.now(timezone.utc).date()
+    delta_days = (today - parsed.date()).days
+    return max(delta_days, 0)
+
+
 def _format_affiliate_code(affiliate_code: str | int | None) -> str:
     if not affiliate_code:
         return "-"
@@ -151,9 +172,9 @@ def _compute_rank(
     earnings_total: float,
     days_since_last_sale: int | None,
 ) -> str:
-    if sales_total >= 100 and earnings_total >= 600:
+    if sales_total >= 200 and earnings_total >= 800:
         base_index = 5
-    elif sales_total >= 70 and earnings_total >= 500:
+    elif sales_total >= 100 and earnings_total >= 500:
         base_index = 4
     elif sales_total >= 40 and earnings_total >= 200:
         base_index = 3
@@ -374,9 +395,7 @@ async def _render_affiliates_home(
         days_since_last_sale = None
         try:
             last_sale_raw = affiliate.get("last_sale_at")
-            if last_sale_raw:
-                last_sale_dt = datetime.fromisoformat(last_sale_raw.replace("Z", "+00:00"))
-                days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
+            days_since_last_sale = _days_since_date(last_sale_raw)
         except Exception:
             days_since_last_sale = None
         level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
@@ -388,16 +407,28 @@ async def _render_affiliates_home(
             commission_text = f"{base_percent}% + {boost_percent}%"
         else:
             commission_text = f"{base_percent}%"
-        approval_date = _format_date(affiliate.get("approved_at") or affiliate.get("created_at"))
+        approval_date = _format_date(
+            affiliate.get("approved_at") or affiliate.get("created_at")
+        )
         days_active = 0
         try:
             created_raw = affiliate.get("approved_at") or affiliate.get("created_at")
-            if created_raw:
-                created_dt = datetime.fromisoformat(created_raw.replace("Z", "+00:00"))
-                days_active = max((datetime.utcnow() - created_dt).days + 1, 0)
+            created_dt = _parse_iso_datetime(created_raw)
+            if created_dt:
+                days_active = max(
+                    (datetime.now(timezone.utc) - created_dt).days + 1, 0
+                )
         except Exception:
             days_active = 0
-        inactivity_days = days_since_last_sale if days_since_last_sale is not None else "-"
+        if days_since_last_sale is not None:
+            inactivity_days = days_since_last_sale
+        else:
+            inactivity_fallback = _days_since_date(
+                affiliate.get("approved_at") or affiliate.get("created_at")
+            )
+            inactivity_days = (
+                inactivity_fallback if inactivity_fallback is not None else "-"
+            )
         text = (
             "🌟 ¡BIENVENIDO AL EQUIPO! 🌟\n\n"
             f"🆔 ID: {callback.from_user.id}\n"

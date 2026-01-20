@@ -226,7 +226,7 @@ export default function InventoryPage() {
       setEditShowStock(true);
       setSimpleUnlimited(false);
       setEditUnique(true);
-      setSimpleStock("1");
+      setSimpleStock("");
     }
   };
 
@@ -251,7 +251,7 @@ export default function InventoryPage() {
       setCreateShowStock(true);
       setCreateSimpleUnlimited(false);
       setCreateUnique(true);
-      setCreateSimpleStock("1");
+      setCreateSimpleStock("");
     }
   };
 
@@ -391,7 +391,7 @@ export default function InventoryPage() {
       filename: data?.product?.delivery_payload?.filename || "",
     });
     if (data?.product?.stock_mode === "SIMPLE" && data?.product?.unique_purchase) {
-      setSimpleStock("1");
+      setSimpleStock("");
       setSimpleUnlimited(false);
     }
     setTemplate(data?.product?.delivery_template || "");
@@ -692,7 +692,7 @@ export default function InventoryPage() {
       notifyMessage("Producto creado");
       if (createMode === "SIMPLE") {
         const normalizedSimpleStock = createUnique
-          ? "1"
+          ? ""
           : createSimpleUnlimited
             ? ""
             : createSimpleStock === ""
@@ -703,7 +703,7 @@ export default function InventoryPage() {
           body: JSON.stringify({
             product_id: created.id,
             stock_qty: normalizedSimpleStock,
-            unlimited: createSimpleUnlimited,
+            unlimited: createSimpleUnlimited || createUnique,
             unique_purchase: createUnique,
           }),
         });
@@ -763,8 +763,8 @@ export default function InventoryPage() {
           method: "POST",
           body: JSON.stringify({
             product_id: detail.product.id,
-            stock_qty: editUnique ? "1" : normalizedSimpleStock,
-            unlimited: simpleUnlimited,
+            stock_qty: editUnique ? "" : normalizedSimpleStock,
+            unlimited: simpleUnlimited || editUnique,
             unique_purchase: editUnique,
           }),
         });
@@ -2249,7 +2249,30 @@ export default function InventoryPage() {
         </>
       )}
       </main>
-      {toast && <div className="toast">{toast}</div>}
+      {toast && (
+        <div className="toast">
+          <span className="toast__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M12 8v5M12 16h.01"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+          <span>{toast}</span>
+        </div>
+      )}
     </>
   );
 }

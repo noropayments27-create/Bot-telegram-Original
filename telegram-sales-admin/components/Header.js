@@ -20,6 +20,81 @@ export default function Header() {
   const [bellOpen, setBellOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const headerRef = useRef(null);
+  const renderNotificationIcon = (type) => {
+    const commonProps = {
+      className: "bell-item__icon-svg",
+      viewBox: "0 0 24 24",
+      "aria-hidden": "true",
+    };
+    if (type === "Orden") {
+      return (
+        <svg {...commonProps}>
+          <rect
+            x="4"
+            y="6"
+            width="16"
+            height="12"
+            rx="2"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+          />
+          <path
+            d="M8 10h8M8 14h6"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    }
+    if (type === "Ticket") {
+      return (
+        <svg {...commonProps}>
+          <path
+            d="M5 5h14v7a3 3 0 0 1-3 3H9l-4 4V5z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinejoin="round"
+          />
+        </svg>
+      );
+    }
+    if (type === "Pago") {
+      return (
+        <svg {...commonProps}>
+          <path
+            d="M12 4v16M8.5 8.5c0-1.4 1.6-2.5 3.5-2.5s3.5 1.1 3.5 2.5-1.6 2.5-3.5 2.5-3.5 1.1-3.5 2.5 1.6 2.5 3.5 2.5 3.5-1.1 3.5-2.5"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+          />
+        </svg>
+      );
+    }
+    return (
+      <svg {...commonProps}>
+        <circle
+          cx="12"
+          cy="8"
+          r="3"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+        />
+        <path
+          d="M5 19a7 7 0 0 1 14 0"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2"
+          strokeLinecap="round"
+        />
+      </svg>
+    );
+  };
 
   useEffect(() => {
     setOpen(false);
@@ -180,13 +255,18 @@ export default function Header() {
                     router.push(item.href);
                   }}
                 >
-                  <div className="bell-item__title">{item.text}</div>
-                  <div className="bell-item__meta">
-                    {item.type} · {item.status}
-                  </div>
-                  <div className="bell-item__time">
-                    {new Date(item.created_at).toLocaleString()}
-                  </div>
+                  <span className="bell-item__icon">
+                    {renderNotificationIcon(item.type)}
+                  </span>
+                  <span className="bell-item__content">
+                    <div className="bell-item__title">{item.text}</div>
+                    <div className="bell-item__meta">
+                      {item.type} · {item.status}
+                    </div>
+                    <div className="bell-item__time">
+                      {new Date(item.created_at).toLocaleString()}
+                    </div>
+                  </span>
                 </button>
               ))}
             </div>

@@ -73,7 +73,8 @@ async function sendMultipart(
   endpoint,
   fieldName,
   filePath,
-  filename
+  filename,
+  extraFields = {}
 ) {
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/bot${token}/${endpoint}`;
@@ -84,6 +85,11 @@ async function sendMultipart(
   if (hasFormData) {
     const form = new FormData();
     form.append("chat_id", String(telegramId));
+    Object.entries(extraFields).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        form.append(key, typeof value === "string" ? value : JSON.stringify(value));
+      }
+    });
     form.append(fieldName, new Blob([buffer]), filename);
     response = await fetch(url, {
       method: "POST",
@@ -91,15 +97,29 @@ async function sendMultipart(
     });
   } else {
     const boundary = `----tg-${crypto.randomBytes(8).toString("hex")}`;
-    const header = `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="chat_id"\r\n\r\n` +
-      `${telegramId}\r\n` +
+    const parts = [
       `--${boundary}\r\n` +
-      `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
-      `Content-Type: application/octet-stream\r\n\r\n`;
+        `Content-Disposition: form-data; name="chat_id"\r\n\r\n` +
+        `${telegramId}\r\n`,
+    ];
+    Object.entries(extraFields).forEach(([key, value]) => {
+      if (value !== undefined && value !== null) {
+        const serialized = typeof value === "string" ? value : JSON.stringify(value);
+        parts.push(
+          `--${boundary}\r\n` +
+            `Content-Disposition: form-data; name="${key}"\r\n\r\n` +
+            `${serialized}\r\n`
+        );
+      }
+    });
+    parts.push(
+      `--${boundary}\r\n` +
+        `Content-Disposition: form-data; name="${fieldName}"; filename="${filename}"\r\n` +
+        `Content-Type: application/octet-stream\r\n\r\n`
+    );
     const footer = `\r\n--${boundary}--\r\n`;
     const body = Buffer.concat([
-      Buffer.from(header, "utf8"),
+      Buffer.from(parts.join(""), "utf8"),
       buffer,
       Buffer.from(footer, "utf8"),
     ]);
@@ -127,11 +147,22 @@ async function sendMultipart(
 async function sendMedia(telegramId, endpoint, fieldName, payload) {
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/bot${token}/${endpoint}`;
+  const extraFields = {};
+  if (payload.caption) {
+    extraFields.caption = payload.caption;
+  }
+  if (payload.parse_mode) {
+    extraFields.parse_mode = payload.parse_mode;
+  }
+  if (payload.reply_markup) {
+    extraFields.reply_markup = payload.reply_markup;
+  }
 
   if (payload.file_id || payload.url) {
     const body = {
       chat_id: telegramId,
       [fieldName]: payload.file_id || payload.url,
+      ...extraFields,
     };
     const response = await fetch(url, {
       method: "POST",
@@ -152,7 +183,14 @@ async function sendMedia(telegramId, endpoint, fieldName, payload) {
   if (payload.path) {
     const filename =
       payload.filename || path.basename(payload.path) || "archivo";
-    return sendMultipart(telegramId, endpoint, fieldName, payload.path, filename);
+    return sendMultipart(
+      telegramId,
+      endpoint,
+      fieldName,
+      payload.path,
+      filename,
+      extraFields
+    );
   }
 
   throw new Error("TELEGRAM_MEDIA_NOT_FOUND");

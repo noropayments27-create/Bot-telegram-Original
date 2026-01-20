@@ -1,5 +1,6 @@
 const express = require("express");
 const fs = require("fs/promises");
+const path = require("path");
 const { getPool } = require("../db");
 const requireAdmin = require("../middlewares/requireAdmin");
 const {
@@ -34,6 +35,21 @@ const DELIVERY_START_DELAY_MS = Math.max(
   Number(process.env.DELIVERY_START_DELAY_MS || 10000) || 10000,
   0
 );
+
+let broadcastSchemaReady = false;
+async function ensureBroadcastSchema(pool) {
+  if (broadcastSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `ALTER TABLE broadcasts
+     ADD COLUMN IF NOT EXISTS image_path text,
+     ADD COLUMN IF NOT EXISTS image_filename text,
+     ADD COLUMN IF NOT EXISTS image_mime text,
+     ADD COLUMN IF NOT EXISTS buttons jsonb`
+  );
+  broadcastSchemaReady = true;
+}
 
 // Function to get fiat rate (COP/MXN to USD)
 async function getFiatRate(currency) {
@@ -204,7 +220,108 @@ function normalizeTelegramIds(input) {
   return Array.from(new Set(cleaned));
 }
 
+function normalizeChatIds(input) {
+  if (!Array.isArray(input)) {
+    return [];
+  }
+  const cleaned = input
+    .map((item) => String(item).trim())
+    .filter((item) => item && /^-?[0-9]+$/.test(item));
+  return Array.from(new Set(cleaned));
+}
+
+function escapeBroadcastHtml(value) {
+  return String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
+function formatBroadcastMessage(raw) {
+  let text = escapeBroadcastHtml(raw);
+  text = text.replace(/```([\s\S]+?)```/g, (_, code) => {
+    return `<pre><code>${code}</code></pre>`;
+  });
+  text = text.replace(/`([^`]+?)`/g, "<code>$1</code>");
+  text = text.replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>");
+  text = text.replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, "$1<i>$2</i>");
+  return text;
+}
+
+function normalizeBroadcastButtons(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value
+    .map((button) => {
+      if (!button || typeof button !== "object") {
+        return null;
+      }
+      const text = String(button.text || "").trim();
+      const url = String(button.url || "").trim();
+      if (!text || !url || !/^https?:\/\//i.test(url)) {
+        return null;
+      }
+      return { text, url };
+    })
+    .filter(Boolean);
+}
+
+function parseImageDataUrl(value) {
+  if (!value) {
+    return null;
+  }
+  const raw = String(value).trim();
+  const match = raw.match(/^data:(image\/[a-zA-Z0-9.+-]+);base64,([\s\S]+)$/);
+  if (!match) {
+    return null;
+  }
+  const mime = match[1];
+  const base64 = match[2];
+  const buffer = Buffer.from(base64, "base64");
+  if (!buffer.length) {
+    return null;
+  }
+  return { mime, buffer };
+}
+
+function getImageExtension(mime) {
+  const map = {
+    "image/jpeg": "jpg",
+    "image/jpg": "jpg",
+    "image/png": "png",
+    "image/webp": "webp",
+  };
+  return map[mime] || "jpg";
+}
+
+function buildInlineKeyboard(buttons) {
+  if (!Array.isArray(buttons) || buttons.length === 0) {
+    return null;
+  }
+  return {
+    inline_keyboard: buttons.map((button) => [
+      { text: button.text, url: button.url },
+    ]),
+  };
+}
+
 function mapBroadcastSegment(segment, hasCustomRecipients) {
+  if (segment === "GROUPS") {
+    return "GROUPS";
+  }
+  if (segment === "CHANNELS") {
+    return "CHANNELS";
+  }
+  if (segment === "BUYERS") {
+    return "BUYERS";
+  }
+  if (segment === "AFFILIATES") {
+    return "AFFILIATES";
+  }
+  if (segment === "BUYERS_AFFILIATES") {
+    return "BUYERS_AFFILIATES";
+  }
   if (hasCustomRecipients) {
     return "CUSTOM";
   }
@@ -1763,12 +1880,12 @@ router.post("/stock/simple/set", async (req, res, next) => {
   const productId = req.body && req.body.product_id;
   const skuKey = req.body && req.body.sku_key;
   const simpleStock = req.body && req.body.stock_qty;
-  const unlimited = Boolean(req.body && req.body.unlimited);
   const hasUniquePurchase = req.body
     && Object.prototype.hasOwnProperty.call(req.body, "unique_purchase");
   const uniquePurchase = hasUniquePurchase
     ? Boolean(req.body && req.body.unique_purchase)
     : null;
+  const unlimited = Boolean(req.body && req.body.unlimited) || Boolean(uniquePurchase);
   const pool = getPool();
 
   if (!unlimited && (simpleStock === undefined || simpleStock === null || simpleStock === "")) {
@@ -1782,8 +1899,8 @@ router.post("/stock/simple/set", async (req, res, next) => {
       return res.status(400).json({ error: "STOCK_INVALID" });
     }
   }
-  if (uniquePurchase && !unlimited) {
-    parsedStock = 1;
+  if (uniquePurchase) {
+    parsedStock = null;
   }
 
   try {
@@ -2570,6 +2687,68 @@ router.get("/summary", async (req, res, next) => {
   }
 });
 
+router.post("/stats/reset", async (req, res, next) => {
+  const confirm = req.body?.confirm ? String(req.body.confirm).trim() : "";
+  if (confirm !== "Reset") {
+    return res.status(400).json({ error: "CONFIRM_REQUIRED" });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    await client.query(
+      `UPDATE orders
+       SET status = 'CANCELLED',
+           paid_at = NULL,
+           delivered_at = NULL`
+    );
+
+    await client.query(
+      `UPDATE product_stock_units
+       SET status = 'AVAILABLE',
+           held_by_order_id = NULL,
+           held_by_telegram_id = NULL,
+           held_by_username = NULL,
+           held_at = NULL,
+           updated_at = now()
+       WHERE status = 'HELD'`
+    );
+
+    await client.query(
+      `UPDATE product_stock_holds
+       SET status = 'EXPIRED',
+           expires_at = now(),
+           updated_at = now()
+       WHERE status = 'HELD'`
+    );
+
+    await client.query("DELETE FROM payouts");
+    await client.query("DELETE FROM commissions");
+    await client.query("DELETE FROM order_payments");
+    await client.query("DELETE FROM order_items");
+    await client.query("DELETE FROM ticket_messages");
+    await client.query("DELETE FROM tickets");
+    await client.query("DELETE FROM broadcasts");
+
+    await client.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, meta)
+       VALUES ($1, $2, $3::jsonb)`,
+      ["STATS_RESET", "stats", JSON.stringify({ confirm })]
+    );
+
+    await client.query("COMMIT");
+    return res.json({ ok: true });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/orders/:id/mark-paid", async (req, res, next) => {
   const orderId = req.params.id;
   const pool = getPool();
@@ -2604,6 +2783,27 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
     if (order.status !== "WAITING_PAYMENT") {
       await client.query("ROLLBACK");
+      if (order.status === "PAID" && !order.delivered_at) {
+        console.log("[admin/approve] retry_delivery", { order_id: orderId });
+        const deliveryResult = await deliverOrderToTelegram({
+          dbClient: pool,
+          orderId: order.id,
+          telegramId: order.telegram_id,
+        });
+        if (deliveryResult.delivered) {
+          await pool.query(
+            `UPDATE orders
+             SET status = 'DELIVERED', delivered_at = now()
+             WHERE id = $1`,
+            [order.id]
+          );
+        }
+        return res.json({
+          status: "delivery_retry",
+          delivered: Boolean(deliveryResult.delivered),
+          delivery_error: deliveryResult.error || null,
+        });
+      }
       console.log("[admin/approve] already_finalized", {
         order_id: orderId,
         status: order.status,
@@ -4158,7 +4358,14 @@ router.get("/broadcasts", async (req, res, next) => {
                 WHERE a.entity_type = 'broadcast'
                   AND a.entity_id = b.id
                   AND a.admin_action = 'BROADCAST_CUSTOM_RECIPIENTS'
-              ) AS has_custom_recipients
+              ) AS has_custom_recipients,
+              EXISTS (
+                SELECT 1
+                FROM audit_logs a
+                WHERE a.entity_type = 'broadcast'
+                  AND a.entity_id = b.id
+                  AND a.admin_action = 'BROADCAST_GROUP_CHATS'
+              ) AS has_group_recipients
        FROM broadcasts b
        ORDER BY b.created_at DESC
        LIMIT $1 OFFSET $2`,
@@ -4167,7 +4374,10 @@ router.get("/broadcasts", async (req, res, next) => {
 
     const items = listRes.rows.map((row) => ({
       ...row,
-      segment: mapBroadcastSegment(row.segment, row.has_custom_recipients),
+      segment: mapBroadcastSegment(
+        row.segment,
+        row.has_custom_recipients || row.has_group_recipients
+      ),
     }));
 
     return res.json({
@@ -4200,7 +4410,7 @@ router.get("/broadcasts/:id", async (req, res, next) => {
        FROM audit_logs
        WHERE entity_type = 'broadcast'
          AND entity_id = $1
-         AND admin_action = 'BROADCAST_CUSTOM_RECIPIENTS'
+         AND admin_action IN ('BROADCAST_CUSTOM_RECIPIENTS', 'BROADCAST_GROUP_CHATS')
        ORDER BY created_at DESC
        LIMIT 1`,
       [broadcastId]
@@ -4208,14 +4418,19 @@ router.get("/broadcasts/:id", async (req, res, next) => {
 
     const meta = auditRes.rows[0] && auditRes.rows[0].meta ? auditRes.rows[0].meta : {};
     const customTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
+    const groupChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
 
     const broadcast = broadcastRes.rows[0];
 
     return res.json({
       broadcast: {
         ...broadcast,
-        segment: mapBroadcastSegment(broadcast.segment, customTelegramIds.length > 0),
+        segment: mapBroadcastSegment(
+          broadcast.segment,
+          customTelegramIds.length > 0 || groupChatIds.length > 0
+        ),
         telegram_ids: customTelegramIds,
+        chat_ids: groupChatIds,
         // Back-compat alias (deprecated):
         custom_telegram_ids: customTelegramIds,
       },
@@ -4228,32 +4443,92 @@ router.get("/broadcasts/:id", async (req, res, next) => {
 router.post("/broadcasts", async (req, res, next) => {
   const messageText = req.body && req.body.message ? String(req.body.message).trim() : "";
   const rawSegment = req.body && req.body.segment ? String(req.body.segment).trim() : "ALL_USERS";
+  const imageDataUrl = req.body && req.body.image_data_url
+    ? String(req.body.image_data_url).trim()
+    : "";
+  const imagePayload = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
+  const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
 
-  if (!messageText) {
+  if (!messageText && !imagePayload) {
     return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+  }
+  if (imageDataUrl && !imagePayload) {
+    return res.status(400).json({ error: "IMAGE_INVALID" });
+  }
+  if (imagePayload && imagePayload.buffer.length > 6 * 1024 * 1024) {
+    return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
   }
 
   const isCustom = rawSegment === "CUSTOM";
-  if (!isCustom && rawSegment !== "ALL_USERS") {
+  const isGroups = rawSegment === "GROUPS";
+  const isChannels = rawSegment === "CHANNELS";
+  const isBuyers = rawSegment === "BUYERS";
+  const isAffiliates = rawSegment === "AFFILIATES";
+  if (
+    !isCustom
+    && !isGroups
+    && !isChannels
+    && !isBuyers
+    && !isAffiliates
+    && rawSegment !== "ALL_USERS"
+    && rawSegment !== "BUYERS_AFFILIATES"
+  ) {
     return res.status(400).json({ error: "SEGMENT_INVALID" });
   }
 
   const telegramIds = isCustom ? normalizeTelegramIds(req.body.telegram_ids) : [];
+  const chatIds = isGroups || isChannels ? normalizeChatIds(req.body.chat_ids) : [];
   if (isCustom && telegramIds.length === 0) {
     return res.status(400).json({ error: "TELEGRAM_IDS_REQUIRED" });
+  }
+  if ((isGroups || isChannels) && chatIds.length === 0) {
+    return res.status(400).json({ error: "CHAT_IDS_REQUIRED" });
   }
 
   const pool = getPool();
 
   try {
+    await ensureBroadcastSchema(pool);
     const broadcastRes = await pool.query(
-      `INSERT INTO broadcasts (segment, destination, message_text)
-       VALUES ($1, $2, $3)
+      `INSERT INTO broadcasts (segment, destination, message_text, buttons)
+       VALUES ($1, $2, $3, $4::jsonb)
        RETURNING *`,
-      ["ALL", "DM", messageText]
+      [
+        isBuyers
+          ? "BUYERS"
+          : isAffiliates
+          ? "AFFILIATES"
+          : rawSegment === "BUYERS_AFFILIATES"
+          ? "BUYERS_AFFILIATES"
+          : isGroups
+          ? "GROUPS"
+          : isChannels
+          ? "CHANNELS"
+          : "ALL",
+        isGroups || isChannels ? "CHAT" : "DM",
+        messageText,
+        JSON.stringify(buttons),
+      ]
     );
 
-    const broadcast = broadcastRes.rows[0];
+    let broadcast = broadcastRes.rows[0];
+
+    if (imagePayload) {
+      const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "broadcasts");
+      await fs.mkdir(uploadsDir, { recursive: true });
+      const extension = getImageExtension(imagePayload.mime);
+      const filename = `broadcast-${broadcast.id}.${extension}`;
+      const filePath = path.join(uploadsDir, filename);
+      await fs.writeFile(filePath, imagePayload.buffer);
+      const updateRes = await pool.query(
+        `UPDATE broadcasts
+         SET image_path = $1, image_filename = $2, image_mime = $3
+         WHERE id = $4
+         RETURNING *`,
+        [filePath, filename, imagePayload.mime, broadcast.id]
+      );
+      broadcast = updateRes.rows[0];
+    }
 
     if (isCustom) {
       await pool.query(
@@ -4267,12 +4542,25 @@ router.post("/broadcasts", async (req, res, next) => {
         ]
       );
     }
+    if (isGroups || isChannels) {
+      await pool.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "BROADCAST_GROUP_CHATS",
+          "broadcast",
+          broadcast.id,
+          JSON.stringify({ chat_ids: chatIds }),
+        ]
+      );
+    }
 
     return res.status(201).json({
       broadcast: {
         ...broadcast,
-        segment: mapBroadcastSegment(broadcast.segment, isCustom),
+        segment: mapBroadcastSegment(broadcast.segment, isCustom || isGroups || isChannels),
         telegram_ids: telegramIds,
+        chat_ids: chatIds,
         // Back-compat alias (deprecated):
         custom_telegram_ids: telegramIds,
       },
@@ -4287,6 +4575,7 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    await ensureBroadcastSchema(pool);
     const broadcastRes = await pool.query("SELECT * FROM broadcasts WHERE id = $1", [
       broadcastId,
     ]);
@@ -4297,13 +4586,14 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
 
     const broadcast = broadcastRes.rows[0];
     const bodyTelegramIds = normalizeTelegramIds(req.body && req.body.telegram_ids);
+    const bodyChatIds = normalizeChatIds(req.body && req.body.chat_ids);
 
     const auditRes = await pool.query(
       `SELECT meta
        FROM audit_logs
        WHERE entity_type = 'broadcast'
          AND entity_id = $1
-         AND admin_action = 'BROADCAST_CUSTOM_RECIPIENTS'
+         AND admin_action IN ('BROADCAST_CUSTOM_RECIPIENTS', 'BROADCAST_GROUP_CHATS')
        ORDER BY created_at DESC
        LIMIT 1`,
       [broadcastId]
@@ -4311,12 +4601,18 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
 
     const meta = auditRes.rows[0] && auditRes.rows[0].meta ? auditRes.rows[0].meta : {};
     const savedTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
+    const savedChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
 
     let recipientIds = [];
     const customIds = bodyTelegramIds.length > 0 ? bodyTelegramIds : savedTelegramIds;
+    const groupIds = bodyChatIds.length > 0 ? bodyChatIds : savedChatIds;
     const isCustom = customIds.length > 0;
+    const isGroups = broadcast.segment === "GROUPS" || groupIds.length > 0;
+    const isChannels = broadcast.segment === "CHANNELS" || groupIds.length > 0;
 
-    if (isCustom) {
+    if (isGroups || isChannels) {
+      recipientIds = Array.from(new Set(groupIds.map((id) => String(id))));
+    } else if (isCustom) {
       const uniqueIds = Array.from(new Set(customIds.map((id) => String(id))));
       const bannedRes = await pool.query(
         "SELECT telegram_id FROM user_bans WHERE telegram_id = ANY($1::bigint[])",
@@ -4324,14 +4620,54 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
       );
       const bannedSet = new Set(bannedRes.rows.map((row) => String(row.telegram_id)));
       recipientIds = uniqueIds.filter((id) => !bannedSet.has(String(id)));
+    } else if (broadcast.segment === "BUYERS_AFFILIATES") {
+      const usersRes = await pool.query(
+        `SELECT DISTINCT u.telegram_id
+         FROM users u
+         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+         LEFT JOIN orders o ON o.user_id = u.id AND o.status IN ('PAID', 'DELIVERED')
+         LEFT JOIN affiliates a ON a.user_id = u.id AND a.status = 'APPROVED'
+         WHERE b.telegram_id IS NULL
+           AND u.telegram_id IS NOT NULL
+           AND u.telegram_id <> 90000000000
+           AND (o.id IS NOT NULL OR a.id IS NOT NULL)`
+      );
+      recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
+    } else if (broadcast.segment === "BUYERS") {
+      const usersRes = await pool.query(
+        `SELECT DISTINCT u.telegram_id
+         FROM users u
+         JOIN orders o ON o.user_id = u.id AND o.status IN ('PAID', 'DELIVERED')
+         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+         WHERE b.telegram_id IS NULL
+           AND u.telegram_id IS NOT NULL
+           AND u.telegram_id <> 90000000000`
+      );
+      recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
+    } else if (broadcast.segment === "AFFILIATES") {
+      const usersRes = await pool.query(
+        `SELECT DISTINCT u.telegram_id
+         FROM affiliates a
+         JOIN users u ON u.id = a.user_id
+         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+         WHERE a.status = 'APPROVED'
+           AND b.telegram_id IS NULL
+           AND u.telegram_id IS NOT NULL
+           AND u.telegram_id <> 90000000000`
+      );
+      recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
     } else {
       const usersRes = await pool.query(
         `SELECT u.telegram_id
          FROM users u
          LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
-         WHERE b.telegram_id IS NULL`
+         WHERE b.telegram_id IS NULL
+           AND u.telegram_id IS NOT NULL
+           AND u.telegram_id <> 90000000000`
       );
-      recipientIds = usersRes.rows.map((row) => row.telegram_id);
+      recipientIds = Array.from(
+        new Set(usersRes.rows.map((row) => String(row.telegram_id)))
+      );
     }
 
     const targetCount = recipientIds.length;
@@ -4340,11 +4676,28 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
     let sentCount = 0;
     let failedCount = 0;
 
+    const formattedMessage = formatBroadcastMessage(broadcast.message_text);
+    const buttons = Array.isArray(broadcast.buttons) ? broadcast.buttons : [];
+    const replyMarkup = buildInlineKeyboard(buttons);
+    const messageOptions = replyMarkup
+      ? { parse_mode: "HTML", reply_markup: replyMarkup }
+      : { parse_mode: "HTML" };
+
     for (let i = 0; i < recipientIds.length; i += batchSize) {
       const batch = recipientIds.slice(i, i + batchSize);
       for (const telegramId of batch) {
         try {
-          await sendMessage(telegramId, broadcast.message_text);
+          if (broadcast.image_path) {
+            await sendPhoto(telegramId, {
+              path: broadcast.image_path,
+              filename: broadcast.image_filename || undefined,
+              caption: formattedMessage,
+              parse_mode: "HTML",
+              reply_markup: replyMarkup || undefined,
+            });
+          } else {
+            await sendMessage(telegramId, formattedMessage, messageOptions);
+          }
           sentCount += 1;
         } catch (err) {
           failedCount += 1;
@@ -4374,7 +4727,10 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
       ok: true,
       broadcast: {
         ...updatedRes.rows[0],
-        segment: mapBroadcastSegment(updatedRes.rows[0].segment, isCustom),
+        segment: mapBroadcastSegment(
+          updatedRes.rows[0].segment,
+          isCustom || isGroups || isChannels
+        ),
       },
       result: {
         target_count: targetCount,

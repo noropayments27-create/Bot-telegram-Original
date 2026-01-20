@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import Link from "next/link";
 
 import { apiFetch } from "../lib/api";
@@ -152,44 +152,47 @@ export default function Dashboard() {
   const [seenOrdersCount, setSeenOrdersCount] = useState(0);
   const [seenTicketsAt, setSeenTicketsAt] = useState(0);
   const [latestTicketAt, setLatestTicketAt] = useState(0);
+  const [resetText, setResetText] = useState("");
+  const [resetStatus, setResetStatus] = useState("");
   const customersCounter = useCountUp(stats.customers);
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
   const affiliatesCounter = useCountUp(stats.affiliates);
 
+  const loadSummary = useCallback(async () => {
+    try {
+      const [data, ticketsRes] = await Promise.all([
+        apiFetch("/admin/summary"),
+        apiFetch("/admin/tickets?status=OPEN&page=1&page_size=1"),
+      ]);
+      const nextStats = {
+        customers: Number(data.customers || 0),
+        totalSales: Number(data.total_sales || 0),
+        totalRevenueUsd: Number(data.total_revenue_usd || 0),
+        newOrders: Number(data.new_orders || 0),
+        activeProducts: Number(data.active_products || 0),
+        unreadTickets: Number(data.unread_tickets || 0),
+        affiliates: Number(data.affiliates || 0),
+      };
+      setStats(nextStats);
+      const latestTicket = ticketsRes.items?.[0];
+      const latestTicketTime = latestTicket
+        ? new Date(latestTicket.last_message_at || latestTicket.created_at).getTime()
+        : 0;
+      setLatestTicketAt(Number.isNaN(latestTicketTime) ? 0 : latestTicketTime);
+      setStatsError("");
+    } catch (error) {
+      setStatsError("No se pudo cargar el resumen.");
+    }
+  }, []);
+
   useEffect(() => {
-    const loadSummary = async () => {
-      try {
-        const [data, ticketsRes] = await Promise.all([
-          apiFetch("/admin/summary"),
-          apiFetch("/admin/tickets?status=OPEN&page=1&page_size=1"),
-        ]);
-        const nextStats = {
-          customers: Number(data.customers || 0),
-          totalSales: Number(data.total_sales || 0),
-          totalRevenueUsd: Number(data.total_revenue_usd || 0),
-          newOrders: Number(data.new_orders || 0),
-          activeProducts: Number(data.active_products || 0),
-          unreadTickets: Number(data.unread_tickets || 0),
-          affiliates: Number(data.affiliates || 0),
-        };
-        setStats(nextStats);
-        const latestTicket = ticketsRes.items?.[0];
-        const latestTicketTime = latestTicket
-          ? new Date(latestTicket.last_message_at || latestTicket.created_at).getTime()
-          : 0;
-        setLatestTicketAt(Number.isNaN(latestTicketTime) ? 0 : latestTicketTime);
-        setStatsError("");
-      } catch (error) {
-        setStatsError("No se pudo cargar el resumen.");
-      }
-    };
     loadSummary();
     const interval = setInterval(() => {
       loadSummary();
     }, 5000);
     return () => clearInterval(interval);
-  }, []);
+  }, [loadSummary]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -209,11 +212,62 @@ export default function Dashboard() {
     }
   }, []);
 
+  const canReset = resetText.trim() === "Reset";
+
+  const handleResetStats = async () => {
+    if (!canReset) {
+      return;
+    }
+    setResetStatus("processing");
+    try {
+      await apiFetch("/admin/stats/reset", {
+        method: "POST",
+        body: JSON.stringify({ confirm: "Reset" }),
+      });
+      setResetText("");
+      setResetStatus("done");
+      await loadSummary();
+    } catch (error) {
+      setResetStatus("error");
+    }
+  };
+
   return (
     <main className="page">
       <section className="card">
-        <h1 className="icon-inline"><IconDashboard className="panel-icon" /> Panel Principal</h1>
-        <p className="muted">Accesos directos</p>
+        <div className="dashboard-header">
+          <div>
+            <h1 className="icon-inline">
+              <IconDashboard className="panel-icon" /> Panel Principal
+            </h1>
+            <p className="muted">Accesos directos</p>
+          </div>
+          <div className="dashboard-reset">
+            <input
+              type="text"
+              placeholder="Escribe Reset para habilitar"
+              value={resetText}
+              onChange={(event) => setResetText(event.target.value)}
+              className="dashboard-reset-input"
+              aria-label="Confirmar reset de estadisticas"
+            />
+            {canReset && (
+              <button
+                type="button"
+                onClick={handleResetStats}
+                disabled={resetStatus === "processing"}
+              >
+                Reset
+              </button>
+            )}
+            {resetStatus === "error" && (
+              <span className="error">No se pudo reiniciar.</span>
+            )}
+            {resetStatus === "done" && (
+              <span className="muted">Estadisticas reiniciadas.</span>
+            )}
+          </div>
+        </div>
         <div className="dashboard-grid">
           {navCards.map((item) => {
             const isOrders = item.key === "orders";

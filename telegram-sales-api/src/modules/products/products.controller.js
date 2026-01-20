@@ -9,6 +9,7 @@ function parseBoolean(value) {
 
 async function listProducts(req, res, next) {
   const active = parseBoolean(req.query.active);
+  const telegramId = Number(req.query.telegram_id);
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const pageSize = Math.min(
     Math.max(parseInt(req.query.page_size, 10) || 8, 1),
@@ -19,6 +20,7 @@ async function listProducts(req, res, next) {
   const pool = getPool();
   const filters = [];
   const values = [];
+  let userId = null;
 
   if (active !== undefined) {
     values.push(active);
@@ -30,6 +32,17 @@ async function listProducts(req, res, next) {
     : "";
 
   try {
+    if (Number.isFinite(telegramId)) {
+      const userRes = await pool.query(
+        "SELECT id FROM users WHERE telegram_id = $1",
+        [telegramId]
+      );
+      if (userRes.rowCount > 0) {
+        userId = userRes.rows[0].id;
+      }
+    }
+
+    const userParamIndex = values.length + 1;
     const countRes = await pool.query(
       `SELECT COUNT(*)::int AS total FROM products p ${whereClause}`,
       values
@@ -52,14 +65,24 @@ async function listProducts(req, res, next) {
               p.show_stock,
               p.unique_purchase,
               CASE
-                WHEN p.stock_mode = 'SIMPLE' AND p.stock_qty IS NULL THEN true
+                WHEN $${userParamIndex}::uuid IS NULL THEN false
+                ELSE EXISTS (
+                  SELECT 1
+                  FROM orders o
+                  WHERE o.user_id = $${userParamIndex}
+                    AND o.product_id = p.id
+                    AND o.status IN ('PAID', 'DELIVERED')
+                )
+              END AS already_purchased,
+              CASE
+                WHEN p.stock_mode = 'SIMPLE' AND (p.stock_qty IS NULL OR p.unique_purchase = true) THEN true
                 ELSE false
               END AS stock_is_unlimited,
               CASE
                 WHEN p.show_stock = false THEN NULL
                 WHEN p.stock_mode = 'SIMPLE' THEN
                   CASE
-                    WHEN p.stock_qty IS NULL THEN NULL
+                    WHEN p.stock_qty IS NULL OR p.unique_purchase = true THEN NULL
                     ELSE GREATEST(p.stock_qty - COALESCE(psh.held_qty, 0), 0)
                   END
                 WHEN p.stock_mode = 'UNITS' THEN COALESCE(psu.available_units, 0)
@@ -80,8 +103,8 @@ async function listProducts(req, res, next) {
        ) psh ON psh.product_id = p.id
        ${whereClause}
        ORDER BY p.created_at ASC, p.name ASC
-       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
-      [...values, pageSize, offset]
+       LIMIT $${values.length + 2} OFFSET $${values.length + 3}`,
+      [...values, userId, pageSize, offset]
     );
 
     const totalPages = Math.ceil(total / pageSize) || 1;

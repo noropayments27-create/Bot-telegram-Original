@@ -464,7 +464,10 @@ def format_products(
         return t(locale, "no_more_products")
     lines = [t(locale, "shop_products_page").format(page=page), ""]
     for idx, item in enumerate(items, start=1):
-        lines.append(f"{idx}. {item['display_name']}")
+        name = html.escape(str(item.get("display_name") or ""))
+        if item.get("unique_purchase") and item.get("already_purchased"):
+            name = f"<s>{name}</s>"
+        lines.append(f"{idx}. {name}")
         stock_line = _build_stock_line(item)
         if stock_line:
             lines.append(f"   {stock_line}")
@@ -477,17 +480,22 @@ def format_category_products(
     title = get_category_title(category_key, locale)
     lines = [t(locale, "category_page_title").format(title=title, page=1), ""]
     for idx, item in enumerate(items, start=1):
-        lines.append(f"{idx}. {item['display_name']}")
+        name = html.escape(str(item.get("display_name") or ""))
+        if item.get("unique_purchase") and item.get("already_purchased"):
+            name = f"<s>{name}</s>"
+        lines.append(f"{idx}. {name}")
         stock_line = _build_stock_line(item)
         if stock_line:
             lines.append(f"   {stock_line}")
     return "\n".join(lines)
-async def _fetch_active_products() -> List[Dict[str, Any]]:
+async def _fetch_active_products(telegram_id: int | None = None) -> List[Dict[str, Any]]:
     products: List[Dict[str, Any]] = []
     page = 1
     total_pages = 1
     while page <= total_pages:
-        data = await api_client.list_products(page=page, page_size=50)
+        data = await api_client.list_products(
+            page=page, page_size=50, telegram_id=telegram_id
+        )
         total_pages = data.get("total_pages", total_pages)
         items = data.get("items", [])
         if isinstance(items, list):
@@ -523,6 +531,8 @@ def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
         "available_stock": product.get("available_stock"),
         "stock_is_unlimited": product.get("stock_is_unlimited"),
         "show_stock": product.get("show_stock"),
+        "unique_purchase": product.get("unique_purchase"),
+        "already_purchased": product.get("already_purchased"),
         "created_at": product.get("created_at"),
     }
 def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str:
@@ -572,8 +582,10 @@ def _format_description(raw: Optional[str], locale: str | None = None) -> str:
             continue
         lines.append(f"⌾ {clean}")
     return "\n".join(lines)
-async def _get_products_by_prefix(prefix: str) -> List[Dict[str, Any]]:
-    products = await _fetch_active_products()
+async def _get_products_by_prefix(
+    prefix: str, telegram_id: int | None = None
+) -> List[Dict[str, Any]]:
+    products = await _fetch_active_products(telegram_id)
     filtered = [
         _normalize_product(product, prefix)
         for product in products
@@ -587,18 +599,22 @@ def _paginate(items: List[Dict[str, Any]], page: int) -> List[Dict[str, Any]]:
     start = (page - 1) * _PAGE_SIZE
     end = start + _PAGE_SIZE
     return items[start:end]
-async def _get_shop_page_items(page: int) -> Dict[str, Any]:
-    products = await _get_products_by_prefix(_PREFIX_SHOP)
+async def _get_shop_page_items(
+    page: int, telegram_id: int | None = None
+) -> Dict[str, Any]:
+    products = await _get_products_by_prefix(_PREFIX_SHOP, telegram_id)
     total_pages = max((len(products) + _PAGE_SIZE - 1) // _PAGE_SIZE, 1)
     return {
         "items": _paginate(products, page),
         "total_pages": total_pages,
     }
-async def _get_category_items(category_key: str) -> List[Dict[str, Any]]:
+async def _get_category_items(
+    category_key: str, telegram_id: int | None = None
+) -> List[Dict[str, Any]]:
     prefix = _CATEGORY_PREFIXES.get(category_key)
     if not prefix:
         return []
-    products = await _get_products_by_prefix(prefix)
+    products = await _get_products_by_prefix(prefix, telegram_id)
     return _paginate(products, 1)
 def build_payment_methods_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None
@@ -709,7 +725,7 @@ def build_payment_prompt_keyboard(
 async def render_shop_page(
     target: Message, user_id: int, page: int, locale: str | None = None
 ) -> None:
-    catalog = await _get_shop_page_items(page)
+    catalog = await _get_shop_page_items(page, user_id)
     items = catalog["items"]
     total_pages = catalog["total_pages"]
     if not items:
@@ -721,11 +737,12 @@ async def render_shop_page(
         user_id,
         text,
         reply_markup=build_shop_keyboard(page, total_pages, len(items), locale),
+        parse_mode=ParseMode.HTML,
     )
 async def render_category_page(
     target: Message, user_id: int, category_key: str, locale: str | None = None
 ) -> None:
-    items = await _get_category_items(category_key)
+    items = await _get_category_items(category_key, user_id)
     if not items:
         await render_main_view(target, user_id, t(locale, "no_more_products"))
         return
@@ -735,6 +752,7 @@ async def render_category_page(
         user_id,
         text,
         reply_markup=build_category_keyboard(category_key, len(items), locale),
+        parse_mode=ParseMode.HTML,
     )
 @router.message(Command("shop"))
 @router.message(F.text == "🛒 Tienda")
@@ -827,7 +845,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     _, _, page_text, index_text = callback.data.split(":", 3)
     page = int(page_text)
     index = int(index_text)
-    catalog = await _get_shop_page_items(page)
+    catalog = await _get_shop_page_items(page, callback.from_user.id)
     items = catalog["items"]
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
@@ -872,7 +890,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, category_key, index_text = callback.data.split(":", 3)
     index = int(index_text)
-    items = await _get_category_items(category_key)
+    items = await _get_category_items(category_key, callback.from_user.id)
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
@@ -917,7 +935,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     _, _, page_text, index_text = callback.data.split(":", 3)
     page = int(page_text)
     index = int(index_text)
-    catalog = await _get_shop_page_items(page)
+    catalog = await _get_shop_page_items(page, callback.from_user.id)
     items = catalog["items"]
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
@@ -940,7 +958,13 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     }
     result = await api_client.create_order(order_payload)
     if result.get("status_code") == 409:
-        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        error_code = (result.get("data") or {}).get("error")
+        if error_code == "UNIQUE_ALREADY_PURCHASED":
+            await callback.answer(t(locale, "unique_already_purchased"), show_alert=True)
+        elif error_code == "UNIQUE_LIMIT":
+            await callback.answer(t(locale, "unique_limit"), show_alert=True)
+        else:
+            await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     order = result.get("order")
     if not order:
@@ -987,7 +1011,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, category_key, index_text = callback.data.split(":", 3)
     index = int(index_text)
-    items = await _get_category_items(category_key)
+    items = await _get_category_items(category_key, callback.from_user.id)
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
@@ -1009,7 +1033,13 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
     }
     result = await api_client.create_order(order_payload)
     if result.get("status_code") == 409:
-        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        error_code = (result.get("data") or {}).get("error")
+        if error_code == "UNIQUE_ALREADY_PURCHASED":
+            await callback.answer(t(locale, "unique_already_purchased"), show_alert=True)
+        elif error_code == "UNIQUE_LIMIT":
+            await callback.answer(t(locale, "unique_limit"), show_alert=True)
+        else:
+            await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     order = result.get("order")
     if not order:
@@ -1056,7 +1086,7 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, page_text, _ = callback.data.split(":", 3)
     page = int(page_text)
-    catalog = await _get_shop_page_items(page)
+    catalog = await _get_shop_page_items(page, callback.from_user.id)
     items = catalog["items"]
     index_text = callback.data.split(":")[-1]
     index = int(index_text)
@@ -1152,7 +1182,7 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, category_key, index_text = callback.data.split(":", 3)
     index = int(index_text)
-    items = await _get_category_items(category_key)
+    items = await _get_category_items(category_key, callback.from_user.id)
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return

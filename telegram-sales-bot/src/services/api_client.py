@@ -57,12 +57,22 @@ class ApiClient:
             response.raise_for_status()
             return {"status_code": response.status_code, "data": response.json()}
 
-    async def list_products(self, page: int = 1, page_size: int = 8) -> Dict[str, Any]:
+    async def list_products(
+        self,
+        page: int = 1,
+        page_size: int = 8,
+        telegram_id: int | None = None,
+    ) -> Dict[str, Any]:
         url = f"{self.base_url}/products"
         async with httpx.AsyncClient() as client:
             response = await client.get(
                 url,
-                params={"active": "true", "page": page, "page_size": page_size},
+                params={
+                    "active": "true",
+                    "page": page,
+                    "page_size": page_size,
+                    "telegram_id": telegram_id,
+                },
                 headers=self._headers(),
                 timeout=5,
             )

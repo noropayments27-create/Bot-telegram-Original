@@ -23,6 +23,7 @@ export default function TicketsPage() {
   const [detailErrors, setDetailErrors] = useState({});
   const [detailMessages, setDetailMessages] = useState({});
   const [replyById, setReplyById] = useState({});
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -47,6 +48,7 @@ export default function TicketsPage() {
         setError("");
       } catch (err) {
         setError("No se pudo cargar tickets.");
+        setToast("No se pudo cargar tickets.");
       }
     };
 
@@ -111,6 +113,7 @@ export default function TicketsPage() {
         ...prev,
         [ticketId]: "No se pudo cargar el ticket.",
       }));
+      setToast("No se pudo cargar el ticket.");
     } finally {
       setDetailLoading((prev) => ({ ...prev, [ticketId]: false }));
     }
@@ -145,6 +148,14 @@ export default function TicketsPage() {
     });
   }, [detailLoading, details, loadDetail, selectedTicketIds]);
 
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setToast(""), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
   const handleReply = async (ticketId) => {
     const message = (replyById[ticketId] || "").trim();
     if (!message) {
@@ -159,6 +170,7 @@ export default function TicketsPage() {
         ...prev,
         [ticketId]: "Respuesta enviada.",
       }));
+      setToast("Respuesta enviada.");
       setReplyById((prev) => ({ ...prev, [ticketId]: "" }));
       await loadDetail(ticketId);
     } catch (err) {
@@ -166,6 +178,7 @@ export default function TicketsPage() {
         ...prev,
         [ticketId]: "No se pudo enviar la respuesta.",
       }));
+      setToast("No se pudo enviar la respuesta.");
     }
   };
 
@@ -176,12 +189,14 @@ export default function TicketsPage() {
         ...prev,
         [ticketId]: "Ticket cerrado.",
       }));
+      setToast("Ticket cerrado.");
       await loadDetail(ticketId);
     } catch (err) {
       setDetailErrors((prev) => ({
         ...prev,
         [ticketId]: "No se pudo cerrar el ticket.",
       }));
+      setToast("No se pudo cerrar el ticket.");
     }
   };
 
@@ -375,6 +390,30 @@ export default function TicketsPage() {
               </section>
             );
           })}
+        </div>
+      )}
+      {toast && (
+        <div className="toast">
+          <span className="toast__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M12 8v5M12 16h.01"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+          <span>{toast}</span>
         </div>
       )}
     </main>

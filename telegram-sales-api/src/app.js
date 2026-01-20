@@ -61,7 +61,7 @@ app.use(cors(corsOptions));
 app.options('*', cors(corsOptions));
 
 // Body + logs
-app.use(express.json());
+app.use(express.json({ limit: "12mb" }));
 if (process.env.API_LOG_REQUESTS !== "false") {
   app.use(morgan('dev'));
 }
