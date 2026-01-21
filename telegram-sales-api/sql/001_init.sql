@@ -12,7 +12,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE order_status AS ENUM ('CREATED','WAITING_PAYMENT','PAID','DELIVERED','CANCELLED');
+  CREATE TYPE order_status AS ENUM ('CREATED','WAITING_PAYMENT','PAID','DELIVERED','CANCELLED','REFUNDED');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -20,7 +20,7 @@ DO $$ BEGIN
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
-  CREATE TYPE commission_status AS ENUM ('EARNED','PAID_OUT');
+  CREATE TYPE commission_status AS ENUM ('EARNED','PAID_OUT','REFUNDED');
 EXCEPTION WHEN duplicate_object THEN NULL; END $$;
 
 DO $$ BEGIN
@@ -88,6 +88,7 @@ CREATE TABLE IF NOT EXISTS affiliates (
   wallet_nequi text,
   binance_id text,
   commission_rate numeric(6,4) NOT NULL DEFAULT 0.2000,
+  affiliate_debt numeric(12,2) NOT NULL DEFAULT 0 CHECK (affiliate_debt >= 0),
   approved_at timestamptz,
   created_at timestamptz NOT NULL DEFAULT now()
 );
@@ -152,7 +153,10 @@ CREATE TABLE IF NOT EXISTS orders (
   unit_price_at_purchase numeric(12,2) NOT NULL CHECK (unit_price_at_purchase >= 0),
   created_at timestamptz NOT NULL DEFAULT now(),
   paid_at timestamptz,
-  delivered_at timestamptz
+  delivered_at timestamptz,
+  refunded_at timestamptz,
+  refunded_amount numeric(12,2) NOT NULL DEFAULT 0 CHECK (refunded_amount >= 0),
+  refund_reason text
 );
 
 -- ORDER PAYMENTS (Payments A: 1 payment per order)
@@ -174,7 +178,10 @@ CREATE TABLE IF NOT EXISTS commissions (
   amount numeric(12,2) NOT NULL CHECK (amount >= 0),
   status commission_status NOT NULL DEFAULT 'EARNED',
   earned_at timestamptz NOT NULL DEFAULT now(),
-  paid_out_at timestamptz
+  paid_out_at timestamptz,
+  refunded_amount numeric(12,2) NOT NULL DEFAULT 0 CHECK (refunded_amount >= 0),
+  refunded_at timestamptz,
+  refund_reason text
 );
 
 -- PAYOUTS
@@ -182,12 +189,26 @@ CREATE TABLE IF NOT EXISTS payouts (
   id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
   affiliate_id uuid NOT NULL REFERENCES affiliates(id) ON DELETE RESTRICT,
   amount numeric(12,2) NOT NULL CHECK (amount >= 0),
+  debt_applied numeric(12,2) NOT NULL DEFAULT 0 CHECK (debt_applied >= 0),
   method payout_method NOT NULL,
   destination text NOT NULL,
   status payout_status NOT NULL DEFAULT 'REQUESTED',
   created_at timestamptz NOT NULL DEFAULT now(),
   sent_at timestamptz
 );
+
+-- ORDER REFUNDS
+CREATE TABLE IF NOT EXISTS order_refunds (
+  id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
+  order_id uuid NOT NULL REFERENCES orders(id) ON DELETE CASCADE,
+  amount numeric(12,2) NOT NULL CHECK (amount > 0),
+  refund_type text NOT NULL CHECK (refund_type IN ('PARTIAL', 'FULL')),
+  reason text,
+  refunded_by_admin text,
+  created_at timestamptz NOT NULL DEFAULT now()
+);
+
+CREATE INDEX IF NOT EXISTS idx_order_refunds_order_id ON order_refunds(order_id);
 
 -- TICKETS
 CREATE TABLE IF NOT EXISTS tickets (

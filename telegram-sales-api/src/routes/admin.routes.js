@@ -23,9 +23,17 @@ const { getAffiliateLevel } = require("../services/affiliateLevels");
 const MESSAGES = {
   es: {
     payment_received: "🎉 Felicidades, hemos recibido tu pago 🎉 🥳",
+    refund_full:
+      "✅ Tu reembolso fue procesado correctamente.\n\nMonto reembolsado: {amount}\n\nSi necesitas ayuda, contáctanos.",
+    refund_partial:
+      "✅ Procesamos un reembolso parcial de tu orden.\n\nMonto reembolsado: {amount}\n\nSi necesitas ayuda, contáctanos.",
   },
   en: {
     payment_received: "🎉 Congratulations, we’ve received your payment 🎉 🥳",
+    refund_full:
+      "✅ Your refund was processed successfully.\n\nRefunded amount: {amount}\n\nIf you need help, contact us.",
+    refund_partial:
+      "✅ We processed a partial refund for your order.\n\nRefunded amount: {amount}\n\nIf you need help, contact us.",
   },
 };
 
@@ -44,10 +52,18 @@ const AFFILIATE_MESSAGES = {
   es: {
     approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
     rejected: "❌ Tu solicitud para ser afiliado fue rechazada por el admin.",
+    refund_full:
+      "⚠️ Se reembolsó una orden referida por ti y se descontó tu comisión.\n\nMonto descontado: {amount}.",
+    refund_partial:
+      "⚠️ Se realizó un reembolso parcial en una orden referida por ti y se ajustó tu comisión.\n\nMonto descontado: {amount}.",
   },
   en: {
     approved: "✅ Your affiliate request was approved by the admin.",
     rejected: "❌ Your affiliate request was rejected by the admin.",
+    refund_full:
+      "⚠️ A referred order was refunded and your commission was deducted.\n\nAmount deducted: {amount}.",
+    refund_partial:
+      "⚠️ A referred order was partially refunded and your commission was adjusted.\n\nAmount deducted: {amount}.",
   },
 };
 
@@ -526,55 +542,23 @@ function buildReceiptMessage(
   return lines.join("\n");
 }
 
-function parseCsvLine(line) {
-  const result = [];
-  let current = "";
-  let inQuotes = false;
-
-  for (let i = 0; i < line.length; i += 1) {
-    const char = line[i];
-    if (char === '"') {
-      const nextChar = line[i + 1];
-      if (inQuotes && nextChar === '"') {
-        current += '"';
-        i += 1;
-      } else {
-        inQuotes = !inQuotes;
-      }
-      continue;
-    }
-    if (char === "," && !inQuotes) {
-      result.push(current);
-      current = "";
-      continue;
-    }
-    current += char;
-  }
-  result.push(current);
-  return result.map((value) => value.trim());
+function formatUsd(amount) {
+  const value = Number(amount || 0);
+  return `$${value.toFixed(2)}`;
 }
 
-function parseCsv(text) {
-  const lines = String(text || "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter((line) => line.length > 0);
-  if (lines.length === 0) {
-    return { headers: [], rows: [] };
+async function getOrderTotalUsd(client, orderId, fallback) {
+  const itemsRes = await client.query(
+    `SELECT COALESCE(SUM(line_total_usd), 0) AS total
+     FROM order_items
+     WHERE order_id = $1`,
+    [orderId]
+  );
+  const total = Number(itemsRes.rows[0]?.total || 0);
+  if (total > 0) {
+    return Number(total.toFixed(2));
   }
-  const headers = parseCsvLine(lines[0]).map((header) => header.toLowerCase());
-  const rows = [];
-
-  for (const line of lines.slice(1)) {
-    const values = parseCsvLine(line);
-    const row = {};
-    headers.forEach((header, index) => {
-      row[header] = values[index] ?? "";
-    });
-    rows.push(row);
-  }
-
-  return { headers, rows };
+  return Number(Number(fallback || 0).toFixed(2));
 }
 
 function stableStringify(value) {
@@ -1659,15 +1643,16 @@ router.get("/stock/units", async (req, res, next) => {
       const username = payload.username || payload.user || "";
       const password = payload.password || "";
       const preview = stableStringify(payload);
+      const durationValue = payload.duration_value || payload.duration || "";
+      const durationUnit = payload.duration_unit || "";
       return {
         id: row.id,
         status: row.status === "DELIVERED" ? "CONSUMED" : row.status,
-        external_id: payload.external_id || "",
-        starts_at: payload.starts_at || payload.start_at || "",
-        expires_at: payload.expires_at || "",
         created_at: row.created_at,
         username: username ? String(username) : "",
         password_masked: password ? maskSecret(password) : "",
+        duration_value: durationValue ? String(durationValue) : "",
+        duration_unit: durationUnit ? String(durationUnit) : "",
         payload_preview: preview.length > 80 ? `${preview.slice(0, 80)}…` : preview,
       };
     });
@@ -1685,185 +1670,6 @@ router.get("/stock/units", async (req, res, next) => {
     return next(error);
   }
 });
-
-router.post(
-  "/stock/units/upload",
-  express.raw({ type: "*/*", limit: "10mb" }),
-  async (req, res, next) => {
-    const productId = req.query.product_id;
-    const skuKey = req.query.sku_key;
-    const pool = getPool();
-
-    let receipt = "";
-    try {
-      const contentType = req.headers["content-type"] || "";
-      let csvText = "";
-
-      if (contentType.includes("multipart/form-data")) {
-        const boundaryMatch = contentType.match(/boundary=([^;]+)/i);
-        const boundary = boundaryMatch ? boundaryMatch[1] : null;
-        if (!boundary) {
-          return res.status(400).json({ error: "BOUNDARY_NOT_FOUND" });
-        }
-        const raw = req.body.toString("utf8");
-        const parts = raw.split(`--${boundary}`);
-        for (const part of parts) {
-          if (!part.includes("Content-Disposition")) {
-            continue;
-          }
-          const splitIndex = part.indexOf("\r\n\r\n");
-          if (splitIndex === -1) {
-            continue;
-          }
-          const body = part.slice(splitIndex + 4).trim();
-          if (body) {
-            csvText = body.replace(/\r\n--$/, "").trim();
-            break;
-          }
-        }
-      } else {
-        csvText = req.body ? req.body.toString("utf8") : "";
-      }
-
-      if (!csvText) {
-        return res.status(400).json({ error: "CSV_REQUIRED" });
-      }
-
-      const parsed = parseCsv(csvText);
-      if (parsed.rows.length === 0) {
-        return res.status(400).json({ error: "CSV_EMPTY" });
-      }
-
-      const client = await pool.connect();
-      const inserted = [];
-      const failed = [];
-      const seenPayloads = new Set();
-      const touchedProducts = new Set();
-
-      try {
-        await client.query("BEGIN");
-
-        for (const [index, row] of parsed.rows.entries()) {
-          if (failed.length >= 50) {
-            break;
-          }
-          const rowProductId = row.product_id || productId;
-          const rowSkuKey = row.sku_key || skuKey;
-          const product = await resolveProductByIdentifier(
-            client,
-            rowProductId || null,
-            rowSkuKey || null
-          );
-
-          if (!product) {
-            failed.push({ row_number: index + 2, reason: "PRODUCT_NOT_FOUND" });
-            continue;
-          }
-
-          if (product.stock_mode !== "UNITS") {
-            failed.push({ row_number: index + 2, reason: "PRODUCT_NOT_UNITS" });
-            continue;
-          }
-
-          let payload = {};
-          if (row.payload) {
-            try {
-              payload = JSON.parse(row.payload);
-            } catch (error) {
-              failed.push({ row_number: index + 2, reason: "PAYLOAD_INVALID_JSON" });
-              continue;
-            }
-          }
-
-          const normalizedPayload = {
-            title: row.title || payload.title,
-            username: row.username || payload.username,
-            password: row.password || payload.password,
-            start_at: row.start_at || row.starts_at || payload.start_at,
-            starts_at: row.starts_at || row.start_at || payload.starts_at,
-            expires_at: row.expires_at || payload.expires_at,
-            notes: row.notes || payload.notes,
-            external_id: row.external_id || payload.external_id,
-            ...payload,
-          };
-
-          const payloadKey = stableStringify(normalizedPayload);
-          if (seenPayloads.has(payloadKey)) {
-            failed.push({ row_number: index + 2, reason: "DUPLICATE_IN_FILE" });
-            continue;
-          }
-          seenPayloads.add(payloadKey);
-
-          if (normalizedPayload.external_id) {
-            const extRes = await client.query(
-              `SELECT 1
-               FROM product_stock_units
-               WHERE product_id = $1
-                 AND payload->>'external_id' = $2
-               LIMIT 1`,
-              [product.id, String(normalizedPayload.external_id)]
-            );
-            if (extRes.rowCount > 0) {
-              failed.push({ row_number: index + 2, reason: "EXTERNAL_ID_DUPLICATE" });
-              continue;
-            }
-          }
-
-          const existingRes = await client.query(
-            `SELECT 1 FROM product_stock_units
-             WHERE product_id = $1 AND payload = $2::jsonb
-             LIMIT 1`,
-            [product.id, normalizedPayload]
-          );
-          if (existingRes.rowCount > 0) {
-            failed.push({ row_number: index + 2, reason: "DUPLICATE_IN_DB" });
-            continue;
-          }
-
-          await client.query(
-            `INSERT INTO product_stock_units (product_id, payload, status)
-             VALUES ($1, $2::jsonb, 'AVAILABLE')`,
-            [product.id, normalizedPayload]
-          );
-          inserted.push(row);
-          touchedProducts.add(product.id);
-        }
-
-        await client.query("COMMIT");
-      } catch (error) {
-        await client.query("ROLLBACK");
-        throw error;
-      } finally {
-        client.release();
-      }
-
-      if (touchedProducts.size > 0) {
-        await pool.query(
-          `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
-           VALUES ($1, $2, $3, $4::jsonb)`,
-          [
-            "STOCK_UNITS_UPLOAD",
-            "product",
-            Array.from(touchedProducts)[0],
-            JSON.stringify({
-              inserted_count: inserted.length,
-              failed_count: failed.length,
-              product_ids: Array.from(touchedProducts),
-              sku_key: skuKey || null,
-            }),
-          ]
-        );
-      }
-
-      return res.json({
-        inserted_count: inserted.length,
-        failed_rows: failed,
-      });
-    } catch (error) {
-      return next(error);
-    }
-  }
-);
 
 router.post("/stock/units/add", async (req, res, next) => {
   const productId = req.body?.product_id;
@@ -1896,25 +1702,50 @@ router.post("/stock/units/add", async (req, res, next) => {
       title: req.body?.title || payload.title,
       username: req.body?.username || payload.username,
       password: req.body?.password || payload.password,
-      start_at: req.body?.start_at || req.body?.starts_at || payload.start_at,
-      starts_at: req.body?.starts_at || req.body?.start_at || payload.starts_at,
-      expires_at: req.body?.expires_at || payload.expires_at,
+      duration_value:
+        req.body?.duration_value
+        || req.body?.duration
+        || payload.duration_value
+        || payload.duration,
+      duration_unit: req.body?.duration_unit || payload.duration_unit,
       notes: req.body?.notes || payload.notes,
-      external_id: req.body?.external_id || payload.external_id,
       ...payload,
     };
 
-    if (normalizedPayload.external_id) {
-      const extRes = await pool.query(
+    const normalizedUsername = String(normalizedPayload.username || "").trim();
+    const normalizedPassword = String(normalizedPayload.password || "").trim();
+    const normalizedDurationValue = String(
+      normalizedPayload.duration_value || ""
+    ).trim();
+    const normalizedDurationUnit = String(
+      normalizedPayload.duration_unit || ""
+    ).trim();
+    if (!normalizedUsername || !normalizedPassword || !normalizedDurationValue) {
+      return res.status(400).json({ error: "UNIT_FIELDS_REQUIRED" });
+    }
+    if (!normalizedDurationUnit) {
+      return res.status(400).json({ error: "UNIT_DURATION_UNIT_REQUIRED" });
+    }
+    if (normalizedUsername || normalizedPassword || normalizedDurationValue) {
+      const dupRes = await pool.query(
         `SELECT 1
          FROM product_stock_units
          WHERE product_id = $1
-           AND payload->>'external_id' = $2
+           AND COALESCE(payload->>'username', payload->>'user', '') = $2
+           AND COALESCE(payload->>'password', '') = $3
+           AND COALESCE(payload->>'duration_value', payload->>'duration', '') = $4
+           AND COALESCE(payload->>'duration_unit', '') = $5
          LIMIT 1`,
-        [product.id, String(normalizedPayload.external_id)]
+        [
+          product.id,
+          normalizedUsername,
+          normalizedPassword,
+          normalizedDurationValue,
+          normalizedDurationUnit,
+        ]
       );
-      if (extRes.rowCount > 0) {
-        return res.status(409).json({ error: "EXTERNAL_ID_DUPLICATE" });
+      if (dupRes.rowCount > 0) {
+        return res.status(409).json({ error: "DUPLICATE_IN_DB" });
       }
     }
 
@@ -1951,6 +1782,61 @@ router.post("/stock/units/add", async (req, res, next) => {
     );
 
     return res.json({ unit: insertRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/stock/units/:id/delete", async (req, res, next) => {
+  const unitId = req.params.id;
+  const pool = getPool();
+
+  if (!unitId) {
+    return res.status(400).json({ error: "UNIT_ID_REQUIRED" });
+  }
+
+  try {
+    const unitRes = await pool.query(
+      `SELECT id, product_id, status, payload
+       FROM product_stock_units
+       WHERE id = $1`,
+      [unitId]
+    );
+    if (unitRes.rowCount === 0) {
+      return res.status(404).json({ error: "UNIT_NOT_FOUND" });
+    }
+    const unit = unitRes.rows[0];
+    if (unit.status !== "AVAILABLE") {
+      return res.status(409).json({ error: "UNIT_NOT_AVAILABLE" });
+    }
+
+    await pool.query(
+      `DELETE FROM product_stock_units
+       WHERE id = $1`,
+      [unitId]
+    );
+
+    try {
+      await pool.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "STOCK_UNITS_DELETE",
+          "product",
+          unit.product_id,
+          JSON.stringify({
+            unit_id: unit.id,
+            payload_key: stableStringify(unit.payload || {}),
+          }),
+        ]
+      );
+    } catch (error) {
+      if (process.env.NODE_ENV !== "test") {
+        console.warn("Audit log insert failed:", error?.message || error);
+      }
+    }
+
+    return res.json({ ok: true });
   } catch (error) {
     return next(error);
   }
@@ -2056,49 +1942,6 @@ router.post("/products/:id/stock-mode", async (req, res, next) => {
         JSON.stringify({ stock_mode: mode }),
       ]
     );
-    return res.json({ product: updateRes.rows[0] });
-  } catch (error) {
-    return next(error);
-  }
-});
-
-router.post("/stock/template/set", async (req, res, next) => {
-  const productId = req.body && req.body.product_id;
-  const skuKey = req.body && req.body.sku_key;
-  const template =
-    req.body && req.body.delivery_template !== undefined
-      ? String(req.body.delivery_template)
-      : "";
-  const pool = getPool();
-
-  try {
-    const product = await resolveProductByIdentifier(pool, productId, skuKey);
-    if (!product) {
-      return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
-    }
-    if (product.stock_mode !== "UNITS") {
-      return res.status(400).json({ error: "PRODUCT_NOT_UNITS" });
-    }
-
-    const updateRes = await pool.query(
-      `UPDATE products
-       SET delivery_template = $2, updated_at = now()
-       WHERE id = $1
-       RETURNING *`,
-      [product.id, template]
-    );
-
-    await pool.query(
-      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
-       VALUES ($1, $2, $3, $4::jsonb)`,
-      [
-        "STOCK_TEMPLATE_SET",
-        "product",
-        product.id,
-        JSON.stringify({ delivery_template: template }),
-      ]
-    );
-
     return res.json({ product: updateRes.rows[0] });
   } catch (error) {
     return next(error);
@@ -2282,6 +2125,9 @@ router.get("/orders/:id", async (req, res, next) => {
         unit_price_at_purchase: order.unit_price_at_purchase,
         created_at: order.created_at,
         paid_at: order.paid_at,
+        refunded_amount: order.refunded_amount,
+        refunded_at: order.refunded_at,
+        refund_reason: order.refund_reason,
       },
       user: {
         telegram_id: order.telegram_id,
@@ -2783,7 +2629,8 @@ router.post("/stats/reset", async (req, res, next) => {
       `UPDATE orders
        SET status = 'CANCELLED',
            paid_at = NULL,
-           delivered_at = NULL`
+           delivered_at = NULL,
+           order_number = NULL`
     );
 
     await client.query(
@@ -2812,6 +2659,7 @@ router.post("/stats/reset", async (req, res, next) => {
     await client.query("DELETE FROM ticket_messages");
     await client.query("DELETE FROM tickets");
     await client.query("DELETE FROM broadcasts");
+    await client.query("SELECT setval('orders_order_number_seq', 0, false)");
 
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, meta)
@@ -2946,7 +2794,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     if (order.affiliate_id) {
       const statsRes = await client.query(
         `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
-                COALESCE(SUM(c.amount), 0) AS earnings_total,
+                COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
                 MAX(c.earned_at) AS last_sale_at
          FROM commissions c
          LEFT JOIN (
@@ -2954,7 +2802,8 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
            FROM order_items
            GROUP BY order_id
          ) oi ON oi.order_id = c.order_id
-         WHERE c.affiliate_id = $1`,
+         WHERE c.affiliate_id = $1
+           AND c.status != 'REFUNDED'`,
         [order.affiliate_id]
       );
       const stats = statsRes.rows[0] || {};
@@ -3042,14 +2891,16 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
           const salesRes = await pool.query(
             `SELECT COUNT(*)::int AS count
              FROM commissions
-             WHERE affiliate_id = $1`,
+             WHERE affiliate_id = $1
+               AND status != 'REFUNDED'`,
             [order.affiliate_id]
           );
           const salesCount = salesRes.rows[0]?.count || 0;
           const earningsRes = await pool.query(
-            `SELECT COALESCE(SUM(amount), 0) AS total
+            `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
              FROM commissions
-             WHERE affiliate_id = $1`,
+             WHERE affiliate_id = $1
+               AND status != 'REFUNDED'`,
             [order.affiliate_id]
           );
           const earningsTotal = Number(earningsRes.rows[0]?.total || 0);
@@ -3267,6 +3118,216 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
   }
 });
 
+router.post("/orders/:id/refund", async (req, res, next) => {
+  const orderId = req.params.id;
+  const { amount, reason } = req.body || {};
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const orderRes = await client.query(
+      `SELECT o.*, u.telegram_id, u.telegram_username, u.locale
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       WHERE o.id = $1
+       FOR UPDATE OF o`,
+      [orderId]
+    );
+
+    if (orderRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+    }
+
+    const order = orderRes.rows[0];
+    if (order.status !== "PAID" && order.status !== "DELIVERED") {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "ORDER_NOT_REFUNDABLE" });
+    }
+
+    const orderTotal = await getOrderTotalUsd(
+      client,
+      orderId,
+      order.unit_price_at_purchase || order.product_price
+    );
+
+    if (!orderTotal || orderTotal <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "ORDER_TOTAL_INVALID" });
+    }
+
+    const alreadyRefunded = Number(order.refunded_amount || 0);
+    const remaining = Number((orderTotal - alreadyRefunded).toFixed(2));
+    if (remaining <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "ORDER_ALREADY_REFUNDED" });
+    }
+
+    let refundAmount = remaining;
+    if (amount !== undefined && amount !== null && amount !== "") {
+      const parsedAmount = Number(amount);
+      if (!Number.isFinite(parsedAmount) || parsedAmount <= 0) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "INVALID_REFUND_AMOUNT" });
+      }
+      refundAmount = Math.min(parsedAmount, remaining);
+    }
+
+    refundAmount = Number(refundAmount.toFixed(2));
+    if (refundAmount <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "INVALID_REFUND_AMOUNT" });
+    }
+
+    const newRefundedAmount = Number((alreadyRefunded + refundAmount).toFixed(2));
+    const fullyRefunded = newRefundedAmount >= orderTotal - 0.01;
+    const refundType = fullyRefunded ? "FULL" : "PARTIAL";
+
+    const commissionRes = await client.query(
+      `SELECT c.*, a.user_id AS affiliate_user_id
+       FROM commissions c
+       JOIN affiliates a ON a.id = c.affiliate_id
+       WHERE c.order_id = $1
+       FOR UPDATE OF c`,
+      [orderId]
+    );
+
+    let commissionRefunded = 0;
+    let affiliateUserId = null;
+
+    if (commissionRes.rowCount > 0) {
+      const commission = commissionRes.rows[0];
+      affiliateUserId = commission.affiliate_user_id;
+
+      if (commission.status === "RESERVED") {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "COMMISSION_RESERVED" });
+      }
+
+      const commissionAmount = Number(commission.amount || 0);
+      const currentRefunded = Number(commission.refunded_amount || 0);
+      const refundRatio = refundAmount / orderTotal;
+      const rawCommissionRefund = commissionAmount * refundRatio;
+      const refundForCommission = Number(rawCommissionRefund.toFixed(2));
+      const remainingCommission = Math.max(commissionAmount - currentRefunded, 0);
+      const appliedRefund = Math.min(remainingCommission, refundForCommission);
+
+      if (appliedRefund > 0) {
+        commissionRefunded = Number(appliedRefund.toFixed(2));
+        const updatedRefunded = Number((currentRefunded + commissionRefunded).toFixed(2));
+        const commissionFullyRefunded = updatedRefunded >= commissionAmount - 0.01;
+
+        await client.query(
+          `UPDATE commissions
+           SET refunded_amount = $2,
+               refunded_at = now(),
+               refund_reason = $3,
+               status = CASE
+                 WHEN $4 THEN 'REFUNDED'
+                 ELSE status
+               END
+           WHERE id = $1`,
+          [commission.id, updatedRefunded, reason || null, commissionFullyRefunded]
+        );
+
+        if (commission.status === "PAID_OUT") {
+          await client.query(
+            `UPDATE affiliates
+             SET affiliate_debt = affiliate_debt + $2
+             WHERE id = $1`,
+            [commission.affiliate_id, commissionRefunded]
+          );
+        }
+      }
+    }
+
+    await client.query(
+      `UPDATE orders
+       SET refunded_amount = $2,
+           refund_reason = $3,
+           refunded_at = CASE WHEN $4 THEN now() ELSE refunded_at END,
+           status = CASE WHEN $4 THEN 'REFUNDED' ELSE status END
+       WHERE id = $1`,
+      [orderId, newRefundedAmount, reason || null, fullyRefunded]
+    );
+
+    await client.query(
+      `INSERT INTO order_refunds (order_id, amount, refund_type, reason, refunded_by_admin)
+       VALUES ($1, $2, $3, $4, $5)`,
+      [orderId, refundAmount, refundType, reason || null, req.admin?.sub || null]
+    );
+
+    await client.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "ORDER_REFUND",
+        "order",
+        orderId,
+        JSON.stringify({
+          admin: req.admin?.sub || null,
+          amount: refundAmount,
+          refund_type: refundType,
+          commission_refund: commissionRefunded,
+        }),
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    const locale = order.locale || "es";
+    const refundMessage =
+      (MESSAGES[locale]?.[fullyRefunded ? "refund_full" : "refund_partial"]
+        || MESSAGES.es[fullyRefunded ? "refund_full" : "refund_partial"])
+        .replace("{amount}", formatUsd(refundAmount));
+
+    try {
+      await sendMessage(order.telegram_id, refundMessage);
+    } catch (err) {
+      console.error("Customer refund notification failed", err);
+    }
+
+    if (affiliateUserId && commissionRefunded > 0) {
+      try {
+        const affiliateUserRes = await pool.query(
+          "SELECT telegram_id, locale FROM users WHERE id = $1",
+          [affiliateUserId]
+        );
+        if (affiliateUserRes.rowCount > 0) {
+          const affiliateRow = affiliateUserRes.rows[0];
+          const affiliateLocale = affiliateRow.locale || "es";
+          const affiliateMessage =
+            (AFFILIATE_MESSAGES[affiliateLocale]?.[
+              fullyRefunded ? "refund_full" : "refund_partial"
+            ] || AFFILIATE_MESSAGES.es[fullyRefunded ? "refund_full" : "refund_partial"])
+              .replace("{amount}", formatUsd(commissionRefunded));
+          await sendMessage(affiliateRow.telegram_id, affiliateMessage);
+        }
+      } catch (err) {
+        console.error("Affiliate refund notification failed", err);
+      }
+    }
+
+    return res.json({
+      ok: true,
+      refund: {
+        order_id: orderId,
+        amount: refundAmount,
+        refund_type: refundType,
+        commission_refund: commissionRefunded,
+        fully_refunded: fullyRefunded,
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
 router.post("/orders/:id/reject", async (req, res, next) => {
   const orderId = req.params.id;
   const { mode, reason } = req.body || {};
@@ -3392,14 +3453,15 @@ router.get("/affiliates", async (req, res, next) => {
               a.created_at, a.approved_at,
               u.telegram_id, u.telegram_username,
               ranked.affiliate_number,
-              COALESCE(SUM(c.amount) FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance,
-              COALESCE(SUM(c.amount), 0) AS earnings_total,
+              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0))
+                FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance,
+              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
               COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
               MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN ranked ON ranked.id = a.id
-       LEFT JOIN commissions c ON c.affiliate_id = a.id
+       LEFT JOIN commissions c ON c.affiliate_id = a.id AND c.status != 'REFUNDED'
        LEFT JOIN (
          SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
          FROM order_items
@@ -3693,13 +3755,13 @@ router.get("/affiliates/:id", async (req, res, next) => {
        )
        SELECT a.*, u.telegram_id, u.telegram_username,
               ranked.affiliate_number,
-              COALESCE(SUM(c.amount), 0) AS earnings_total,
+              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
               COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
               MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN ranked ON ranked.id = a.id
-       LEFT JOIN commissions c ON c.affiliate_id = a.id
+       LEFT JOIN commissions c ON c.affiliate_id = a.id AND c.status != 'REFUNDED'
        LEFT JOIN (
          SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
          FROM order_items
@@ -3715,7 +3777,7 @@ router.get("/affiliates/:id", async (req, res, next) => {
     }
 
     const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS available_balance
+      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS available_balance
        FROM commissions
        WHERE affiliate_id = $1 AND status = 'EARNED'`,
       [affiliateId]
@@ -3725,6 +3787,7 @@ router.get("/affiliates/:id", async (req, res, next) => {
       `SELECT c.id,
               c.order_id,
               c.amount,
+              c.refunded_amount,
               c.status,
               c.earned_at,
               c.paid_out_at,
@@ -3981,7 +4044,7 @@ router.get("/payouts/:id", async (req, res, next) => {
 
     const payout = payoutRes.rows[0];
     const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS available_balance
+      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS available_balance
        FROM commissions
        WHERE affiliate_id = $1 AND status = 'EARNED'`,
       [payout.affiliate_id]
@@ -4025,7 +4088,7 @@ router.post("/payouts", async (req, res, next) => {
     await client.query("BEGIN");
 
     const affiliateRes = await client.query(
-      "SELECT id, wallet_usdt_bsc, wallet_nequi, binance_id FROM affiliates WHERE id = $1",
+      "SELECT id, wallet_usdt_bsc, wallet_nequi, binance_id, affiliate_debt FROM affiliates WHERE id = $1",
       [affiliateId]
     );
 
@@ -4049,9 +4112,14 @@ router.post("/payouts", async (req, res, next) => {
     }
 
     const commissionsRes = await client.query(
-      `SELECT id, amount
+      `SELECT id,
+              amount,
+              COALESCE(refunded_amount, 0) AS refunded_amount,
+              (amount - COALESCE(refunded_amount, 0)) AS net_amount
        FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'
+       WHERE affiliate_id = $1
+         AND status = 'EARNED'
+         AND (amount - COALESCE(refunded_amount, 0)) > 0
        ORDER BY earned_at ASC
        FOR UPDATE`,
       [affiliateId]
@@ -4062,31 +4130,49 @@ router.post("/payouts", async (req, res, next) => {
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
-    const amount = commissionsRes.rows.reduce(
-      (sum, row) => sum + Number(row.amount || 0),
+    const grossAmount = commissionsRes.rows.reduce(
+      (sum, row) => sum + Number(row.net_amount || 0),
       0
     );
 
-    if (!amount || amount <= 0) {
+    if (!grossAmount || grossAmount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
+    const debt = Number(affiliate.affiliate_debt || 0);
+    const debtApplied = Math.min(debt, grossAmount);
+    const payoutAmount = Number((grossAmount - debtApplied).toFixed(2));
+    if (payoutAmount <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "DEBT_EXCEEDS_BALANCE" });
+    }
+
     const payoutRes = await client.query(
-      `INSERT INTO payouts (affiliate_id, amount, method, destination, status)
-       VALUES ($1, $2, $3, $4, 'REQUESTED')
+      `INSERT INTO payouts (affiliate_id, amount, method, destination, status, debt_applied)
+       VALUES ($1, $2, $3, $4, 'REQUESTED', $5)
        RETURNING *`,
-      [affiliateId, amount, method, resolvedDestination]
+      [affiliateId, payoutAmount, method, resolvedDestination, debtApplied]
     );
 
     const commissionIds = commissionsRes.rows.map((row) => row.id);
     const payoutId = payoutRes.rows[0].id;
 
+    if (debtApplied > 0) {
+      await client.query(
+        `UPDATE affiliates
+         SET affiliate_debt = affiliate_debt - $2
+         WHERE id = $1`,
+        [affiliateId, debtApplied]
+      );
+    }
+
     await client.query(
       `INSERT INTO payout_items (payout_id, commission_id, amount)
-       SELECT $1, id, amount
+       SELECT $1, id, (amount - COALESCE(refunded_amount, 0))
        FROM commissions
-       WHERE id = ANY($2::uuid[])`,
+       WHERE id = ANY($2::uuid[])
+         AND (amount - COALESCE(refunded_amount, 0)) > 0`,
       [payoutId, commissionIds]
     );
 
@@ -4263,6 +4349,15 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
        RETURNING *`,
       [payoutId]
     );
+
+    if (payout.debt_applied && Number(payout.debt_applied) > 0) {
+      await client.query(
+        `UPDATE affiliates
+         SET affiliate_debt = affiliate_debt + $2
+         WHERE id = $1`,
+        [payout.affiliate_id, payout.debt_applied]
+      );
+    }
 
     const payoutItemsRes = await client.query(
       `SELECT commission_id

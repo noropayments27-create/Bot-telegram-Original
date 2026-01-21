@@ -62,34 +62,36 @@ async function createOrder(req, res, next) {
       return res.status(400).json({ error: "Product inactive" });
     }
 
-    if (product.stock_mode === "SIMPLE") {
-      if (product.unique_purchase) {
-        if (qty > 1) {
-          await client.query("ROLLBACK");
-          return res.status(409).json({
-            ok: false,
-            error: "UNIQUE_LIMIT",
-            message: "❌ Este producto solo lo puedes reclamar una vez.",
-          });
-        }
-        const alreadyPurchasedRes = await client.query(
-          `SELECT 1
-           FROM orders o
-           WHERE o.user_id = $1
-             AND o.product_id = $2
-             AND o.status IN ('PAID', 'DELIVERED')
-           LIMIT 1`,
-          [user.id, product.id]
-        );
-        if (alreadyPurchasedRes.rowCount > 0) {
-          await client.query("ROLLBACK");
-          return res.status(409).json({
-            ok: false,
-            error: "UNIQUE_ALREADY_PURCHASED",
-            message: "❌ Este producto solo lo puedes reclamar una vez.",
-          });
-        }
+    const isFreeProduct = Number(product.price || 0) <= 0;
+    if (product.stock_mode === "SIMPLE" && (product.unique_purchase || isFreeProduct)) {
+      if (qty > 1) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "UNIQUE_LIMIT",
+          message: "❌ Este producto solo lo puedes reclamar una vez.",
+        });
       }
+      const alreadyPurchasedRes = await client.query(
+        `SELECT 1
+         FROM orders o
+         WHERE o.user_id = $1
+           AND o.product_id = $2
+           AND o.status IN ('PAID', 'DELIVERED')
+         LIMIT 1`,
+        [user.id, product.id]
+      );
+      if (alreadyPurchasedRes.rowCount > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "UNIQUE_ALREADY_PURCHASED",
+          message: "❌ Este producto solo lo puedes reclamar una vez.",
+        });
+      }
+    }
+
+    if (product.stock_mode === "SIMPLE") {
       if (!product.unique_purchase && product.stock_qty !== null && product.stock_qty !== undefined) {
         const holdsRes = await client.query(
           `SELECT COALESCE(SUM(qty), 0)::int AS held_qty
@@ -550,7 +552,7 @@ async function markOrderPaid(req, res, next) {
     if (order.affiliate_id) {
       const statsRes = await client.query(
         `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
-                COALESCE(SUM(c.amount), 0) AS earnings_total,
+                COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
                 MAX(c.earned_at) AS last_sale_at
          FROM commissions c
          LEFT JOIN (
@@ -558,7 +560,8 @@ async function markOrderPaid(req, res, next) {
            FROM order_items
            GROUP BY order_id
          ) oi ON oi.order_id = c.order_id
-         WHERE c.affiliate_id = $1`,
+         WHERE c.affiliate_id = $1
+           AND c.status != 'REFUNDED'`,
         [order.affiliate_id]
       );
       const stats = statsRes.rows[0] || {};

@@ -672,6 +672,23 @@ body.login-success {
   margin-top: -10px;
 }
 
+.orders-refund-button {
+  margin-left: 1cm;
+  padding: 4px 10px;
+  border-radius: 999px;
+  border: 1px solid #ff4d00;
+  background: transparent;
+  color: #ff4d00;
+  font-size: 11px;
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.orders-refund-button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
 .orders-card .link-button {
   color: var(--scarlet-red);
 }
@@ -1360,7 +1377,7 @@ body.login-success {
 
 .inventory-card {
   max-width: 100%;
-  width: 130%;
+  width: 100%;
   margin-left: auto;
   margin-right: auto;
   padding: 20px;
@@ -1373,9 +1390,14 @@ body.login-success {
 }
 
 .inventory-page {
-  zoom: 0.8;
+  zoom: 1;
   position: relative;
   padding-bottom: 2cm;
+  max-width: 100%;
+}
+
+.inventory-page.page {
+  padding-top: 1cm;
 }
 
 .inventory-detail-grid {
@@ -2083,6 +2105,20 @@ body.login-success {
 
 .manual-units__notes {
   grid-column: 1 / -1;
+}
+
+.manual-units__duration {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
+.manual-units__duration input {
+  flex: 1 1 90px;
+}
+
+.manual-units__duration select {
+  flex: 0 0 120px;
 }
 
 .manual-units-card {

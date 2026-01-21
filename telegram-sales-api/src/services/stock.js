@@ -16,11 +16,12 @@ async function loadOrderItems(client, orderId) {
     `SELECT oi.product_id,
             SUM(oi.qty)::int AS qty,
             p.stock_mode,
-            p.stock_qty
+            p.stock_qty,
+            p.unique_purchase
      FROM order_items oi
      JOIN products p ON p.id = oi.product_id
      WHERE oi.order_id = $1
-     GROUP BY oi.product_id, p.stock_mode, p.stock_qty`,
+     GROUP BY oi.product_id, p.stock_mode, p.stock_qty, p.unique_purchase`,
     [orderId]
   );
 
@@ -30,11 +31,12 @@ async function loadOrderItems(client, orderId) {
       qty: Number(row.qty),
       stock_mode: row.stock_mode,
       stock_qty: row.stock_qty,
+      unique_purchase: row.unique_purchase,
     }));
   }
 
   const orderRes = await client.query(
-    `SELECT o.product_id, p.stock_mode, p.stock_qty
+    `SELECT o.product_id, p.stock_mode, p.stock_qty, p.unique_purchase
      FROM orders o
      JOIN products p ON p.id = o.product_id
      WHERE o.id = $1`,
@@ -51,6 +53,7 @@ async function loadOrderItems(client, orderId) {
       qty: 1,
       stock_mode: orderRes.rows[0].stock_mode,
       stock_qty: orderRes.rows[0].stock_qty,
+      unique_purchase: orderRes.rows[0].unique_purchase,
     },
   ];
 }
@@ -65,6 +68,9 @@ async function consumeStockForOrder(client, orderOrId) {
 
   for (const item of items) {
     if (item.stock_mode === "SIMPLE") {
+      if (item.unique_purchase) {
+        continue;
+      }
       const productRes = await client.query(
         `SELECT stock_qty
          FROM products

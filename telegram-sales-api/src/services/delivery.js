@@ -80,6 +80,51 @@ function normalizePayload(payload) {
 
 function buildUnitsMessage(product, unit, telegramId) {
   const payload = normalizePayload(unit.payload);
+  const now = new Date();
+  const normalizeUnit = (value) => {
+    const raw = String(value || "").trim().toLowerCase();
+    if (raw === "dia" || raw === "dias") return "days";
+    if (raw === "semana" || raw === "semanas") return "weeks";
+    if (raw === "mes" || raw === "meses") return "months";
+    if (raw === "ano" || raw === "anos" || raw === "año" || raw === "años") return "years";
+    return raw;
+  };
+  const addDuration = (base, value, unit) => {
+    const amount = Number(value || 0);
+    if (!Number.isFinite(amount) || amount <= 0) {
+      return null;
+    }
+    const next = new Date(base.getTime());
+    switch (normalizeUnit(unit)) {
+      case "weeks":
+        next.setDate(next.getDate() + amount * 7);
+        break;
+      case "months":
+        next.setMonth(next.getMonth() + amount);
+        break;
+      case "years":
+        next.setFullYear(next.getFullYear() + amount);
+        break;
+      case "days":
+      default:
+        next.setDate(next.getDate() + amount);
+        break;
+    }
+    return next;
+  };
+  const formatDate = (date) => {
+    if (!date) {
+      return "";
+    }
+    return date.toISOString().slice(0, 10);
+  };
+  const durationValue = payload.duration_value || payload.duration || "";
+  const durationUnit = payload.duration_unit || "";
+  const computedExpires = addDuration(now, durationValue, durationUnit);
+  const startAt =
+    payload.start_at || payload.starts_at || formatDate(now);
+  const expiresAt =
+    payload.expires_at || formatDate(computedExpires) || "";
   const rawBuyerUsername = payload.buyer_username || unit.held_by_username || "";
   const cleanedBuyerUsername = String(rawBuyerUsername || "").trim();
   const buyerUsernameLine = cleanedBuyerUsername
@@ -91,6 +136,8 @@ function buildUnitsMessage(product, unit, telegramId) {
   const data = {
     title: product.name || "",
     ...payload,
+    start_at: startAt,
+    expires_at: expiresAt,
     notes: notes || "—",
     buyer_telegram_id: telegramId,
     buyer_username: cleanedBuyerUsername,

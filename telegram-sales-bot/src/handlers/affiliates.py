@@ -42,14 +42,6 @@ def _build_affiliate_keyboard(
                 )
             ]
         )
-    buttons.append(
-        [
-            InlineKeyboardButton(
-                text=t(locale, "affiliate_info_button"),
-                callback_data="affiliate:info",
-            )
-        ]
-    )
     if not has_affiliate:
         buttons.append(
             [
@@ -59,6 +51,14 @@ def _build_affiliate_keyboard(
                 )
             ]
         )
+    buttons.append(
+        [
+            InlineKeyboardButton(
+                text=t(locale, "affiliate_info_button"),
+                callback_data="affiliate:info",
+            )
+        ]
+    )
     buttons.append(
         [
             InlineKeyboardButton(

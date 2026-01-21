@@ -449,8 +449,8 @@ async function checkoutCart(req, res, next) {
 
     if (!isAdmin) {
       const uniqueItems = itemsRes.rows.filter((item) => {
-        const isFreeItem = Number(item.price || 0) <= 0;
-        return item.stock_mode === "SIMPLE" && (item.unique_purchase || isFreeItem);
+      const isFreeItem = Number(item.price || 0) <= 0;
+      return item.stock_mode === "SIMPLE" && (item.unique_purchase || isFreeItem);
       });
       for (const item of uniqueItems) {
         if (Number(item.qty) > 1) {

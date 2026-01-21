@@ -9,7 +9,6 @@ import { useRouter } from "next/router";
 import {
   apiFetch,
   clearAuthToken,
-  getApiBaseUrl,
   getAuthToken,
 } from "../lib/api";
 
@@ -23,9 +22,6 @@ export default function InventoryPage() {
   const [unitsStatus, setUnitsStatus] = useState("AVAILABLE");
   const [simpleStock, setSimpleStock] = useState("");
   const [simpleUnlimited, setSimpleUnlimited] = useState(false);
-  const [template, setTemplate] = useState("");
-  const [uploadFile, setUploadFile] = useState(null);
-  const [uploadErrors, setUploadErrors] = useState([]);
   const [message, setMessage] = useState("");
   const [warning, setWarning] = useState("");
   const [error, setError] = useState("");
@@ -88,15 +84,12 @@ export default function InventoryPage() {
   const [toast, setToast] = useState("");
   const createDescRefs = useRef([]);
   const editDescRefs = useRef([]);
-  const [templatePreset, setTemplatePreset] = useState("login_access");
-  const [csvTemplateKey, setCsvTemplateKey] = useState("basic_user_pass");
   const [manualUnit, setManualUnit] = useState({
     username: "",
     password: "",
-    start_at: "",
-    expires_at: "",
+    duration_value: "",
+    duration_unit: "months",
     notes: "",
-    external_id: "",
   });
   const unitsSummaryList = unitsSummary.length > 0
     ? unitsSummary
@@ -267,7 +260,9 @@ export default function InventoryPage() {
       PRODUCT_NOT_UNITS: "El producto no está en modo UNITS.",
       DELIVERY_TYPE_INVALID: "El tipo de entrega es inválido.",
       DUPLICATE_IN_DB: "La unidad ya existe en la base de datos.",
-      EXTERNAL_ID_DUPLICATE: "El ID externo ya existe.",
+      UNIT_FIELDS_REQUIRED: "Completa todos los campos de la unidad.",
+      UNIT_DURATION_UNIT_REQUIRED: "Selecciona la unidad de duración.",
+      UNIT_NOT_AVAILABLE: "Solo se pueden eliminar unidades disponibles.",
       PAYLOAD_INVALID_JSON: "El payload no es JSON válido.",
     };
     if (mapped[code]) {
@@ -394,7 +389,6 @@ export default function InventoryPage() {
       setSimpleStock("");
       setSimpleUnlimited(false);
     }
-    setTemplate(data?.product?.delivery_template || "");
     return data;
   };
 
@@ -545,86 +539,6 @@ export default function InventoryPage() {
     return lines.join("\n");
   }
 
-  const templatePresets = [
-    {
-      key: "login_access",
-      label: "🔑 Acceso básico",
-      value: [
-        "🔑 ACCESO",
-        "",
-        "👤 Usuario: {{username}}",
-        "🔒 Contraseña: {{password}}",
-        "🗓 Inicio: {{start_at}}",
-        "⏳ Expira: {{expires_at}}",
-      ].join("\n"),
-    },
-    {
-      key: "full_access",
-      label: "🧾 Acceso completo",
-      value: [
-        "🧾 DATOS COMPLETOS",
-        "",
-        "👤 Usuario: {{username}}",
-        "🔒 Contraseña: {{password}}",
-        "🗓 Inicio: {{start_at}}",
-        "⏳ Expira: {{expires_at}}",
-        "📝 Notas: {{notes}}",
-      ].join("\n"),
-    },
-    {
-      key: "buyer_receipt",
-      label: "📩 Entrega con comprador",
-      value: [
-        "📩 ENTREGA",
-        "",
-        "👤 Usuario: {{username}}",
-        "🔒 Contraseña: {{password}}",
-        "🗓 Inicio: {{start_at}}",
-        "⏳ Expira: {{expires_at}}",
-        "📝 Notas: {{notes}}",
-        "🧑‍💻 Comprador: {{buyer_telegram_id}}",
-      ].join("\n"),
-    },
-  ];
-
-  const csvTemplates = [
-    {
-      key: "basic_user_pass",
-      label: "Usuario + Contraseña",
-      content: ["sku_key,username,password", "shop_producto_01,usuario_demo,clave123"].join("\n"),
-      filename: "units_user_pass.csv",
-    },
-    {
-      key: "with_dates",
-      label: "Con fechas",
-      content: [
-        "sku_key,username,password,start_at,expires_at,notes",
-        "shop_producto_01,usuario_demo,clave123,2026-01-11,2026-02-11,Nota ejemplo",
-      ].join("\n"),
-      filename: "units_user_pass_dates.csv",
-    },
-    {
-      key: "full_payload",
-      label: "Completo",
-      content: [
-        "sku_key,external_id,username,password,payload,starts_at,expires_at,notes",
-        "shop_producto_01,acc_001,usuario_demo,clave123,\"{\\\"plan\\\":\\\"pro\\\"}\",2026-01-11,2026-02-11,Cuenta premium",
-      ].join("\n"),
-      filename: "units_full.csv",
-    },
-  ];
-
-  const downloadCsvTemplate = (template) => {
-    const blob = new Blob([template.content], { type: "text/csv;charset=utf-8;" });
-    const url = URL.createObjectURL(blob);
-    const link = document.createElement("a");
-    link.href = url;
-    link.download = template.filename;
-    document.body.appendChild(link);
-    link.click();
-    link.remove();
-    URL.revokeObjectURL(url);
-  };
 
   const getSkuOrder = (item) => {
     const code = String(item?.code || "").toUpperCase();
@@ -716,65 +630,15 @@ export default function InventoryPage() {
   };
 
   const handleSaveProduct = async () => {
-    if (!detail?.product) {
+    if (isSubmitting) {
       return;
     }
-    const trimmedName = editProductName.trim();
-    if (!trimmedName) {
-      notifyError("El nombre no puede estar vacío.");
-      return;
-    }
-    if (editStep !== "delivery") {
-      notifyWarning("Completa los campos y pulsa Siguiente.");
-      return;
-    }
-    const normalizedPrice = editPrice === "" ? "0" : editPrice;
-    const normalizedSimpleStock = simpleUnlimited
-      ? ""
-      : simpleStock === ""
-        ? "0"
-        : simpleStock;
-    setEditIsFree(Number(normalizedPrice || 0) <= 0);
     setIsSubmitting(true);
     setError("");
     setMessage("");
     setWarning("");
     try {
-      const data = await apiFetch(`/admin/products/${detail.product.id}/update`, {
-        method: "POST",
-        body: JSON.stringify({
-          display_name: trimmedName,
-          category_key: editCategory,
-          price: normalizedPrice,
-          description: buildDescriptionPayload(editDescription),
-          show_stock: editShowStock,
-          unique_purchase: editUnique,
-          stock_mode: editStockMode,
-          delivery_type: editDeliveryType,
-          delivery_payload: editDeliveryPayload,
-        }),
-      });
-      const updated = data.product;
-      setProducts((prev) =>
-        prev.map((item) => (item.id === updated.id ? updated : item))
-      );
-      if (editStockMode === "SIMPLE") {
-        await apiFetch("/admin/stock/simple/set", {
-          method: "POST",
-          body: JSON.stringify({
-            product_id: detail.product.id,
-            stock_qty: editUnique ? "" : normalizedSimpleStock,
-            unlimited: simpleUnlimited || editUnique,
-            unique_purchase: editUnique,
-          }),
-        });
-      }
-      notifyMessage("Cambios actualizados y reflejados en el panel y el bot.");
-      await loadInspect({ productId: detail.product.id });
-      await loadUnits({ productId: detail.product.id }, unitsStatus);
-      await loadHolds({ productId: detail.product.id });
-    } catch (err) {
-      notifyError(resolveErrorMessage(err, "No se pudo actualizar el producto."));
+      await saveProductEdits({ silent: false });
     } finally {
       setIsSubmitting(false);
     }
@@ -833,96 +697,6 @@ export default function InventoryPage() {
     return acc;
   }, {});
 
-  const handleTemplateSave = async () => {
-    if (!detail?.product) {
-      return;
-    }
-    setIsSubmitting(true);
-    setError("");
-    setMessage("");
-    setWarning("");
-    try {
-      await apiFetch("/admin/stock/template/set", {
-        method: "POST",
-        body: JSON.stringify({
-          product_id: detail.product.id,
-          delivery_template: template,
-        }),
-      });
-      notifyMessage("Guardado con exito: template");
-      await loadInspect({ productId: detail.product.id });
-      await loadUnits({ productId: detail.product.id }, unitsStatus);
-      await loadHolds({ productId: detail.product.id });
-    } catch (err) {
-      notifyError("No se pudo guardar el template.");
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
-
-  const handleUpload = async () => {
-    if (!detail?.product || !uploadFile) {
-      return;
-    }
-    setIsSubmitting(true);
-    setError("");
-    setMessage("");
-    setWarning("");
-    setUploadErrors([]);
-    try {
-      const token = getAuthToken();
-      const formData = new FormData();
-      formData.append("file", uploadFile);
-      const response = await fetch(
-        `${getApiBaseUrl()}/admin/stock/units/upload?product_id=${detail.product.id}`,
-        {
-          method: "POST",
-          headers: token ? { Authorization: `Bearer ${token}` } : undefined,
-          body: formData,
-        }
-      );
-      let data = {};
-      try {
-        data = await response.json();
-      } catch (err) {
-        data = {};
-      }
-      if (response.status === 401) {
-        clearAuthToken();
-        router.replace("/login");
-        return;
-      }
-      if (!response.ok) {
-        notifyError(
-          data.error
-            ? `No se pudo cargar el CSV: ${data.error}`
-            : "No se pudo cargar el CSV."
-        );
-      } else {
-        const insertedCount = data.inserted_count || 0;
-        const failedRows = Array.isArray(data.failed_rows) ? data.failed_rows : [];
-        if (insertedCount > 0) {
-          notifyMessage(`Insertadas: ${insertedCount}`);
-        }
-        if (failedRows.length > 0) {
-          notifyWarning("Algunas filas fallaron.");
-        }
-        if (insertedCount === 0 && failedRows.length > 0) {
-          notifyWarning("No se insertaron filas. Revisa los errores.");
-        }
-        setUploadErrors(failedRows);
-        await loadInspect({ productId: detail.product.id });
-        await loadUnits({ productId: detail.product.id }, unitsStatus);
-        await loadHolds({ productId: detail.product.id });
-      }
-      setUploadFile(null);
-    } catch (err) {
-      notifyError("No se pudo cargar el CSV.");
-      setUploadErrors([]);
-    } finally {
-      setIsSubmitting(false);
-    }
-  };
 
   const handleUnitsStatusChange = async (event) => {
     const value = event.target.value;
@@ -979,17 +753,91 @@ export default function InventoryPage() {
     }
   };
 
+  const saveProductEdits = async ({ silent = false } = {}) => {
+    if (!detail?.product) {
+      return false;
+    }
+    const trimmedName = editProductName.trim();
+    if (!trimmedName) {
+      notifyError("El nombre no puede estar vacío.");
+      return false;
+    }
+    if (editStep !== "delivery") {
+      notifyWarning("Completa los campos y pulsa Siguiente.");
+      return false;
+    }
+    const normalizedPrice = editPrice === "" ? "0" : editPrice;
+    const normalizedSimpleStock = simpleUnlimited
+      ? ""
+      : simpleStock === ""
+        ? "0"
+        : simpleStock;
+    setEditIsFree(Number(normalizedPrice || 0) <= 0);
+    try {
+      const data = await apiFetch(`/admin/products/${detail.product.id}/update`, {
+        method: "POST",
+        body: JSON.stringify({
+          display_name: trimmedName,
+          category_key: editCategory,
+          price: normalizedPrice,
+          description: buildDescriptionPayload(editDescription),
+          show_stock: editShowStock,
+          unique_purchase: editUnique,
+          stock_mode: editStockMode,
+          delivery_type: editDeliveryType,
+          delivery_payload: editDeliveryPayload,
+        }),
+      });
+      const updated = data.product;
+      setProducts((prev) =>
+        prev.map((item) => (item.id === updated.id ? updated : item))
+      );
+      if (editStockMode === "SIMPLE") {
+        await apiFetch("/admin/stock/simple/set", {
+          method: "POST",
+          body: JSON.stringify({
+            product_id: detail.product.id,
+            stock_qty: editUnique ? "" : normalizedSimpleStock,
+            unlimited: simpleUnlimited || editUnique,
+            unique_purchase: editUnique,
+          }),
+        });
+      }
+      if (!silent) {
+        notifyMessage("Cambios actualizados y reflejados en el panel y el bot.");
+      }
+      await loadInspect({ productId: detail.product.id });
+      await loadUnits({ productId: detail.product.id }, unitsStatus);
+      await loadHolds({ productId: detail.product.id });
+      return true;
+    } catch (err) {
+      notifyError(resolveErrorMessage(err, "No se pudo actualizar el producto."));
+      return false;
+    }
+  };
+
   const handleManualUnitAdd = async () => {
     if (!detail?.product) {
       return;
     }
-    const hasData = Object.values(manualUnit).some((value) => String(value || "").trim());
-    if (!hasData) {
-      notifyWarning("Completa al menos un campo para agregar la unidad.");
+    if (isSubmitting) {
+      return;
+    }
+    const username = String(manualUnit.username || "").trim();
+    const password = String(manualUnit.password || "").trim();
+    const durationValue = String(manualUnit.duration_value || "").trim();
+    const durationUnit = String(manualUnit.duration_unit || "").trim();
+    const notes = String(manualUnit.notes || "").trim();
+    if (!username || !password || !durationValue || !durationUnit || !notes) {
+      notifyWarning("Completa todos los campos para agregar la unidad.");
       return;
     }
     setIsSubmitting(true);
     try {
+      const saved = await saveProductEdits({ silent: true });
+      if (!saved) {
+        return;
+      }
       await apiFetch("/admin/stock/units/add", {
         method: "POST",
         body: JSON.stringify({
@@ -1000,10 +848,9 @@ export default function InventoryPage() {
       setManualUnit({
         username: "",
         password: "",
-        start_at: "",
-        expires_at: "",
+        duration_value: "",
+        duration_unit: "months",
         notes: "",
-        external_id: "",
       });
       notifyMessage("Unidad agregada.");
       await loadUnits({ productId: detail.product.id }, unitsStatus);
@@ -1014,8 +861,35 @@ export default function InventoryPage() {
     }
   };
 
+  const handleUnitDelete = async (unitId) => {
+    if (!detail?.product || !unitId || isSubmitting) {
+      return;
+    }
+    const confirmed = window.confirm("¿Eliminar esta unidad?");
+    if (!confirmed) {
+      return;
+    }
+    setIsSubmitting(true);
+    try {
+      await apiFetch(`/admin/stock/units/${unitId}/delete`, { method: "POST" });
+      notifyMessage("Unidad eliminada.");
+      await loadUnits({ productId: detail.product.id }, unitsStatus);
+    } catch (err) {
+      notifyError(resolveErrorMessage(err, "No se pudo eliminar la unidad."));
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const createDescriptionLines = getDescriptionLines(createDescription);
   const editDescriptionLines = getDescriptionLines(editDescription);
+  const manualUnitComplete = Boolean(
+    String(manualUnit.username || "").trim()
+    && String(manualUnit.password || "").trim()
+    && String(manualUnit.duration_value || "").trim()
+    && String(manualUnit.duration_unit || "").trim()
+    && String(manualUnit.notes || "").trim()
+  );
 
   return (
     <>
@@ -1131,6 +1005,7 @@ export default function InventoryPage() {
                           setCreateIsFree(true);
                         }
                       }}
+                      title="Producto gratis: 1 por usuario."
                     >
                       Gratis
                     </button>
@@ -1323,6 +1198,7 @@ export default function InventoryPage() {
                         type="button"
                         className={`stock-toggle ${!createUnique && !createSimpleUnlimited ? "active" : ""}`}
                         onClick={() => setCreateStockToggle("stock")}
+                        title="Stock limitado: descuenta el stock disponible."
                       >
                         Stock
                       </button>
@@ -1330,6 +1206,7 @@ export default function InventoryPage() {
                         type="button"
                         className={`stock-toggle ${createSimpleUnlimited ? "active" : ""}`}
                         onClick={() => setCreateStockToggle("unlimited")}
+                        title="Stock ilimitado: no descuenta stock."
                       >
                         Ilimitado
                       </button>
@@ -1337,6 +1214,7 @@ export default function InventoryPage() {
                         type="button"
                         className={`stock-toggle ${createUnique ? "active" : ""}`}
                         onClick={() => setCreateStockToggle("unique")}
+                        title="Compra unica por usuario y stock ilimitado."
                       >
                         Unico
                       </button>
@@ -1658,13 +1536,12 @@ export default function InventoryPage() {
                         <tr>
                           <th align="left">ID</th>
                           <th align="left">Estado</th>
-                          <th align="left">ID Externo</th>
                           <th align="left">Usuario</th>
                           <th align="left">Contraseña</th>
-                          <th align="left">Inicio</th>
-                          <th align="left">Expira</th>
+                          <th align="left">Duracion</th>
                           <th align="left">Creada</th>
                           <th align="left">Carga útil</th>
+                          <th align="left">Acciones</th>
                         </tr>
                       </thead>
                       <tbody>
@@ -1676,11 +1553,13 @@ export default function InventoryPage() {
                                 {unit.status}
                               </span>
                             </td>
-                            <td>{unit.external_id || "-"}</td>
                             <td>{unit.username || "-"}</td>
                             <td>{unit.password_masked || "-"}</td>
-                            <td>{unit.starts_at || "-"}</td>
-                            <td>{unit.expires_at || "-"}</td>
+                            <td>
+                              {unit.duration_value
+                                ? `${unit.duration_value} ${unit.duration_unit || ""}`.trim()
+                                : "-"}
+                            </td>
                             <td>
                               {unit.created_at
                                 ? new Date(unit.created_at).toLocaleString()
@@ -1690,6 +1569,21 @@ export default function InventoryPage() {
                               <pre className="code" style={{ whiteSpace: "pre-wrap" }}>
                                 {unit.payload_preview || "{}"}
                               </pre>
+                            </td>
+                            <td>
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => handleUnitDelete(unit.id)}
+                                disabled={isSubmitting || unit.status !== "AVAILABLE"}
+                                title={
+                                  unit.status !== "AVAILABLE"
+                                    ? "Solo se puede eliminar si esta disponible"
+                                    : "Eliminar unidad"
+                                }
+                              >
+                                Eliminar
+                              </button>
                             </td>
                           </tr>
                         ))}
@@ -1769,21 +1663,22 @@ export default function InventoryPage() {
                           }
                         }}
                       />
-                      <button
-                        type="button"
-                        className={`stock-toggle ${editIsFree ? "active" : ""}`}
-                        onClick={() => {
-                          if (editIsFree) {
-                            setEditIsFree(false);
-                            setEditPrice(editLastPrice || "0");
-                          } else {
-                            setEditPrice("0");
-                            setEditIsFree(true);
-                          }
-                        }}
-                      >
-                        Gratis
-                      </button>
+                        <button
+                          type="button"
+                          className={`stock-toggle ${editIsFree ? "active" : ""}`}
+                          onClick={() => {
+                            if (editIsFree) {
+                              setEditIsFree(false);
+                              setEditPrice(editLastPrice || "0");
+                            } else {
+                              setEditPrice("0");
+                              setEditIsFree(true);
+                            }
+                          }}
+                          title="Producto gratis: 1 por usuario."
+                        >
+                          Gratis
+                        </button>
                     </div>
                     {editIsFree && <span className="price-free-label">Gratis</span>}
                   </label>
@@ -1819,6 +1714,7 @@ export default function InventoryPage() {
                             type="button"
                             className={`stock-toggle ${!editUnique && !simpleUnlimited ? "active" : ""}`}
                             onClick={() => setStockToggle("stock")}
+                            title="Stock limitado: descuenta el stock disponible."
                           >
                             Stock
                           </button>
@@ -1826,6 +1722,7 @@ export default function InventoryPage() {
                             type="button"
                             className={`stock-toggle ${simpleUnlimited ? "active" : ""}`}
                             onClick={() => setStockToggle("unlimited")}
+                            title="Stock ilimitado: no descuenta stock."
                           >
                             Ilimitado
                           </button>
@@ -1833,6 +1730,7 @@ export default function InventoryPage() {
                             type="button"
                             className={`stock-toggle ${editUnique ? "active" : ""}`}
                             onClick={() => setStockToggle("unique")}
+                            title="Compra unica por usuario y stock ilimitado."
                           >
                             Unico
                           </button>
@@ -1974,7 +1872,7 @@ export default function InventoryPage() {
                         <div className="form">
                           <div className="manual-units__grid">
                             <label>
-                              Usuario
+                              👤 Usuario
                               <input
                                 type="text"
                                 value={manualUnit.username}
@@ -1987,7 +1885,7 @@ export default function InventoryPage() {
                               />
                             </label>
                             <label>
-                              Contraseña
+                              🔒 Contraseña
                               <input
                                 type="text"
                                 value={manualUnit.password}
@@ -2000,48 +1898,37 @@ export default function InventoryPage() {
                               />
                             </label>
                             <label>
-                              Inicio
-                              <input
-                                type="text"
-                                placeholder="YYYY-MM-DD"
-                                value={manualUnit.start_at}
-                                onChange={(event) =>
-                                  setManualUnit((prev) => ({
-                                    ...prev,
-                                    start_at: event.target.value,
-                                  }))
-                                }
-                              />
-                            </label>
-                            <label>
-                              Expira
-                              <input
-                                type="text"
-                                placeholder="YYYY-MM-DD"
-                                value={manualUnit.expires_at}
-                                onChange={(event) =>
-                                  setManualUnit((prev) => ({
-                                    ...prev,
-                                    expires_at: event.target.value,
-                                  }))
-                                }
-                              />
-                            </label>
-                            <label>
-                              ID externo
-                              <input
-                                type="text"
-                                value={manualUnit.external_id}
-                                onChange={(event) =>
-                                  setManualUnit((prev) => ({
-                                    ...prev,
-                                    external_id: event.target.value,
-                                  }))
-                                }
-                              />
+                              ⏳ Duracion
+                              <div className="manual-units__duration">
+                                <input
+                                  type="number"
+                                  min="1"
+                                  value={manualUnit.duration_value}
+                                  onChange={(event) =>
+                                    setManualUnit((prev) => ({
+                                      ...prev,
+                                      duration_value: event.target.value,
+                                    }))
+                                  }
+                                />
+                                <select
+                                  value={manualUnit.duration_unit}
+                                  onChange={(event) =>
+                                    setManualUnit((prev) => ({
+                                      ...prev,
+                                      duration_unit: event.target.value,
+                                    }))
+                                  }
+                                >
+                                  <option value="days">Dias</option>
+                                  <option value="weeks">Semanas</option>
+                                  <option value="months">Meses</option>
+                                  <option value="years">Años</option>
+                                </select>
+                              </div>
                             </label>
                             <label className="manual-units__notes">
-                              Notas
+                              📝 Notas
                               <textarea
                                 rows={3}
                                 value={manualUnit.notes}
@@ -2057,121 +1944,15 @@ export default function InventoryPage() {
                           <button
                             type="button"
                             onClick={handleManualUnitAdd}
-                            disabled={isSubmitting}
+                            disabled={isSubmitting || !manualUnitComplete}
+                            title={
+                              manualUnitComplete
+                                ? "Agregar unidad"
+                                : "Completa todos los campos para agregar la unidad"
+                            }
                           >
                             Agregar unidad
                           </button>
-                        </div>
-                      </div>
-                      <div className="split-grid">
-                        <div className="card inner-card">
-                          <h3 className="icon-inline"><IconInventory className="panel-icon" /> Template de entrega</h3>
-                          <div className="form">
-                            <label>
-                              Plantillas rápidas
-                              <div className="template-actions">
-                                <select
-                                  value={templatePreset}
-                                  onChange={(event) => setTemplatePreset(event.target.value)}
-                                >
-                                  {templatePresets.map((preset) => (
-                                    <option key={preset.key} value={preset.key}>
-                                      {preset.label}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const preset = templatePresets.find(
-                                      (item) => item.key === templatePreset
-                                    );
-                                    if (preset) {
-                                      setTemplate(preset.value);
-                                    }
-                                  }}
-                                >
-                                  Usar plantilla
-                                </button>
-                              </div>
-                            </label>
-                            <label>
-                              Plantilla
-                              <textarea
-                                rows={10}
-                                value={template}
-                                onChange={(event) => setTemplate(event.target.value)}
-                              />
-                            </label>
-                            <button
-                              type="button"
-                              className="save-button"
-                              onClick={handleTemplateSave}
-                              disabled={isSubmitting}
-                            >
-                              Guardar template
-                            </button>
-                          </div>
-                        </div>
-                        <div className="card inner-card">
-                          <h3 className="icon-inline"><IconInventory className="panel-icon" /> Carga de UNITS (CSV)</h3>
-                          <div className="form">
-                            <label>
-                              Plantillas CSV
-                              <div className="template-actions">
-                                <select
-                                  value={csvTemplateKey}
-                                  onChange={(event) => setCsvTemplateKey(event.target.value)}
-                                >
-                                  {csvTemplates.map((template) => (
-                                    <option key={template.key} value={template.key}>
-                                      {template.label}
-                                    </option>
-                                  ))}
-                                </select>
-                                <button
-                                  type="button"
-                                  onClick={() => {
-                                    const selected = csvTemplates.find(
-                                      (item) => item.key === csvTemplateKey
-                                    );
-                                    if (selected) {
-                                      downloadCsvTemplate(selected);
-                                    }
-                                  }}
-                                >
-                                  Descargar CSV
-                                </button>
-                              </div>
-                            </label>
-                            <label>
-                              Archivo CSV
-                              <input
-                                type="file"
-                                accept=".csv"
-                                onChange={(event) => setUploadFile(event.target.files?.[0] || null)}
-                              />
-                            </label>
-                            <button
-                              type="button"
-                              onClick={handleUpload}
-                              disabled={isSubmitting || !uploadFile}
-                            >
-                              {isSubmitting ? "Subiendo..." : "Subir CSV"}
-                            </button>
-                          </div>
-                          {uploadErrors.length > 0 && (
-                            <>
-                              <h4>Errores de carga</h4>
-                              <ul className="error-list">
-                                {uploadErrors.map((row, index) => (
-                                  <li key={`${row.row_number || "row"}-${index}`}>
-                                    Fila {row.row_number || "-"}: {row.reason}
-                                  </li>
-                                ))}
-                              </ul>
-                            </>
-                          )}
                         </div>
                       </div>
                     </div>

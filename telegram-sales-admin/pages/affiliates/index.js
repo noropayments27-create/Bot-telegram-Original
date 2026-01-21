@@ -94,6 +94,7 @@ export default function AffiliatesPage() {
     if (status === "RESERVED") return "RESERVADA";
     if (status === "PAID_OUT") return "PAGADA";
     if (status === "CANCELLED") return "CANCELADA";
+    if (status === "REFUNDED") return "REEMBOLSADA";
     return status || "-";
   };
 
@@ -689,6 +690,11 @@ export default function AffiliatesPage() {
             const affiliate = detail?.affiliate;
             const user = detail?.user;
             const commissions = detail?.commissions || [];
+            const availableBalance = Number(detail?.available_balance || 0);
+            const affiliateDebt = Number(detail?.affiliate?.affiliate_debt || 0);
+            const netBalance = availableBalance - affiliateDebt;
+            const debtClassName = affiliateDebt > 0 ? "error" : "muted";
+            const netClassName = netBalance < 0 ? "error" : "";
 
             return (
               <section key={affiliateId} className="card orders-detail-card">
@@ -847,7 +853,13 @@ export default function AffiliatesPage() {
                             )
                           )}%`}
                         </p>
-                        <p>Balance disponible: {formatUsdAmount(detail.available_balance)}</p>
+                        <p>Balance disponible: {formatUsdAmount(availableBalance)}</p>
+                        <p className={debtClassName}>
+                          Deuda pendiente: {formatUsdAmount(affiliateDebt)}
+                        </p>
+                        <p className={netClassName}>
+                          Balance neto: {formatUsdAmount(netBalance)}
+                        </p>
                         <p>
                           Ingreso:{" "}
                           {affiliate.approved_at

@@ -22,6 +22,7 @@ const STATUS_LABELS = {
   WAITING_PAYMENT: "ESPERANDO PAGO",
   PAID: "PAGADA",
   DELIVERED: "ENTREGADA",
+  REFUNDED: "REEMBOLSADA",
   CANCELLED: "CANCELADA",
   APPROVED: "APROBADO",
   REJECTED: "RECHAZADO",
@@ -117,7 +118,7 @@ function getOrderTone(order, payment) {
   if (orderStatus === "PAID" || orderStatus === "DELIVERED" || reviewStatus === "APPROVED") {
     return "success";
   }
-  if (orderStatus === "CANCELLED" || reviewStatus === "REJECTED") {
+  if (orderStatus === "CANCELLED" || orderStatus === "REFUNDED" || reviewStatus === "REJECTED") {
     return "danger";
   }
   if (orderStatus === "WAITING_PAYMENT" || orderStatus === "CREATED" || reviewStatus === "PENDING" || reviewStatus === "SUBMITTED") {
@@ -134,6 +135,7 @@ const STATUS_OPTIONS = [
   { value: "PAID", label: "Pagado" },
   { value: "CANCELLED", label: "Cancelado" },
   { value: "DELIVERED", label: "Entregado" },
+  { value: "REFUNDED", label: "Reembolsado" },
 ];
 
 export default function OrdersPage() {
@@ -153,6 +155,7 @@ export default function OrdersPage() {
   const [previewUrl, setPreviewUrl] = useState("");
   const [reasons, setReasons] = useState({});
   const [isSubmittingApprove, setIsSubmittingApprove] = useState({});
+  const [isSubmittingRefund, setIsSubmittingRefund] = useState({});
   const [toast, setToast] = useState("");
 
   const filterRecent = (orders) => {
@@ -433,7 +436,20 @@ export default function OrdersPage() {
         return;
       }
       if (response.status === 409) {
+        let payload = null;
+        try {
+          payload = await response.json();
+        } catch (err) {
+          payload = null;
+        }
         await loadDetail(detail.order.id);
+        if (payload?.code === "INSUFFICIENT_STOCK") {
+          setDetailMessages((prev) => ({
+            ...prev,
+            [orderId]: "Stock insuficiente para aprobar la orden.",
+          }));
+          return;
+        }
         setDetailMessages((prev) => ({
           ...prev,
           [orderId]: "Este pedido ya fue procesado anteriormente",
@@ -495,6 +511,73 @@ export default function OrdersPage() {
         ...prev,
         [orderId]: "No se pudo rechazar el pago.",
       }));
+    }
+  };
+
+  const handleRefund = async (orderId) => {
+    const detail = details[orderId];
+    if (!detail || !detail.order || isSubmittingRefund[orderId]) {
+      return;
+    }
+    const order = detail.order;
+    if (order.status !== "PAID" && order.status !== "DELIVERED") {
+      setDetailErrors((prev) => ({
+        ...prev,
+        [orderId]: "Solo puedes reembolsar ordenes pagadas o entregadas.",
+      }));
+      return;
+    }
+    const totalUsd = Number(
+      detail.totals?.subtotal_usd ?? order.unit_price_at_purchase ?? 0
+    );
+    const alreadyRefunded = Number(order.refunded_amount || 0);
+    const remaining = Math.max(totalUsd - alreadyRefunded, 0);
+    const amountInput = window.prompt(
+      `Monto a reembolsar en USD (max ${remaining.toFixed(2)}). Deja vacío para total:`,
+      ""
+    );
+    if (amountInput === null) {
+      return;
+    }
+    const reasonInput = window.prompt("Motivo del reembolso (opcional):", "");
+    if (reasonInput === null) {
+      return;
+    }
+    const payload = {};
+    if (amountInput.trim() !== "") {
+      const parsed = Number(amountInput);
+      if (!Number.isFinite(parsed) || parsed <= 0) {
+        setDetailErrors((prev) => ({
+          ...prev,
+          [orderId]: "Monto de reembolso inválido.",
+        }));
+        return;
+      }
+      payload.amount = parsed;
+    }
+    if (reasonInput.trim()) {
+      payload.reason = reasonInput.trim();
+    }
+    setIsSubmittingRefund((prev) => ({ ...prev, [orderId]: true }));
+    setDetailErrors((prev) => ({ ...prev, [orderId]: "" }));
+    try {
+      await apiFetch(`/admin/orders/${order.id}/refund`, {
+        method: "POST",
+        body: JSON.stringify(payload),
+      });
+      setDetailMessages((prev) => ({
+        ...prev,
+        [orderId]: "Reembolso procesado.",
+      }));
+      await loadDetail(order.id);
+      await loadOrders();
+    } catch (err) {
+      setDetailErrors((prev) => ({
+        ...prev,
+        [orderId]: "No se pudo procesar el reembolso.",
+      }));
+    } finally {
+      setIsSubmittingRefund((prev) => ({ ...prev, [orderId]: false }));
     }
   };
 
@@ -710,6 +793,22 @@ export default function OrdersPage() {
                         {detail.order.order_number
                           ? String(detail.order.order_number).padStart(5, "0")
                           : "-"}
+                        <button
+                          type="button"
+                          className="orders-refund-button"
+                          style={{ marginLeft: "1cm" }}
+                          onClick={() => handleRefund(orderId)}
+                          disabled={
+                            isSubmittingRefund[orderId]
+                            || detail.order.status === "REFUNDED"
+                          }
+                        >
+                          {detail.order.status === "REFUNDED"
+                            ? "Reembolsada"
+                            : isSubmittingRefund[orderId]
+                            ? "Reembolsando..."
+                            : "Reembolsar"}
+                        </button>
                       </h2>
                       <button
                         type="button"

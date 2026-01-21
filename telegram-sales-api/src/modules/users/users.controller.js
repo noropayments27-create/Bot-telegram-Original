@@ -1,5 +1,6 @@
+const path = require("path");
 const { getPool } = require("../../db");
-const { sendMessage } = require("../../services/telegram");
+const { sendMessage, sendPhoto } = require("../../services/telegram");
 const AFFILIATE_MESSAGES = {
   es: {
     approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
@@ -10,6 +11,38 @@ const AFFILIATE_MESSAGES = {
     rejected: "❌ Your affiliate request was rejected by the admin.",
   },
 };
+const MAIN_MENU_MESSAGES = {
+  es: {
+    home_welcome:
+      "Bienvenido a:  <code>Noropayments.shop</code> 🛍️\n\n🚀 ¡Tu compra inteligente comienza aquí! 🚀\n\nTenemos todo lo que necesitas y más\n\n✅ Productos exclusivo\n✅ Envíos rápidos\n✅ Precios increíbles\n✅ Atención personalizada\n\n🛒 ¿Qué deseas comprar hoy?\n\n¡Cuéntanos y te guiamos! 🤝",
+    menu_shop: "🏪 Tienda",
+    menu_methods: "✅ Métodos",
+    menu_groups: "💬 Grupos VIP",
+    menu_programs: "💻 Programas y Web",
+    menu_cart: "🛒 Carrito",
+    menu_affiliates: "📢 Afiliados",
+    menu_community: "👥 Comunidad",
+    menu_support: "🆘 Soporte",
+    menu_language: "🌐 Idioma",
+  },
+  en: {
+    home_welcome:
+      "Welcome to:  <code>Noropayments.shop</code> 🛍️\n\n🚀 Your smart shopping starts here! 🚀\n\nWe have everything you need and more\n\n✅ Exclusive products\n✅ Fast shipping\n✅ Amazing prices\n✅ Personalized attention\n\n🛒 What do you want to buy today?\n\nTell us and we'll guide you! 🤝",
+    menu_shop: "🏪 Shop",
+    menu_methods: "✅ Methods",
+    menu_groups: "💬 VIP Groups",
+    menu_programs: "💻 Programs & Web",
+    menu_cart: "🛒 Cart",
+    menu_affiliates: "📢 Affiliates",
+    menu_community: "👥 Community",
+    menu_support: "🆘 Support",
+    menu_language: "🌐 Language",
+  },
+};
+const MAIN_MENU_PHOTO_PATH = path.resolve(
+  __dirname,
+  "../../../../telegram-sales-bot/assets/bot-noropayments.png"
+);
 
 function parseAdminTelegramIds() {
   const value = process.env.ADMIN_TELEGRAM_IDS || "";
@@ -49,6 +82,31 @@ function normalizeLocale(input, languageCode) {
     return "es";
   }
   return "en";
+}
+
+function buildMainMenuKeyboard(locale) {
+  const text = MAIN_MENU_MESSAGES[locale] || MAIN_MENU_MESSAGES.es;
+  return {
+    inline_keyboard: [
+      [
+        { text: text.menu_shop, callback_data: "shop:page:1" },
+        { text: text.menu_methods, callback_data: "category:page:metodos" },
+      ],
+      [
+        { text: text.menu_groups, callback_data: "category:page:vip" },
+        { text: text.menu_programs, callback_data: "category:page:programas" },
+      ],
+      [
+        { text: text.menu_cart, callback_data: "home:cart" },
+        { text: text.menu_affiliates, callback_data: "home:affiliates" },
+      ],
+      [
+        { text: text.menu_community, callback_data: "home:community" },
+        { text: text.menu_support, callback_data: "home:support" },
+      ],
+      [{ text: text.menu_language, callback_data: "home:soon:idioma" }],
+    ],
+  };
 }
 
 async function getUserLocaleByTelegramId(pool, telegramId) {
@@ -291,12 +349,13 @@ async function getAffiliateStatus(req, res, next) {
          FROM order_items
          GROUP BY order_id
        ) oi ON oi.order_id = c.order_id
-       WHERE c.affiliate_id = $1`,
+       WHERE c.affiliate_id = $1
+         AND c.status != 'REFUNDED'`,
       [row.id]
     );
     const salesCount = salesRes.rows[0]?.count || 0;
     const earningsRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
        FROM commissions
        WHERE affiliate_id = $1`,
       [row.id]
@@ -305,7 +364,8 @@ async function getAffiliateStatus(req, res, next) {
     const lastSaleRes = await pool.query(
       `SELECT MAX(earned_at) AS last_sale_at
        FROM commissions
-       WHERE affiliate_id = $1`,
+       WHERE affiliate_id = $1
+         AND status != 'REFUNDED'`,
       [row.id]
     );
     const lastSaleAt = lastSaleRes.rows[0]?.last_sale_at || null;
@@ -318,14 +378,16 @@ async function getAffiliateStatus(req, res, next) {
          GROUP BY order_id
        ) oi ON oi.order_id = c.order_id
        WHERE c.affiliate_id = $1
+         AND c.status != 'REFUNDED'
          AND c.earned_at >= now() - interval '30 days'`,
       [row.id]
     );
     const salesLast30 = last30Res.rows[0]?.count || 0;
     const dailyRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
        FROM commissions
        WHERE affiliate_id = $1
+         AND status != 'REFUNDED'
          AND earned_at >= date_trunc('day', now())`,
       [row.id]
     );
@@ -339,6 +401,7 @@ async function getAffiliateStatus(req, res, next) {
          GROUP BY order_id
        ) oi ON oi.order_id = c.order_id
        WHERE c.affiliate_id = $1
+         AND c.status != 'REFUNDED'
          AND c.earned_at >= date_trunc('day', now())`,
       [row.id]
     );
@@ -347,6 +410,7 @@ async function getAffiliateStatus(req, res, next) {
       `SELECT DISTINCT date_trunc('day', earned_at)::date AS day
        FROM commissions
        WHERE affiliate_id = $1
+         AND status != 'REFUNDED'
        ORDER BY day DESC`,
       [row.id]
     );
@@ -370,12 +434,17 @@ async function getAffiliateStatus(req, res, next) {
       streakCount = 0;
     }
     const availableRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
        FROM commissions
        WHERE affiliate_id = $1 AND status = 'EARNED'`,
       [row.id]
     );
     const earningsAvailable = Number(availableRes.rows[0]?.total || 0);
+    const affiliateDebt = Number(row.affiliate_debt || 0);
+    const earningsAvailableNet = Math.max(
+      Number((earningsAvailable - affiliateDebt).toFixed(2)),
+      0
+    );
     const referralsRes = await pool.query(
       `SELECT COUNT(*)::int AS count
        FROM users
@@ -413,7 +482,8 @@ async function getAffiliateStatus(req, res, next) {
         daily_earnings: dailyEarnings,
         daily_sales: dailySalesCount,
         daily_streak: streakCount,
-        earnings_available: earningsAvailable,
+        earnings_available: earningsAvailableNet,
+        affiliate_debt: affiliateDebt,
         referrals_total: referralsTotal,
         last_sale_at: lastSaleAt,
         sales_last_30: salesLast30,
@@ -458,11 +528,12 @@ async function getAffiliateTop(req, res, next) {
            SELECT a.id,
                   u.telegram_username,
                   COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
-                  COALESCE(SUM(c.amount), 0) AS earnings_total
+                  COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total
              FROM affiliates a
              JOIN users u ON u.id = a.user_id
              LEFT JOIN commissions c
                ON c.affiliate_id = a.id
+              AND c.status != 'REFUNDED'
              LEFT JOIN (
                SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
                FROM order_items
@@ -489,11 +560,12 @@ async function getAffiliateTop(req, res, next) {
            SELECT a.id,
                   u.telegram_username,
                   COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
-                  COALESCE(SUM(c.amount), 0) AS earnings_total
+                  COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total
              FROM affiliates a
              JOIN users u ON u.id = a.user_id
              LEFT JOIN commissions c
                ON c.affiliate_id = a.id
+              AND c.status != 'REFUNDED'
               AND c.earned_at >= (now() - $1::interval)
              LEFT JOIN (
                SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
@@ -692,7 +764,7 @@ async function requestAffiliatePayout(req, res, next) {
     await client.query("BEGIN");
 
     const affiliateRes = await client.query(
-      `SELECT a.id, a.status, a.wallet_usdt_bsc, a.binance_id
+      `SELECT a.id, a.status, a.wallet_usdt_bsc, a.binance_id, a.affiliate_debt
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        WHERE u.telegram_id = $1`,
@@ -720,12 +792,16 @@ async function requestAffiliatePayout(req, res, next) {
     }
 
     const commissionsRes = await client.query(
-      `SELECT c.id, c.amount
+      `SELECT c.id,
+              c.amount,
+              COALESCE(c.refunded_amount, 0) AS refunded_amount,
+              (c.amount - COALESCE(c.refunded_amount, 0)) AS net_amount
        FROM commissions c
        LEFT JOIN payout_items pi ON pi.commission_id = c.id
        LEFT JOIN payouts p ON p.id = pi.payout_id
        WHERE c.affiliate_id = $1
          AND c.status = 'EARNED'
+         AND (c.amount - COALESCE(c.refunded_amount, 0)) > 0
          AND (pi.commission_id IS NULL OR p.status = 'CANCELLED')
        ORDER BY c.earned_at ASC
        FOR UPDATE OF c`,
@@ -737,14 +813,22 @@ async function requestAffiliatePayout(req, res, next) {
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
-    const amount = commissionsRes.rows.reduce(
-      (sum, row) => sum + Number(row.amount || 0),
+    const grossAmount = commissionsRes.rows.reduce(
+      (sum, row) => sum + Number(row.net_amount || 0),
       0
     );
 
-    if (!amount || amount <= 0) {
+    if (!grossAmount || grossAmount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
+    }
+
+    const debt = Number(affiliate.affiliate_debt || 0);
+    const debtApplied = Math.min(debt, grossAmount);
+    const payoutAmount = Number((grossAmount - debtApplied).toFixed(2));
+    if (payoutAmount <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "DEBT_EXCEEDS_BALANCE" });
     }
 
     const commissionIds = commissionsRes.rows.map((row) => row.id);
@@ -756,19 +840,29 @@ async function requestAffiliatePayout(req, res, next) {
     );
 
     const payoutRes = await client.query(
-      `INSERT INTO payouts (affiliate_id, amount, method, destination, status)
-       VALUES ($1, $2, $3, $4, 'REQUESTED')
+      `INSERT INTO payouts (affiliate_id, amount, method, destination, status, debt_applied)
+       VALUES ($1, $2, $3, $4, 'REQUESTED', $5)
        RETURNING *`,
-      [affiliate.id, amount, method, destination]
+      [affiliate.id, payoutAmount, method, destination, debtApplied]
     );
 
     const payoutId = payoutRes.rows[0].id;
 
+    if (debtApplied > 0) {
+      await client.query(
+        `UPDATE affiliates
+         SET affiliate_debt = affiliate_debt - $2
+         WHERE id = $1`,
+        [affiliate.id, debtApplied]
+      );
+    }
+
     await client.query(
       `INSERT INTO payout_items (payout_id, commission_id, amount)
-       SELECT $1, id, amount
+       SELECT $1, id, (amount - COALESCE(refunded_amount, 0))
        FROM commissions
-       WHERE id = ANY($2::uuid[])`,
+       WHERE id = ANY($2::uuid[])
+         AND (amount - COALESCE(refunded_amount, 0)) > 0`,
       [payoutId, commissionIds]
     );
 
@@ -802,10 +896,10 @@ async function decideAffiliateStatus(req, res, next) {
   try {
     const updateRes = await pool.query(
       `UPDATE affiliates
-       SET status = $2,
+       SET status = $2::affiliate_status,
            approved_at = CASE
-             WHEN $2 = 'APPROVED' THEN COALESCE(approved_at, now())
-             WHEN $2 = 'REJECTED' THEN approved_at
+             WHEN $2::affiliate_status = 'APPROVED'::affiliate_status THEN COALESCE(approved_at, now())
+             WHEN $2::affiliate_status = 'REJECTED'::affiliate_status THEN approved_at
              ELSE approved_at
            END
        WHERE id = $1
@@ -832,6 +926,23 @@ async function decideAffiliateStatus(req, res, next) {
             ? (AFFILIATE_MESSAGES[locale]?.approved || AFFILIATE_MESSAGES.es.approved)
             : (AFFILIATE_MESSAGES[locale]?.rejected || AFFILIATE_MESSAGES.es.rejected);
         await sendMessage(telegramId, text);
+        const menuText =
+          MAIN_MENU_MESSAGES[locale]?.home_welcome ||
+          MAIN_MENU_MESSAGES.es.home_welcome;
+        const menuKeyboard = buildMainMenuKeyboard(locale);
+        setTimeout(() => {
+          sendPhoto(telegramId, {
+            path: MAIN_MENU_PHOTO_PATH,
+            caption: menuText,
+            parse_mode: "HTML",
+            reply_markup: menuKeyboard,
+          }).catch(() => {
+            sendMessage(telegramId, menuText, {
+              parse_mode: "HTML",
+              reply_markup: menuKeyboard,
+            }).catch(() => {});
+          });
+        }, 3000);
       }
     } catch (err) {
       // ignore notify errors
