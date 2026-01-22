@@ -52,6 +52,14 @@ const AFFILIATE_MESSAGES = {
   es: {
     approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
     rejected: "❌ Tu solicitud para ser afiliado fue rechazada por el admin.",
+    blocked:
+      "🔒 Afiliado: {username}\n\n⚠️ Haz sido bloqueado por un admin, tal ves por que infringiste alguna regla. Si crees que es un error comunícate con @Noropayments.",
+    unblocked:
+      "🔓 Haz sido desbloqueado por un admin. ✅ Sigue trabajando sin romper las reglas.",
+    adjustment_credit:
+      "✅ Se te agregó saldo.\n\n💵 Monto: {amount}\n📝 Motivo: {reason}",
+    adjustment_debit:
+      "⚠️ Se te descontó saldo.\n\n💵 Monto: {amount}\n📝 Motivo: {reason}",
     refund_full:
       "⚠️ Se reembolsó una orden referida por ti y se descontó tu comisión.\n\nMonto descontado: {amount}.",
     refund_partial:
@@ -60,6 +68,14 @@ const AFFILIATE_MESSAGES = {
   en: {
     approved: "✅ Your affiliate request was approved by the admin.",
     rejected: "❌ Your affiliate request was rejected by the admin.",
+    blocked:
+      "🔒 Affiliate: {username}\n\n⚠️ You have been blocked by an admin, maybe because you violated a rule. If you think this is a mistake, contact @Noropayments.",
+    unblocked:
+      "🔓 You have been unblocked by an admin. ✅ Keep working without breaking the rules.",
+    adjustment_credit:
+      "✅ Balance added.\n\n💵 Amount: {amount}\n📝 Reason: {reason}",
+    adjustment_debit:
+      "⚠️ Balance deducted.\n\n💵 Amount: {amount}\n📝 Reason: {reason}",
     refund_full:
       "⚠️ A referred order was refunded and your commission was deducted.\n\nAmount deducted: {amount}.",
     refund_partial:
@@ -2594,9 +2610,21 @@ router.get("/summary", async (req, res, next) => {
          )`
     );
 
+    const pendingPayoutsRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM payouts
+       WHERE status = 'REQUESTED'`
+    );
+
     const affiliatesRes = await pool.query(
       `SELECT COUNT(*)::int AS count
        FROM affiliates`
+    );
+
+    const pendingAffiliatesRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM affiliates
+       WHERE status = 'PENDING'`
     );
 
     return res.json({
@@ -2606,7 +2634,9 @@ router.get("/summary", async (req, res, next) => {
       total_revenue_usd: Number(revenueRes.rows[0]?.total || 0).toFixed(2),
       active_products: productsRes.rows[0]?.count || 0,
       unread_tickets: unreadTicketsRes.rows[0]?.count || 0,
+      pending_payouts: pendingPayoutsRes.rows[0]?.count || 0,
       affiliates: affiliatesRes.rows[0]?.count || 0,
+      pending_affiliates: pendingAffiliatesRes.rows[0]?.count || 0,
     });
   } catch (error) {
     return next(error);
@@ -2654,6 +2684,9 @@ router.post("/stats/reset", async (req, res, next) => {
 
     await client.query("DELETE FROM payouts");
     await client.query("DELETE FROM commissions");
+    await client.query("DELETE FROM payout_adjustments");
+    await client.query("DELETE FROM affiliate_adjustments");
+    await client.query("DELETE FROM affiliate_invoices");
     await client.query("DELETE FROM order_payments");
     await client.query("DELETE FROM order_items");
     await client.query("DELETE FROM ticket_messages");
@@ -3454,13 +3487,26 @@ router.get("/affiliates", async (req, res, next) => {
               u.telegram_id, u.telegram_username,
               ranked.affiliate_number,
               COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0))
-                FILTER (WHERE c.status = 'EARNED'), 0) AS available_balance,
-              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
+                FILTER (WHERE c.status = 'EARNED'), 0)
+                + COALESCE(adj.adjustments_total, 0) AS available_balance,
+              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0)
+                + COALESCE(adj_all.adjustments_total, 0) AS earnings_total,
               COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
               MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN ranked ON ranked.id = a.id
+       LEFT JOIN (
+         SELECT affiliate_id, COALESCE(SUM(amount), 0) AS adjustments_total
+         FROM affiliate_adjustments
+         WHERE status = 'EARNED'
+         GROUP BY affiliate_id
+       ) adj ON adj.affiliate_id = a.id
+       LEFT JOIN (
+         SELECT affiliate_id, COALESCE(SUM(amount), 0) AS adjustments_total
+         FROM affiliate_adjustments
+         GROUP BY affiliate_id
+       ) adj_all ON adj_all.affiliate_id = a.id
        LEFT JOIN commissions c ON c.affiliate_id = a.id AND c.status != 'REFUNDED'
        LEFT JOIN (
          SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
@@ -3468,7 +3514,7 @@ router.get("/affiliates", async (req, res, next) => {
          GROUP BY order_id
        ) oi ON oi.order_id = c.order_id
        ${whereClause}
-       GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number
+       GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number, adj.adjustments_total, adj_all.adjustments_total
        ORDER BY a.created_at DESC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
@@ -3755,12 +3801,18 @@ router.get("/affiliates/:id", async (req, res, next) => {
        )
        SELECT a.*, u.telegram_id, u.telegram_username,
               ranked.affiliate_number,
-              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
+              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0)
+                + COALESCE(adj_all.adjustments_total, 0) AS earnings_total,
               COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count,
               MAX(c.earned_at) AS last_sale_at
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        LEFT JOIN ranked ON ranked.id = a.id
+       LEFT JOIN (
+         SELECT affiliate_id, COALESCE(SUM(amount), 0) AS adjustments_total
+         FROM affiliate_adjustments
+         GROUP BY affiliate_id
+       ) adj_all ON adj_all.affiliate_id = a.id
        LEFT JOIN commissions c ON c.affiliate_id = a.id AND c.status != 'REFUNDED'
        LEFT JOIN (
          SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
@@ -3768,7 +3820,7 @@ router.get("/affiliates/:id", async (req, res, next) => {
          GROUP BY order_id
        ) oi ON oi.order_id = c.order_id
        WHERE a.id = $1
-       GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number`,
+       GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number, adj_all.adjustments_total`,
       [affiliateId]
     );
 
@@ -3780,6 +3832,44 @@ router.get("/affiliates/:id", async (req, res, next) => {
       `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS available_balance
        FROM commissions
        WHERE affiliate_id = $1 AND status = 'EARNED'`,
+      [affiliateId]
+    );
+
+    const adjustmentsRes = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS adjustments_total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND status = 'EARNED'`,
+      [affiliateId]
+    );
+
+    const adjustmentsListRes = await pool.query(
+      `SELECT id,
+              amount,
+              reason,
+              status,
+              created_by_admin_id,
+              created_at
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+       ORDER BY created_at DESC
+       LIMIT 20`,
+      [affiliateId]
+    );
+
+    const invoicesRes = await pool.query(
+      `SELECT id,
+              amount,
+              reason,
+              status,
+              created_by_admin_id,
+              created_at,
+              paid_at,
+              cancelled_at
+       FROM affiliate_invoices
+       WHERE affiliate_id = $1
+       ORDER BY created_at DESC
+       LIMIT 20`,
       [affiliateId]
     );
 
@@ -3821,11 +3911,59 @@ router.get("/affiliates/:id", async (req, res, next) => {
         telegram_id: displayTelegramId,
         telegram_username: displayUsername,
       },
-      available_balance: balanceRes.rows[0].available_balance,
+      available_balance:
+        Number(balanceRes.rows[0].available_balance || 0)
+        + Number(adjustmentsRes.rows[0].adjustments_total || 0),
+      adjustments: adjustmentsListRes.rows,
+      invoices: invoicesRes.rows,
       commissions: commissionsRes.rows,
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/affiliates/:id/invoices/watch", async (req, res, next) => {
+  const affiliateId = req.params.id;
+  const pool = getPool();
+  const sinceRaw = req.query.since;
+  const sinceMs = Number(sinceRaw);
+  const sinceDate =
+    Number.isFinite(sinceMs) && sinceMs > 0 ? new Date(sinceMs) : new Date(0);
+  const timeoutMs = 20000;
+  const intervalMs = 1000;
+  const startedAt = Date.now();
+
+  try {
+    while (Date.now() - startedAt < timeoutMs) {
+      const watchRes = await pool.query(
+        `SELECT id,
+                affiliate_id,
+                amount,
+                reason,
+                status,
+                created_at,
+                paid_at,
+                cancelled_at
+         FROM affiliate_invoices
+         WHERE affiliate_id = $1
+           AND status IN ('PAID', 'CANCELLED')
+           AND COALESCE(paid_at, cancelled_at, created_at) > $2
+         ORDER BY COALESCE(paid_at, cancelled_at, created_at) DESC
+         LIMIT 1`,
+        [affiliateId, sinceDate]
+      );
+
+      if (watchRes.rowCount > 0) {
+        return res.json({ changed: true, invoice: watchRes.rows[0] });
+      }
+
+      await new Promise((resolve) => setTimeout(resolve, intervalMs));
+    }
+
+    return res.json({ changed: false });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -3865,6 +4003,22 @@ router.patch("/affiliates/:id", async (req, res, next) => {
   const finalBinanceId = resolvedWalletUsdtBsc ? null : resolvedBinanceId;
 
   try {
+    const userRes = await pool.query(
+      `SELECT a.status, u.telegram_id, u.telegram_username
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1`,
+      [affiliateId]
+    );
+
+    if (userRes.rowCount === 0) {
+      return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
+    }
+
+    const previousStatus = userRes.rows[0].status;
+    const telegramId = userRes.rows[0].telegram_id;
+    const telegramUsername = userRes.rows[0].telegram_username;
+
     const updateRes = await pool.query(
       `UPDATE affiliates
        SET status = COALESCE($2, status),
@@ -3899,23 +4053,31 @@ router.patch("/affiliates/:id", async (req, res, next) => {
     const updated = updateRes.rows[0];
     if (normalizedStatus === "APPROVED" || normalizedStatus === "REJECTED") {
       try {
-        const userRes = await pool.query(
-          `SELECT u.telegram_id
-           FROM affiliates a
-           JOIN users u ON u.id = a.user_id
-           WHERE a.id = $1`,
-          [affiliateId]
-        );
-        const telegramId = userRes.rows[0]?.telegram_id;
         if (telegramId) {
           const userLocale = await getUserLocaleByTelegramId(pool, telegramId);
-          const text =
-            normalizedStatus === "APPROVED"
-              ? (AFFILIATE_MESSAGES[userLocale]?.approved
-                || AFFILIATE_MESSAGES.es.approved)
-              : (AFFILIATE_MESSAGES[userLocale]?.rejected
-                || AFFILIATE_MESSAGES.es.rejected);
-          await sendMessage(telegramId, text);
+          const displayName = telegramUsername
+            ? `@${telegramUsername.replace(/^@/, "")}`
+            : `ID ${telegramId}`;
+          let text = "";
+          if (previousStatus === "APPROVED" && normalizedStatus === "REJECTED") {
+            text =
+              (AFFILIATE_MESSAGES[userLocale]?.blocked
+                || AFFILIATE_MESSAGES.es.blocked).replace("{username}", displayName);
+          } else if (
+            previousStatus === "REJECTED" && normalizedStatus === "APPROVED"
+          ) {
+            text = AFFILIATE_MESSAGES[userLocale]?.unblocked
+              || AFFILIATE_MESSAGES.es.unblocked;
+          } else if (normalizedStatus === "APPROVED") {
+            text = AFFILIATE_MESSAGES[userLocale]?.approved
+              || AFFILIATE_MESSAGES.es.approved;
+          } else if (normalizedStatus === "REJECTED") {
+            text = AFFILIATE_MESSAGES[userLocale]?.rejected
+              || AFFILIATE_MESSAGES.es.rejected;
+          }
+          if (text) {
+            await sendMessage(telegramId, text);
+          }
         }
       } catch (err) {
         console.error("Affiliate notification failed", err);
@@ -3923,6 +4085,208 @@ router.patch("/affiliates/:id", async (req, res, next) => {
     }
 
     return res.json({ affiliate: updated });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/affiliates/:id/adjustments", async (req, res, next) => {
+  const affiliateId = req.params.id;
+  const amountRaw = req.body?.amount;
+  const reason = String(req.body?.reason || "").trim();
+  const pool = getPool();
+
+  if (!affiliateId) {
+    return res.status(400).json({ error: "AFFILIATE_REQUIRED" });
+  }
+
+  const amount = Number(amountRaw);
+  if (!Number.isFinite(amount) || amount === 0) {
+    return res.status(400).json({ error: "INVALID_AMOUNT" });
+  }
+  const adminIds = parseAdminTelegramIds();
+  const adminTelegramId = adminIds.length > 0 ? adminIds[0] : null;
+
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+
+    const affiliateRes = await client.query(
+      `SELECT a.id, u.telegram_id, u.telegram_username
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1
+       FOR UPDATE OF a`,
+      [affiliateId]
+    );
+    if (affiliateRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
+    }
+    const affiliateRow = affiliateRes.rows[0];
+
+    if (amount < 0) {
+      const availableRes = await client.query(
+        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
+         FROM commissions
+         WHERE affiliate_id = $1 AND status = 'EARNED'`,
+        [affiliateId]
+      );
+      const adjustmentsTotalRes = await client.query(
+        `SELECT COALESCE(SUM(amount), 0) AS total
+         FROM affiliate_adjustments
+         WHERE affiliate_id = $1 AND status = 'EARNED'`,
+        [affiliateId]
+      );
+      const availableGross =
+        Number(availableRes.rows[0]?.total || 0)
+        + Number(adjustmentsTotalRes.rows[0]?.total || 0);
+      const affiliateDebtRes = await client.query(
+        "SELECT affiliate_debt FROM affiliates WHERE id = $1",
+        [affiliateId]
+      );
+      const affiliateDebt = Number(affiliateDebtRes.rows[0]?.affiliate_debt || 0);
+      const availableNet = Math.max(availableGross - affiliateDebt, 0);
+      if (availableNet < Math.abs(amount)) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "INSUFFICIENT_BALANCE" });
+      }
+    }
+
+    const insertRes = await client.query(
+      `INSERT INTO affiliate_adjustments
+        (affiliate_id, amount, reason, status, created_by_admin_id)
+       VALUES ($1, $2, $3, 'EARNED', $4)
+       RETURNING *`,
+      [affiliateId, amount, reason || null, adminTelegramId]
+    );
+
+    await client.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "AFFILIATE_ADJUSTMENT",
+        "affiliate",
+        affiliateId,
+        JSON.stringify({
+          amount,
+          reason,
+          admin_telegram_id: adminTelegramId,
+        }),
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    if (reason) {
+      try {
+        const telegramId = affiliateRow.telegram_id;
+        if (telegramId) {
+          const locale = await getUserLocaleByTelegramId(pool, telegramId);
+          const messageKey = amount >= 0 ? "adjustment_credit" : "adjustment_debit";
+          const formattedAmount = formatUsd(Math.abs(amount));
+          const text = (AFFILIATE_MESSAGES[locale]?.[messageKey]
+            || AFFILIATE_MESSAGES.es[messageKey])
+            .replace("{amount}", formattedAmount)
+            .replace("{reason}", reason);
+          await sendMessage(telegramId, text);
+        }
+      } catch (err) {
+        console.error("Affiliate adjustment notification failed", err);
+      }
+    }
+
+    return res.status(201).json({ adjustment: insertRes.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/affiliates/:id/invoices", async (req, res, next) => {
+  const affiliateId = req.params.id;
+  const amountRaw = req.body?.amount;
+  const reason = String(req.body?.reason || "").trim();
+  const pool = getPool();
+
+  if (!affiliateId) {
+    return res.status(400).json({ error: "AFFILIATE_REQUIRED" });
+  }
+
+  const amount = Number(amountRaw);
+  if (!Number.isFinite(amount) || amount <= 0) {
+    return res.status(400).json({ error: "INVALID_AMOUNT" });
+  }
+
+  const adminIds = parseAdminTelegramIds();
+  const adminTelegramId = adminIds.length > 0 ? adminIds[0] : null;
+
+  try {
+    const affiliateRes = await pool.query(
+      `SELECT a.id, u.telegram_id, u.telegram_username
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1`,
+      [affiliateId]
+    );
+    if (affiliateRes.rowCount === 0) {
+      return res.status(404).json({ error: "AFFILIATE_NOT_FOUND" });
+    }
+
+    const affiliate = affiliateRes.rows[0];
+    const invoiceRes = await pool.query(
+      `INSERT INTO affiliate_invoices
+        (affiliate_id, amount, reason, status, created_by_admin_id)
+       VALUES ($1, $2, $3, 'PENDING', $4)
+       RETURNING *`,
+      [affiliateId, amount, reason || null, adminTelegramId]
+    );
+
+    const invoice = invoiceRes.rows[0];
+    const formattedAmount = Number(amount).toLocaleString("en-US", {
+      minimumFractionDigits: Number.isInteger(Number(amount)) ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
+    const reasonText = reason ? `\n📝 Motivo: ${reason}` : "";
+    const message =
+      `🧾 Factura de pago\n\n💵 Monto a pagar: $${formattedAmount} USD` +
+      `${reasonText}\n\nℹ️ Este monto se descontará de tu saldo disponible.`;
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          { text: "✅ Pagar", callback_data: `affiliate_invoice:${invoice.id}:PAY` },
+          { text: "❌ Cancelar", callback_data: `affiliate_invoice:${invoice.id}:CANCEL` },
+        ],
+      ],
+    };
+
+    if (affiliate.telegram_id) {
+      sendMessage(affiliate.telegram_id, message, {
+        reply_markup: replyMarkup,
+      }).catch((err) => {
+        console.error("Affiliate invoice notification failed", err);
+      });
+    }
+
+    await pool.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "AFFILIATE_INVOICE_CREATE",
+        "affiliate",
+        affiliateId,
+        JSON.stringify({
+          invoice_id: invoice.id,
+          amount,
+          reason: reason || null,
+          admin_telegram_id: adminTelegramId,
+        }),
+      ]
+    );
+
+    return res.status(201).json({ invoice });
   } catch (error) {
     return next(error);
   }
@@ -4050,6 +4414,14 @@ router.get("/payouts/:id", async (req, res, next) => {
       [payout.affiliate_id]
     );
 
+    const adjustmentsRes = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS adjustments_total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND status = 'EARNED'`,
+      [payout.affiliate_id]
+    );
+
     return res.json({
       payout,
         affiliate: {
@@ -4064,7 +4436,9 @@ router.get("/payouts/:id", async (req, res, next) => {
         telegram_id: payout.telegram_id,
         telegram_username: payout.telegram_username,
       },
-      available_balance: balanceRes.rows[0].available_balance,
+      available_balance:
+        Number(balanceRes.rows[0].available_balance || 0)
+        + Number(adjustmentsRes.rows[0].adjustments_total || 0),
     });
   } catch (error) {
     next(error);
@@ -4125,24 +4499,39 @@ router.post("/payouts", async (req, res, next) => {
       [affiliateId]
     );
 
-    if (commissionsRes.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
-    }
+    const adjustmentsRes = await client.query(
+      `SELECT id, amount
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND status = 'EARNED'
+       ORDER BY created_at ASC
+       FOR UPDATE`,
+      [affiliateId]
+    );
 
     const grossAmount = commissionsRes.rows.reduce(
       (sum, row) => sum + Number(row.net_amount || 0),
       0
     );
+    const adjustmentsAmount = adjustmentsRes.rows.reduce(
+      (sum, row) => sum + Number(row.amount || 0),
+      0
+    );
 
-    if (!grossAmount || grossAmount <= 0) {
+    const totalGross = Number((grossAmount + adjustmentsAmount).toFixed(2));
+    if (commissionsRes.rowCount === 0 && adjustmentsRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
+    }
+
+    if (!totalGross || totalGross <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
     const debt = Number(affiliate.affiliate_debt || 0);
-    const debtApplied = Math.min(debt, grossAmount);
-    const payoutAmount = Number((grossAmount - debtApplied).toFixed(2));
+    const debtApplied = Math.min(debt, totalGross);
+    const payoutAmount = Number((totalGross - debtApplied).toFixed(2));
     if (payoutAmount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "DEBT_EXCEEDS_BALANCE" });
@@ -4156,6 +4545,10 @@ router.post("/payouts", async (req, res, next) => {
     );
 
     const commissionIds = commissionsRes.rows.map((row) => row.id);
+    const positiveAdjustments = adjustmentsRes.rows.filter(
+      (row) => Number(row.amount || 0) > 0
+    );
+    const adjustmentIds = positiveAdjustments.map((row) => row.id);
     const payoutId = payoutRes.rows[0].id;
 
     if (debtApplied > 0) {
@@ -4182,6 +4575,27 @@ router.post("/payouts", async (req, res, next) => {
        WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
       [commissionIds]
     );
+
+    if (adjustmentIds.length > 0) {
+      await client.query(
+        `DELETE FROM payout_adjustments
+         WHERE adjustment_id = ANY($1::uuid[])`,
+        [adjustmentIds]
+      );
+      await client.query(
+        `INSERT INTO payout_adjustments (payout_id, adjustment_id, amount)
+         SELECT $1, id, amount
+         FROM affiliate_adjustments
+         WHERE id = ANY($2::uuid[]) AND amount > 0`,
+        [payoutId, adjustmentIds]
+      );
+      await client.query(
+        `UPDATE affiliate_adjustments
+         SET status = 'RESERVED'
+         WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
+        [adjustmentIds]
+      );
+    }
 
     await client.query("COMMIT");
     return res.status(201).json({ payout: payoutRes.rows[0] });
@@ -4252,12 +4666,23 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
          WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
         [commissionIds]
       );
-    } else {
-      commissionsRes = await client.query(
-        `UPDATE commissions
-         SET status = 'PAID_OUT', paid_out_at = now()
-         WHERE affiliate_id = $1 AND status = 'EARNED'`,
-        [payout.affiliate_id]
+    }
+
+    const payoutAdjustmentsRes = await client.query(
+      `SELECT adjustment_id
+       FROM payout_adjustments
+       WHERE payout_id = $1`,
+      [payoutId]
+    );
+    if (payoutAdjustmentsRes.rowCount > 0) {
+      const adjustmentIds = payoutAdjustmentsRes.rows.map(
+        (row) => row.adjustment_id
+      );
+      await client.query(
+        `UPDATE affiliate_adjustments
+         SET status = 'PAID_OUT'
+         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
+        [adjustmentIds]
       );
     }
 
@@ -4378,6 +4803,30 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
 
     await client.query(
       `DELETE FROM payout_items
+       WHERE payout_id = $1`,
+      [payoutId]
+    );
+
+    const payoutAdjustmentsRes = await client.query(
+      `SELECT adjustment_id
+       FROM payout_adjustments
+       WHERE payout_id = $1`,
+      [payoutId]
+    );
+    if (payoutAdjustmentsRes.rowCount > 0) {
+      const adjustmentIds = payoutAdjustmentsRes.rows.map(
+        (row) => row.adjustment_id
+      );
+      await client.query(
+        `UPDATE affiliate_adjustments
+         SET status = 'EARNED'
+         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
+        [adjustmentIds]
+      );
+    }
+
+    await client.query(
+      `DELETE FROM payout_adjustments
        WHERE payout_id = $1`,
       [payoutId]
     );

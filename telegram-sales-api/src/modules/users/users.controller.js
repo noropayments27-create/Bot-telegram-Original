@@ -360,7 +360,15 @@ async function getAffiliateStatus(req, res, next) {
        WHERE affiliate_id = $1`,
       [row.id]
     );
-    const earningsTotal = Number(earningsRes.rows[0]?.total || 0);
+    const adjustmentsTotalRes = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1`,
+      [row.id]
+    );
+    const earningsTotal =
+      Number(earningsRes.rows[0]?.total || 0)
+      + Number(adjustmentsTotalRes.rows[0]?.total || 0);
     const lastSaleRes = await pool.query(
       `SELECT MAX(earned_at) AS last_sale_at
        FROM commissions
@@ -439,10 +447,23 @@ async function getAffiliateStatus(req, res, next) {
        WHERE affiliate_id = $1 AND status = 'EARNED'`,
       [row.id]
     );
-    const earningsAvailable = Number(availableRes.rows[0]?.total || 0);
+    const adjustmentsRes = await pool.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND status = 'EARNED'`,
+      [row.id]
+    );
+    const earningsAvailableGross =
+      Number(availableRes.rows[0]?.total || 0)
+      + Number(adjustmentsRes.rows[0]?.total || 0);
     const affiliateDebt = Number(row.affiliate_debt || 0);
+    const debtRemaining = Math.max(
+      Number((affiliateDebt - earningsAvailableGross).toFixed(2)),
+      0
+    );
     const earningsAvailableNet = Math.max(
-      Number((earningsAvailable - affiliateDebt).toFixed(2)),
+      Number((earningsAvailableGross - affiliateDebt).toFixed(2)),
       0
     );
     const referralsRes = await pool.query(
@@ -483,7 +504,9 @@ async function getAffiliateStatus(req, res, next) {
         daily_sales: dailySalesCount,
         daily_streak: streakCount,
         earnings_available: earningsAvailableNet,
+        earnings_gross: Number(earningsAvailableGross.toFixed(2)),
         affiliate_debt: affiliateDebt,
+        debt_remaining: debtRemaining,
         referrals_total: referralsTotal,
         last_sale_at: lastSaleAt,
         sales_last_30: salesLast30,
@@ -808,36 +831,62 @@ async function requestAffiliatePayout(req, res, next) {
       [affiliate.id]
     );
 
-    if (commissionsRes.rowCount === 0) {
-      await client.query("ROLLBACK");
-      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
-    }
+    const adjustmentsRes = await client.query(
+      `SELECT id, amount
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND status = 'EARNED'
+       ORDER BY created_at ASC
+       FOR UPDATE`,
+      [affiliate.id]
+    );
 
     const grossAmount = commissionsRes.rows.reduce(
       (sum, row) => sum + Number(row.net_amount || 0),
       0
     );
+    const adjustmentsAmount = adjustmentsRes.rows.reduce(
+      (sum, row) => sum + Number(row.amount || 0),
+      0
+    );
 
-    if (!grossAmount || grossAmount <= 0) {
+    const totalGross = Number((grossAmount + adjustmentsAmount).toFixed(2));
+    if (commissionsRes.rowCount === 0 && adjustmentsRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
+    }
+
+    if (!totalGross || totalGross <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
     const debt = Number(affiliate.affiliate_debt || 0);
-    const debtApplied = Math.min(debt, grossAmount);
-    const payoutAmount = Number((grossAmount - debtApplied).toFixed(2));
+    const debtApplied = Math.min(debt, totalGross);
+    const payoutAmount = Number((totalGross - debtApplied).toFixed(2));
     if (payoutAmount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "DEBT_EXCEEDS_BALANCE" });
     }
 
     const commissionIds = commissionsRes.rows.map((row) => row.id);
+    const positiveAdjustments = adjustmentsRes.rows.filter(
+      (row) => Number(row.amount || 0) > 0
+    );
+    const adjustmentIds = positiveAdjustments.map((row) => row.id);
 
     await client.query(
       `DELETE FROM payout_items
        WHERE commission_id = ANY($1::uuid[])`,
       [commissionIds]
     );
+    if (adjustmentIds.length > 0) {
+      await client.query(
+        `DELETE FROM payout_adjustments
+         WHERE adjustment_id = ANY($1::uuid[])`,
+        [adjustmentIds]
+      );
+    }
 
     const payoutRes = await client.query(
       `INSERT INTO payouts (affiliate_id, amount, method, destination, status, debt_applied)
@@ -872,6 +921,22 @@ async function requestAffiliatePayout(req, res, next) {
        WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
       [commissionIds]
     );
+
+    if (adjustmentIds.length > 0) {
+      await client.query(
+        `INSERT INTO payout_adjustments (payout_id, adjustment_id, amount)
+         SELECT $1, id, amount
+         FROM affiliate_adjustments
+         WHERE id = ANY($2::uuid[]) AND amount > 0`,
+        [payoutId, adjustmentIds]
+      );
+      await client.query(
+        `UPDATE affiliate_adjustments
+         SET status = 'RESERVED'
+         WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
+        [adjustmentIds]
+      );
+    }
 
     await client.query("COMMIT");
     return res.status(201).json({ payout: payoutRes.rows[0] });
@@ -969,6 +1034,101 @@ async function getUserBanStatus(req, res, next) {
   }
 }
 
+async function decideAffiliateInvoice(req, res, next) {
+  const { invoice_id: invoiceId, decision } = req.body || {};
+  if (!invoiceId || !decision) {
+    return res.status(400).json({ error: "INVALID_REQUEST" });
+  }
+  const normalizedDecision = String(decision).toUpperCase();
+  if (!["PAY", "CANCEL"].includes(normalizedDecision)) {
+    return res.status(400).json({ error: "INVALID_DECISION" });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const invoiceRes = await client.query(
+      `SELECT i.*, a.affiliate_debt
+       FROM affiliate_invoices i
+       JOIN affiliates a ON a.id = i.affiliate_id
+       WHERE i.id = $1
+       FOR UPDATE OF i`,
+      [invoiceId]
+    );
+    if (invoiceRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "INVOICE_NOT_FOUND" });
+    }
+    const invoice = invoiceRes.rows[0];
+    if (invoice.status !== "PENDING") {
+      await client.query("COMMIT");
+      return res.json({ status: invoice.status });
+    }
+
+    if (normalizedDecision === "CANCEL") {
+      const cancelledRes = await client.query(
+        `UPDATE affiliate_invoices
+         SET status = 'CANCELLED', cancelled_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [invoiceId]
+      );
+      await client.query("COMMIT");
+      return res.json({ invoice: cancelledRes.rows[0] });
+    }
+
+    const availableRes = await client.query(
+      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
+       FROM commissions
+       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+      [invoice.affiliate_id]
+    );
+    const adjustmentsRes = await client.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+      [invoice.affiliate_id]
+    );
+    const availableGross =
+      Number(availableRes.rows[0]?.total || 0)
+      + Number(adjustmentsRes.rows[0]?.total || 0);
+    const affiliateDebt = Number(invoice.affiliate_debt || 0);
+    const availableNet = Math.max(
+      Number((availableGross - affiliateDebt).toFixed(2)),
+      0
+    );
+
+    if (availableNet < Number(invoice.amount || 0)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "INSUFFICIENT_BALANCE" });
+    }
+
+    await client.query(
+      `INSERT INTO affiliate_adjustments
+        (affiliate_id, amount, reason, status)
+       VALUES ($1, $2, $3, 'EARNED')`,
+      [invoice.affiliate_id, -Number(invoice.amount), invoice.reason || null]
+    );
+
+    const paidRes = await client.query(
+      `UPDATE affiliate_invoices
+       SET status = 'PAID', paid_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [invoiceId]
+    );
+
+    await client.query("COMMIT");
+    return res.json({ invoice: paidRes.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+}
+
 module.exports = {
   upsertTelegramUser,
   getUserByTelegramId,
@@ -979,4 +1139,5 @@ module.exports = {
   applyAffiliate,
   requestAffiliatePayout,
   decideAffiliateStatus,
+  decideAffiliateInvoice,
 };

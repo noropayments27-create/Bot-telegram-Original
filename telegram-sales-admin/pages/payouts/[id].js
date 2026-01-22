@@ -23,6 +23,12 @@ export default function PayoutDetail() {
     }
     return method || "-";
   };
+  const formatPayoutNumber = (value) => {
+    if (!value) {
+      return null;
+    }
+    return String(value).padStart(5, "0");
+  };
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -88,7 +94,10 @@ export default function PayoutDetail() {
   return (
     <main className="page">
       <section className="card">
-        <h1 className="icon-inline"><IconPayouts className="panel-icon" /> Pago {payout.id}</h1>
+        <h1 className="icon-inline">
+          <IconPayouts className="panel-icon" /> Pago
+          {payout.payout_number ? ` #${formatPayoutNumber(payout.payout_number)}` : ""}
+        </h1>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
 

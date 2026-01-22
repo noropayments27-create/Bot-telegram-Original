@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
@@ -33,7 +33,15 @@ export default function AffiliatesPage() {
   const [photoUrls, setPhotoUrls] = useState({});
   const [isCommissionOpen, setIsCommissionOpen] = useState(true);
   const [toast, setToast] = useState("");
+  const [adjustmentAmountById, setAdjustmentAmountById] = useState({});
+  const [adjustmentReasonById, setAdjustmentReasonById] = useState({});
+  const [adjustmentStatusById, setAdjustmentStatusById] = useState({});
+  const [adjustmentErrorById, setAdjustmentErrorById] = useState({});
+  const [invoiceStatusById, setInvoiceStatusById] = useState({});
+  const [invoiceErrorById, setInvoiceErrorById] = useState({});
+  const [invoiceWatchById, setInvoiceWatchById] = useState({});
   const hasPending = items.some((item) => item.status === "PENDING");
+  const invoiceWatchRef = useRef({});
 
   const formatRatePercent = (rate) => {
     const numeric = Number(rate);
@@ -95,6 +103,23 @@ export default function AffiliatesPage() {
     if (status === "PAID_OUT") return "PAGADA";
     if (status === "CANCELLED") return "CANCELADA";
     if (status === "REFUNDED") return "REEMBOLSADA";
+    return status || "-";
+  };
+
+  const formatAdjustmentStatus = (value) => {
+    const status = String(value || "").toUpperCase();
+    if (status === "EARNED") return "PENDIENTE";
+    if (status === "RESERVED") return "RESERVADA";
+    if (status === "PAID_OUT") return "PAGADA";
+    if (status === "CANCELLED") return "CANCELADA";
+    return status || "-";
+  };
+
+  const formatInvoiceStatus = (value) => {
+    const status = String(value || "").toUpperCase();
+    if (status === "PENDING") return "PENDIENTE";
+    if (status === "PAID") return "PAGADA";
+    if (status === "CANCELLED") return "CANCELADA";
     return status || "-";
   };
 
@@ -206,6 +231,23 @@ export default function AffiliatesPage() {
   }, []);
 
   useEffect(() => {
+    const markAffiliatesSeen = async () => {
+      try {
+        const summary = await apiFetch("/admin/summary");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(
+            "admin_seen_affiliates_count",
+            String(summary.pending_affiliates || 0)
+          );
+        }
+      } catch (err) {
+        // ignore summary errors
+      }
+    };
+    markAffiliatesSeen();
+  }, []);
+
+  useEffect(() => {
     const loadAffiliates = async () => {
       try {
         const params = new URLSearchParams({
@@ -276,6 +318,67 @@ export default function AffiliatesPage() {
       const detail = err?.payload?.error || "No se pudo actualizar el estado del afiliado.";
       setToast(detail);
       setError("No se pudo actualizar el estado del afiliado.");
+    }
+  };
+
+  const handleAdjustment = async (affiliateId, direction) => {
+    const amountRaw = adjustmentAmountById[affiliateId];
+    const amountValue = Number(amountRaw);
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setAdjustmentErrorById((prev) => ({
+        ...prev,
+        [affiliateId]: "Ingresa un monto válido.",
+      }));
+      return;
+    }
+    const reason = String(adjustmentReasonById[affiliateId] || "").trim();
+
+    const amount = direction === "subtract" ? -Math.abs(amountValue) : amountValue;
+    setAdjustmentStatusById((prev) => ({ ...prev, [affiliateId]: "saving" }));
+    setAdjustmentErrorById((prev) => ({ ...prev, [affiliateId]: "" }));
+    try {
+      await apiFetch(`/admin/affiliates/${affiliateId}/adjustments`, {
+        method: "POST",
+        body: JSON.stringify({ amount, reason }),
+      });
+      setAdjustmentAmountById((prev) => ({ ...prev, [affiliateId]: "" }));
+      setAdjustmentReasonById((prev) => ({ ...prev, [affiliateId]: "" }));
+      await loadDetail(affiliateId);
+      setToast(direction === "subtract" ? "Saldo descontado." : "Saldo agregado.");
+    } catch (err) {
+      const detail =
+        err?.payload?.error || "No se pudo ajustar el saldo del afiliado.";
+      setAdjustmentErrorById((prev) => ({ ...prev, [affiliateId]: detail }));
+    } finally {
+      setAdjustmentStatusById((prev) => ({ ...prev, [affiliateId]: "" }));
+    }
+  };
+
+  const handleInvoiceSend = async (affiliateId) => {
+    const amountRaw = adjustmentAmountById[affiliateId];
+    const reason = String(adjustmentReasonById[affiliateId] || "").trim();
+    const amountValue = Number(amountRaw);
+    if (!Number.isFinite(amountValue) || amountValue <= 0) {
+      setInvoiceErrorById((prev) => ({
+        ...prev,
+        [affiliateId]: "Ingresa un monto válido.",
+      }));
+      return;
+    }
+    setInvoiceStatusById((prev) => ({ ...prev, [affiliateId]: "sending" }));
+    setInvoiceErrorById((prev) => ({ ...prev, [affiliateId]: "" }));
+    try {
+      await apiFetch(`/admin/affiliates/${affiliateId}/invoices`, {
+        method: "POST",
+        body: JSON.stringify({ amount: amountValue, reason }),
+      });
+      setToast("Factura enviada.");
+    } catch (err) {
+      const detail =
+        err?.payload?.error || "No se pudo enviar la factura.";
+      setInvoiceErrorById((prev) => ({ ...prev, [affiliateId]: detail }));
+    } finally {
+      setInvoiceStatusById((prev) => ({ ...prev, [affiliateId]: "" }));
     }
   };
 
@@ -383,6 +486,84 @@ export default function AffiliatesPage() {
       }
     });
   }, [detailLoading, details, loadDetail, selectedAffiliateIds]);
+
+  const startInvoiceWatch = useCallback(
+    (affiliateId, since) => {
+      if (invoiceWatchRef.current[affiliateId]?.active) {
+        return;
+      }
+      setInvoiceWatchById((prev) => ({ ...prev, [affiliateId]: true }));
+      invoiceWatchRef.current[affiliateId] = {
+        active: true,
+        since,
+      };
+      const run = async () => {
+        while (invoiceWatchRef.current[affiliateId]?.active) {
+          try {
+            const params = new URLSearchParams({
+              since: String(invoiceWatchRef.current[affiliateId]?.since || 0),
+            });
+            const data = await apiFetch(
+              `/admin/affiliates/${affiliateId}/invoices/watch?${params.toString()}`
+            );
+            if (data?.changed && data?.invoice) {
+              const changedAt = new Date(
+                data.invoice.paid_at
+                  || data.invoice.cancelled_at
+                  || data.invoice.created_at
+                  || Date.now()
+              ).getTime();
+              invoiceWatchRef.current[affiliateId].since = changedAt;
+              await loadDetail(affiliateId);
+              invoiceWatchRef.current[affiliateId].active = false;
+              setInvoiceWatchById((prev) => ({ ...prev, [affiliateId]: false }));
+            }
+          } catch (err) {
+            // ignore and retry
+          }
+        }
+      };
+      run();
+    },
+    [loadDetail]
+  );
+
+  const stopInvoiceWatch = useCallback((affiliateId) => {
+    if (invoiceWatchRef.current[affiliateId]) {
+      invoiceWatchRef.current[affiliateId].active = false;
+      delete invoiceWatchRef.current[affiliateId];
+    }
+    setInvoiceWatchById((prev) => ({ ...prev, [affiliateId]: false }));
+  }, []);
+
+  useEffect(() => {
+    selectedAffiliateIds.forEach((affiliateId) => {
+      const detail = details[affiliateId];
+      if (!detail) {
+        return;
+      }
+      const invoices = detail.invoices || [];
+      const hasPendingInvoice = invoices.some(
+        (invoice) => String(invoice.status || "").toUpperCase() === "PENDING"
+      );
+      if (!hasPendingInvoice) {
+        stopInvoiceWatch(affiliateId);
+        return;
+      }
+      const lastChange = invoices.reduce((maxValue, invoice) => {
+        const timestamp = new Date(
+          invoice.paid_at || invoice.cancelled_at || invoice.created_at || 0
+        ).getTime();
+        return Math.max(maxValue, timestamp || 0);
+      }, 0);
+      startInvoiceWatch(affiliateId, lastChange);
+    });
+    return () => {
+      selectedAffiliateIds.forEach((affiliateId) => {
+        stopInvoiceWatch(affiliateId);
+      });
+    };
+  }, [details, selectedAffiliateIds, startInvoiceWatch, stopInvoiceWatch]);
 
   const handleQuickStatus = async (affiliateId, nextStatus) => {
     try {
@@ -511,7 +692,6 @@ export default function AffiliatesPage() {
                 <th align="left" className="affiliate-center">Telegram ID</th>
                 <th align="left" className="affiliate-center">Estado</th>
                 <th align="left" className="affiliate-center">Ventas</th>
-                <th align="left" className="affiliate-center">Ganancias</th>
                 <th align="left" className="affiliate-center">Ingreso</th>
                 <th align="left" className="affiliate-center">Bloqueo</th>
                 <th align="left" className="affiliate-center">
@@ -570,7 +750,6 @@ export default function AffiliatesPage() {
                     </td>
                     <td className="affiliate-center">{formatStatus(affiliate.status)}</td>
                     <td className="affiliate-center">{affiliate.sales_count || 0}</td>
-                    <td className="affiliate-center">{formatMoney(affiliate.earnings_total)}</td>
                     <td className="affiliate-center">
                       {formatDate(affiliate.approved_at || affiliate.created_at)}
                     </td>
@@ -692,9 +871,21 @@ export default function AffiliatesPage() {
             const commissions = detail?.commissions || [];
             const availableBalance = Number(detail?.available_balance || 0);
             const affiliateDebt = Number(detail?.affiliate?.affiliate_debt || 0);
-            const netBalance = availableBalance - affiliateDebt;
+            const netBalance = Math.max(availableBalance - affiliateDebt, 0);
+            const debtRemaining = Math.max(affiliateDebt - availableBalance, 0);
             const debtClassName = affiliateDebt > 0 ? "error" : "muted";
             const netClassName = netBalance < 0 ? "error" : "";
+            const adjustments = detail?.adjustments || [];
+            const invoices = detail?.invoices || [];
+            const controlItems = [
+              ...adjustments.map((item) => ({ ...item, type: "ADJUSTMENT" })),
+              ...invoices.map((item) => ({ ...item, type: "INVOICE" })),
+            ].sort((a, b) => {
+              const aTime = new Date(a.created_at || 0).getTime();
+              const bTime = new Date(b.created_at || 0).getTime();
+              return bTime - aTime;
+            });
+            const isWatchingInvoice = Boolean(invoiceWatchById[affiliateId]);
 
             return (
               <section key={affiliateId} className="card orders-detail-card">
@@ -723,7 +914,6 @@ export default function AffiliatesPage() {
                         <div className="affiliate-center">Telegram ID</div>
                         <div className="affiliate-center">Estado</div>
                         <div className="affiliate-center">Ventas</div>
-                        <div className="affiliate-center">Ganancias</div>
                         <div className="affiliate-center">Ingreso</div>
                         <div className="affiliate-center">Bloqueo</div>
                         <div className="affiliate-center">Nivel</div>
@@ -759,7 +949,6 @@ export default function AffiliatesPage() {
                         </div>
                         <div className="affiliate-center">{formatStatus(affiliate.status)}</div>
                         <div className="affiliate-center">{detail?.affiliate?.sales_count || 0}</div>
-                        <div className="affiliate-center">{formatMoney(detail?.affiliate?.earnings_total)}</div>
                         <div className="affiliate-center">
                           {formatDate(affiliate.approved_at || affiliate.created_at)}
                         </div>
@@ -853,12 +1042,11 @@ export default function AffiliatesPage() {
                             )
                           )}%`}
                         </p>
-                        <p>Balance disponible: {formatUsdAmount(availableBalance)}</p>
-                        <p className={debtClassName}>
-                          Deuda pendiente: {formatUsdAmount(affiliateDebt)}
-                        </p>
                         <p className={netClassName}>
-                          Balance neto: {formatUsdAmount(netBalance)}
+                          Saldo disponible: {formatUsdAmount(netBalance)}
+                        </p>
+                        <p className={debtClassName}>
+                          Deuda pendiente: {formatUsdAmount(-debtRemaining)}
                         </p>
                         <p>
                           Ingreso:{" "}
@@ -1004,6 +1192,117 @@ export default function AffiliatesPage() {
                                   </td>
                                 </tr>
                               ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                    </div>
+                    <div className="orders-detail-separator"></div>
+                    <div className="orders-detail-section">
+                      <h3>Control de Ganancias</h3>
+                      <div className="affiliate-adjustment-form">
+                        <div className="affiliate-adjustment-row">
+                          <input
+                            type="number"
+                            step="0.01"
+                            min="0"
+                            placeholder="Monto (USD)"
+                            className="commission-input"
+                            value={adjustmentAmountById[affiliateId] || ""}
+                            onChange={(event) =>
+                              setAdjustmentAmountById((prev) => ({
+                                ...prev,
+                                [affiliateId]: event.target.value,
+                              }))
+                            }
+                          />
+                          <input
+                            type="text"
+                            placeholder="Motivo (opcional)"
+                            className="commission-input"
+                            value={adjustmentReasonById[affiliateId] || ""}
+                            onChange={(event) =>
+                              setAdjustmentReasonById((prev) => ({
+                                ...prev,
+                                [affiliateId]: event.target.value,
+                              }))
+                            }
+                          />
+                        </div>
+                        <div className="affiliate-adjustment-actions">
+                          <button
+                            type="button"
+                            onClick={() => handleAdjustment(affiliateId, "add")}
+                            disabled={adjustmentStatusById[affiliateId] === "saving"}
+                          >
+                            Agregar saldo
+                          </button>
+                          <button
+                            type="button"
+                            className="danger-button"
+                            onClick={() => handleAdjustment(affiliateId, "subtract")}
+                            disabled={adjustmentStatusById[affiliateId] === "saving"}
+                          >
+                            Quitar saldo
+                          </button>
+                          <button
+                            type="button"
+                            onClick={() => handleInvoiceSend(affiliateId)}
+                            disabled={invoiceStatusById[affiliateId] === "sending"}
+                          >
+                            Enviar factura
+                          </button>
+                        </div>
+                        {adjustmentErrorById[affiliateId] && (
+                          <p className="error">{adjustmentErrorById[affiliateId]}</p>
+                        )}
+                        {invoiceErrorById[affiliateId] && (
+                          <p className="error">{invoiceErrorById[affiliateId]}</p>
+                        )}
+                        {adjustmentStatusById[affiliateId] === "saving" && (
+                          <p className="muted">Guardando ajuste...</p>
+                        )}
+                        {invoiceStatusById[affiliateId] === "sending" && (
+                          <p className="muted">Enviando factura...</p>
+                        )}
+                        {isWatchingInvoice && (
+                          <p className="muted">Esperando pago o cancelación...</p>
+                        )}
+                      </div>
+                      {controlItems.length === 0 ? (
+                        <p className="muted">Sin ajustes registrados.</p>
+                      ) : (
+                        <div className="table-scroll affiliate-commissions-scroll">
+                          <table style={{ width: "100%", marginTop: "0px" }}>
+                            <thead>
+                              <tr>
+                                <th align="left">Fecha</th>
+                                <th align="left">Monto</th>
+                                <th align="left">Estado</th>
+                                <th align="left">Motivo</th>
+                              </tr>
+                            </thead>
+                            <tbody>
+                              {controlItems.map((row) => {
+                                const amount =
+                                  row.type === "INVOICE"
+                                    ? -Math.abs(Number(row.amount || 0))
+                                    : Number(row.amount || 0);
+                                const reason = row.type === "INVOICE"
+                                  ? (row.reason ? `Factura: ${row.reason}` : "Factura")
+                                  : row.reason || "-";
+                                const status = row.type === "INVOICE"
+                                  ? formatInvoiceStatus(row.status)
+                                  : formatAdjustmentStatus(row.status);
+                                return (
+                                  <tr key={`${row.type}-${row.id}`}>
+                                    <td>{new Date(row.created_at).toLocaleString()}</td>
+                                    <td>{formatCommissionAmount(amount)}</td>
+                                    <td>{status}</td>
+                                    <td>{reason}</td>
+                                  </tr>
+                                );
+                              })}
                             </tbody>
                           </table>
                         </div>

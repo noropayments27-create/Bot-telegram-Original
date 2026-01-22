@@ -697,6 +697,11 @@ def build_crypto_assets_keyboard(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
                 )
+                ,
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
@@ -714,11 +719,10 @@ def build_payment_prompt_keyboard(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
                 ),
-            ],
-            [
                 InlineKeyboardButton(
-                    text=t(locale, "btn_home"), callback_data="home:show"
-                )
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
@@ -1595,7 +1599,11 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
-                )
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )

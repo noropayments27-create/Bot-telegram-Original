@@ -11,6 +11,12 @@ export default function NotificationsBell({ variant = "sidebar" }) {
   const [lastSeenAt, setLastSeenAt] = useState(0);
   const wrapperRef = useRef(null);
   const storageKey = `admin_notifications_seen_at_${variant}`;
+  const formatSequenceNumber = (value, size = 5) => {
+    if (!value) {
+      return null;
+    }
+    return String(value).padStart(size, "0");
+  };
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -40,7 +46,9 @@ export default function NotificationsBell({ variant = "sidebar" }) {
             type: "Orden",
             status: item.status,
             created_at: item.created_at,
-            text: `Orden ${item.order_number ? `#${String(item.order_number).padStart(5, "0")}` : item.id}`,
+            text: `Orden #${
+              formatSequenceNumber(item.order_number) || "-----"
+            }`,
             href: `/orders?orderId=${item.id}`,
           }));
 
@@ -72,7 +80,9 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           type: "Pago",
           status: item.status,
           created_at: item.created_at,
-          text: `Retiro ${item.id}`,
+          text: `Retiro #${
+            formatSequenceNumber(item.payout_number) || "-----"
+          }`,
           href: "/payouts",
         }));
 
@@ -81,7 +91,9 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           type: "Afiliado",
           status: item.status,
           created_at: item.created_at,
-          text: `Afiliado ${item.telegram_username || item.telegram_id || item.id}`,
+          text: `Afiliado #${
+            formatSequenceNumber(item.affiliate_number) || "-----"
+          }`,
           href: "/affiliates",
         }));
 

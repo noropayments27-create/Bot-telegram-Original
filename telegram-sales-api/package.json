@@ -6,6 +6,7 @@
   "scripts": {
     "dev": "nodemon src/server.js",
     "start": "node src/server.js",
+    "migrate:adjustments": "psql -d telegram_sales -f sql/014_affiliate_adjustments.sql",
     "seed:catalog": "node seeds/seed_catalog.js"
   },
   "dependencies": {

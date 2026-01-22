@@ -2792,3 +2792,36 @@ button:disabled {
 .affiliates-page .orders-detail-subseparator {
   margin: 6px 0;
 }
+
+.affiliate-adjustment-form {
+  display: flex;
+  flex-direction: column;
+  gap: 8px;
+  max-width: 504px;
+}
+
+.affiliate-adjustment-row {
+  display: flex;
+  align-items: center;
+  gap: 1cm;
+}
+
+.affiliate-adjustment-row .commission-input {
+  flex: 1 1 0;
+}
+
+.affiliate-adjustment-actions {
+  display: flex;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.affiliate-adjustment-actions .danger-button {
+  background: #2b0b0b;
+  border: 1px solid var(--scarlet-red);
+  color: #fff;
+}
+
+.affiliate-adjustment-actions .danger-button:hover {
+  background: var(--scarlet-red);
+}

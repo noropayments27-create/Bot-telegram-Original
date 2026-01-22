@@ -20,6 +20,12 @@ export default function Header() {
   const [bellOpen, setBellOpen] = useState(false);
   const [notifications, setNotifications] = useState([]);
   const headerRef = useRef(null);
+  const formatSequenceNumber = (value, size = 5) => {
+    if (!value) {
+      return null;
+    }
+    return String(value).padStart(size, "0");
+  };
   const renderNotificationIcon = (type) => {
     const commonProps = {
       className: "bell-item__icon-svg",
@@ -125,7 +131,7 @@ export default function Header() {
           type: "Orden",
           status: item.status,
           created_at: item.created_at,
-          text: `Orden ${item.order_number ? `#${String(item.order_number).padStart(5, "0")}` : item.id}`,
+          text: `Orden #${formatSequenceNumber(item.order_number) || "-----"}`,
           href: `/orders/${item.id}`,
         }));
 
@@ -157,7 +163,7 @@ export default function Header() {
           type: "Pago",
           status: item.status,
           created_at: item.created_at,
-          text: `Pago #${item.id}`,
+          text: `Pago #${formatSequenceNumber(item.payout_number) || "-----"}`,
           href: `/payouts/${item.id}`,
         }));
 
@@ -166,7 +172,7 @@ export default function Header() {
           type: "Afiliado",
           status: item.status,
           created_at: item.created_at,
-          text: `Afiliado ${item.telegram_username || item.telegram_id || item.id}`,
+          text: `Afiliado #${formatSequenceNumber(item.affiliate_number) || "-----"}`,
           href: `/affiliates`,
         }));
 

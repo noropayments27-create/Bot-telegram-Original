@@ -103,6 +103,23 @@ export default function PayoutsPage() {
   }, [toast]);
 
   useEffect(() => {
+    const markPayoutsSeen = async () => {
+      try {
+        const summary = await apiFetch("/admin/summary");
+        if (typeof window !== "undefined") {
+          window.sessionStorage.setItem(
+            "admin_seen_payouts_count",
+            String(summary.pending_payouts || 0)
+          );
+        }
+      } catch (err) {
+        // ignore summary errors
+      }
+    };
+    markPayoutsSeen();
+  }, []);
+
+  useEffect(() => {
     const loadPayouts = async () => {
       try {
         const params = new URLSearchParams({
@@ -269,7 +286,7 @@ export default function PayoutsPage() {
           <table className="orders-table payouts-table">
             <thead>
               <tr>
-                <th>ID de Pago</th>
+                <th>Numero de pago</th>
                 <th>Telegram ID</th>
                 <th>Username</th>
                 <th>Monto</th>
@@ -287,7 +304,7 @@ export default function PayoutsPage() {
                   key={payout.id}
                   className={selectedPayoutIds.includes(payout.id) ? "orders-row-active" : ""}
                 >
-                  <td>{maskValue(payout.id)}</td>
+                  <td>{formatPayoutNumber(payout.payout_number) || "-"}</td>
                   <td>
                     <button
                       type="button"

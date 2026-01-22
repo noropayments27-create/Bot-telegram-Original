@@ -136,8 +136,8 @@ export default function Dashboard() {
     { href: "/inventory", label: "Inventario", key: "inventory" },
     { href: "/tickets", label: "Tickets", key: "tickets" },
     { href: "/broadcasts", label: "Difusiones" },
-    { href: "/payouts", label: "Pagos" },
-    { href: "/affiliates", label: "Afiliados" },
+    { href: "/payouts", label: "Pagos", key: "payouts" },
+    { href: "/affiliates", label: "Afiliados", key: "affiliates" },
   ];
   const [stats, setStats] = useState({
     customers: 0,
@@ -146,12 +146,16 @@ export default function Dashboard() {
     newOrders: 0,
     activeProducts: 0,
     unreadTickets: 0,
+    pendingPayouts: 0,
     affiliates: 0,
+    pendingAffiliates: 0,
   });
   const [statsError, setStatsError] = useState("");
   const [seenOrdersCount, setSeenOrdersCount] = useState(0);
   const [seenTicketsAt, setSeenTicketsAt] = useState(0);
   const [latestTicketAt, setLatestTicketAt] = useState(0);
+  const [seenPayoutsCount, setSeenPayoutsCount] = useState(0);
+  const [seenAffiliatesCount, setSeenAffiliatesCount] = useState(0);
   const [resetText, setResetText] = useState("");
   const [resetStatus, setResetStatus] = useState("");
   const customersCounter = useCountUp(stats.customers);
@@ -172,7 +176,9 @@ export default function Dashboard() {
         newOrders: Number(data.new_orders || 0),
         activeProducts: Number(data.active_products || 0),
         unreadTickets: Number(data.unread_tickets || 0),
+        pendingPayouts: Number(data.pending_payouts || 0),
         affiliates: Number(data.affiliates || 0),
+        pendingAffiliates: Number(data.pending_affiliates || 0),
       };
       setStats(nextStats);
       const latestTicket = ticketsRes.items?.[0];
@@ -204,11 +210,23 @@ export default function Dashboard() {
     const storedTicketsAt = Number(
       window.sessionStorage.getItem("admin_seen_tickets_at") || 0
     );
+    const storedPayouts = Number(
+      window.sessionStorage.getItem("admin_seen_payouts_count") || 0
+    );
+    const storedAffiliates = Number(
+      window.sessionStorage.getItem("admin_seen_affiliates_count") || 0
+    );
     if (!Number.isNaN(storedOrders)) {
       setSeenOrdersCount(storedOrders);
     }
     if (!Number.isNaN(storedTicketsAt)) {
       setSeenTicketsAt(storedTicketsAt);
+    }
+    if (!Number.isNaN(storedPayouts)) {
+      setSeenPayoutsCount(storedPayouts);
+    }
+    if (!Number.isNaN(storedAffiliates)) {
+      setSeenAffiliatesCount(storedAffiliates);
     }
   }, []);
 
@@ -273,17 +291,34 @@ export default function Dashboard() {
             const isOrders = item.key === "orders";
             const isTickets = item.key === "tickets";
             const isInventory = item.key === "inventory";
+            const isPayouts = item.key === "payouts";
+            const isAffiliates = item.key === "affiliates";
             const countValue = isOrders
               ? stats.newOrders || 0
               : isInventory
               ? stats.activeProducts || 0
               : isTickets
               ? stats.unreadTickets || 0
+              : isPayouts
+              ? stats.pendingPayouts || 0
+              : isAffiliates
+              ? stats.pendingAffiliates || 0
               : null;
             const hasAlert =
               (isOrders && countValue > seenOrdersCount) ||
-              (isTickets && latestTicketAt > seenTicketsAt);
+              (isTickets && latestTicketAt > seenTicketsAt) ||
+              (isPayouts && countValue > seenPayoutsCount) ||
+              (isAffiliates && countValue > seenAffiliatesCount);
             const badgeText = countValue > 99 ? "99+" : String(countValue);
+            const badgeLabel = isOrders
+              ? "Nuevas ordenes"
+              : isTickets
+              ? "Tickets sin leer"
+              : isPayouts
+              ? "Pagos pendientes"
+              : isAffiliates
+              ? "Afiliados pendientes"
+              : "Notificaciones";
             return (
               <Link
                 key={item.href}
@@ -296,7 +331,7 @@ export default function Dashboard() {
                 {hasAlert && (
                   <span
                     className="nav-card__badge"
-                    aria-label={isOrders ? "Nuevas ordenes" : "Tickets sin leer"}
+                    aria-label={badgeLabel}
                   >
                     {badgeText}
                   </span>

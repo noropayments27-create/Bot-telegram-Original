@@ -78,6 +78,10 @@ def build_language_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
                     text=t(locale, "btn_language_back"),
                     callback_data="nav:back",
                 ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
             ],
         ]
     )
