@@ -86,7 +86,14 @@ export default function PayoutsPage() {
   const [detailErrors, setDetailErrors] = useState({});
   const [detailMessages, setDetailMessages] = useState({});
   const [reasonById, setReasonById] = useState({});
+  const [markingSentById, setMarkingSentById] = useState({});
   const [toast, setToast] = useState("");
+  const [payoutCounts, setPayoutCounts] = useState({});
+  const getPayoutCount = (key) => Number(payoutCounts[key] || 0);
+  const totalPayouts = Object.values(payoutCounts).reduce(
+    (sum, value) => sum + Number(value || 0),
+    0
+  );
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -119,28 +126,32 @@ export default function PayoutsPage() {
     markPayoutsSeen();
   }, []);
 
-  useEffect(() => {
-    const loadPayouts = async () => {
-      try {
-        const params = new URLSearchParams({
-          page: String(page),
-          page_size: "20",
-        });
-        if (status) {
-          params.set("status", status);
-        }
-
-        const data = await apiFetch(`/admin/payouts?${params.toString()}`);
-        setItems(data.items || []);
-        setTotalPages(data.total_pages || 1);
-        setError("");
-      } catch (err) {
-        setError("No se pudo cargar payouts.");
+  const loadPayouts = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: "20",
+      });
+      if (status) {
+        params.set("status", status);
       }
-    };
 
-    loadPayouts();
+      const [data, countsRes] = await Promise.all([
+        apiFetch(`/admin/payouts?${params.toString()}`),
+        apiFetch("/admin/payouts/status-counts"),
+      ]);
+      setItems(data.items || []);
+      setTotalPages(data.total_pages || 1);
+      setError("");
+      setPayoutCounts(countsRes?.counts || {});
+    } catch (err) {
+      setError("No se pudo cargar payouts.");
+    }
   }, [page, status]);
+
+  useEffect(() => {
+    loadPayouts();
+  }, [loadPayouts]);
 
   const handleStatusChange = (event) => {
     setStatus(event.target.value);
@@ -189,6 +200,28 @@ export default function PayoutsPage() {
     }
   }, []);
 
+  useEffect(() => {
+    const payoutId = router.query?.payoutId;
+    if (!payoutId || typeof payoutId !== "string") {
+      return;
+    }
+    setSelectedPayoutIds((prev) => {
+      if (prev.includes(payoutId)) {
+        return prev;
+      }
+      const next = [payoutId, ...prev.filter((id) => id !== payoutId)];
+      if (next.length > 3) {
+        const removed = next.pop();
+        if (removed) {
+          removeDetail(removed);
+        }
+      }
+      return next;
+    });
+    loadDetail(payoutId);
+    loadPayouts();
+  }, [router.query, loadDetail, loadPayouts, removeDetail]);
+
   const handleViewPayout = async (payoutId) => {
     if (!payoutId) {
       return;
@@ -220,17 +253,28 @@ export default function PayoutsPage() {
 
   const handleMarkSent = async (payoutId) => {
     try {
+      const currentScroll = window.scrollY;
+      setMarkingSentById((prev) => ({ ...prev, [payoutId]: true }));
       await apiFetch(`/admin/payouts/${payoutId}/mark-sent`, { method: "POST" });
       setDetailMessages((prev) => ({
         ...prev,
         [payoutId]: "Payout marcado como enviado.",
       }));
       await loadDetail(payoutId);
+      await loadPayouts();
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: currentScroll, behavior: "auto" });
+      });
     } catch (err) {
       setDetailErrors((prev) => ({
         ...prev,
         [payoutId]: "No se pudo marcar como enviado.",
       }));
+      requestAnimationFrame(() => {
+        window.scrollTo({ top: window.scrollY, behavior: "auto" });
+      });
+    } finally {
+      setMarkingSentById((prev) => ({ ...prev, [payoutId]: false }));
     }
   };
 
@@ -245,6 +289,7 @@ export default function PayoutsPage() {
         [payoutId]: "Payout cancelado.",
       }));
       await loadDetail(payoutId);
+      await loadPayouts();
     } catch (err) {
       setDetailErrors((prev) => ({
         ...prev,
@@ -268,7 +313,23 @@ export default function PayoutsPage() {
   return (
     <main className="page">
       <section className="card orders-card">
-        <h1 className="icon-inline"><IconPayouts className="panel-icon" /> Pagos</h1>
+        <div className="orders-header-row">
+          <h1 className="icon-inline"><IconPayouts className="panel-icon" /> Pagos</h1>
+          <div className="orders-status-counts">
+            <span className="orders-count-label">Total:</span>
+            <span className="orders-count-value">
+              {status === ""
+                ? totalPayouts
+                : status === "REQUESTED"
+                ? getPayoutCount("REQUESTED")
+                : status === "SENT"
+                ? getPayoutCount("SENT")
+                : status === "CANCELLED"
+                ? getPayoutCount("CANCELLED")
+                : 0}
+            </span>
+          </div>
+        </div>
         {error && <p className="error">{error}</p>}
         <div className="form">
           <label>
@@ -365,9 +426,13 @@ export default function PayoutsPage() {
             const affiliate = detail?.affiliate;
             const user = detail?.user;
             const availableBalance = detail?.available_balance;
+            const availableBalanceText = Number.isFinite(Number(availableBalance))
+              ? formatUsdAmount(availableBalance)
+              : "-";
             const reason = reasonById[payoutId] || "";
             const isSent = payout?.status === "SENT";
             const isCancelled = payout?.status === "CANCELLED";
+            const isMarkingSent = Boolean(markingSentById[payoutId]);
 
             return (
               <section key={payoutId} className="card orders-detail-card">
@@ -418,7 +483,7 @@ export default function PayoutsPage() {
                       <div className="orders-detail-section">
                         <h3>Afiliado</h3>
                         <p>Estado: {formatStatus(affiliate?.status)}</p>
-                        <p>Balance disponible: {availableBalance || "-"}</p>
+                        <p>Balance disponible: {availableBalanceText}</p>
                         <div className="orders-detail-subseparator"></div>
                         <h3>Usuario</h3>
                         <p>
@@ -464,8 +529,9 @@ export default function PayoutsPage() {
                         <button
                           type="button"
                           onClick={() => handleMarkSent(payoutId)}
-                          disabled={isSent || isCancelled}
+                          disabled={isSent || isCancelled || isMarkingSent}
                         >
+                          {isMarkingSent && <span className="button-spinner" aria-hidden="true"></span>}
                           Enviado
                         </button>
                         <button

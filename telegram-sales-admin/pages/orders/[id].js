@@ -349,7 +349,10 @@ export default function OrderDetail() {
             onClick={handleApprove}
             disabled={!hasProof || isAlreadyProcessed || isSubmittingApprove}
           >
-            Aprobar pago
+            {isSubmittingApprove && (
+              <span className="button-spinner" aria-hidden="true" />
+            )}
+            {isSubmittingApprove ? "Aprobando..." : "Aprobar pago"}
           </button>
           <button type="button" onClick={() => handleReject("retry")} disabled={!hasProof}>
             Rechazar (reintentar)

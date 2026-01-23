@@ -190,7 +190,7 @@ export default function Header() {
     };
 
     loadNotifications();
-    const interval = setInterval(loadNotifications, 5000);
+    const interval = setInterval(loadNotifications, 20000);
     return () => clearInterval(interval);
   }, []);
 

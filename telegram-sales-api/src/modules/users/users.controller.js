@@ -442,16 +442,32 @@ async function getAffiliateStatus(req, res, next) {
       streakCount = 0;
     }
     const availableRes = await pool.query(
-      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
+      `SELECT COALESCE(SUM(
+        GREATEST(
+          (amount - COALESCE(refunded_amount, 0))
+          - COALESCE(reserved_amount, 0)
+          - COALESCE(paid_out_amount, 0),
+          0
+        )
+      ), 0) AS total
        FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+       WHERE affiliate_id = $1 AND status != 'REFUNDED'`,
       [row.id]
     );
     const adjustmentsRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(
+        CASE
+          WHEN amount > 0 THEN GREATEST(
+            amount
+            - COALESCE(reserved_amount, 0)
+            - COALESCE(paid_out_amount, 0),
+            0
+          )
+          ELSE amount
+        END
+      ), 0) AS total
        FROM affiliate_adjustments
-       WHERE affiliate_id = $1
-         AND status = 'EARNED'`,
+       WHERE affiliate_id = $1`,
       [row.id]
     );
     const earningsAvailableGross =
@@ -778,8 +794,15 @@ async function applyAffiliate(req, res, next) {
 
 async function requestAffiliatePayout(req, res, next) {
   const telegramId = Number(req.body.telegram_id);
+  const requestedAmountRaw = req.body?.amount;
+  const requestedAmount = requestedAmountRaw != null
+    ? Number(requestedAmountRaw)
+    : null;
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });
+  }
+  if (requestedAmount !== null && (!Number.isFinite(requestedAmount) || requestedAmount <= 0)) {
+    return res.status(400).json({ error: "INVALID_AMOUNT" });
   }
   const pool = getPool();
   const client = await pool.connect();
@@ -818,40 +841,61 @@ async function requestAffiliatePayout(req, res, next) {
       `SELECT c.id,
               c.amount,
               COALESCE(c.refunded_amount, 0) AS refunded_amount,
-              (c.amount - COALESCE(c.refunded_amount, 0)) AS net_amount
+              COALESCE(c.reserved_amount, 0) AS reserved_amount,
+              COALESCE(c.paid_out_amount, 0) AS paid_out_amount,
+              (c.amount - COALESCE(c.refunded_amount, 0)
+                - COALESCE(c.reserved_amount, 0)
+                - COALESCE(c.paid_out_amount, 0)) AS available_amount
        FROM commissions c
-       LEFT JOIN payout_items pi ON pi.commission_id = c.id
-       LEFT JOIN payouts p ON p.id = pi.payout_id
        WHERE c.affiliate_id = $1
-         AND c.status = 'EARNED'
-         AND (c.amount - COALESCE(c.refunded_amount, 0)) > 0
-         AND (pi.commission_id IS NULL OR p.status = 'CANCELLED')
+         AND c.status != 'REFUNDED'
+         AND (c.amount - COALESCE(c.refunded_amount, 0)
+           - COALESCE(c.reserved_amount, 0)
+           - COALESCE(c.paid_out_amount, 0)) > 0
        ORDER BY c.earned_at ASC
        FOR UPDATE OF c`,
       [affiliate.id]
     );
 
-    const adjustmentsRes = await client.query(
-      `SELECT id, amount
+    const positiveAdjustmentsRes = await client.query(
+      `SELECT id,
+              amount,
+              COALESCE(reserved_amount, 0) AS reserved_amount,
+              COALESCE(paid_out_amount, 0) AS paid_out_amount,
+              (amount - COALESCE(reserved_amount, 0)
+                - COALESCE(paid_out_amount, 0)) AS available_amount
        FROM affiliate_adjustments
        WHERE affiliate_id = $1
-         AND status = 'EARNED'
+         AND amount > 0
+         AND (amount - COALESCE(reserved_amount, 0)
+           - COALESCE(paid_out_amount, 0)) > 0
        ORDER BY created_at ASC
        FOR UPDATE`,
       [affiliate.id]
     );
 
-    const grossAmount = commissionsRes.rows.reduce(
-      (sum, row) => sum + Number(row.net_amount || 0),
-      0
-    );
-    const adjustmentsAmount = adjustmentsRes.rows.reduce(
-      (sum, row) => sum + Number(row.amount || 0),
-      0
+    const negativeAdjustmentsRes = await client.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND amount < 0`,
+      [affiliate.id]
     );
 
-    const totalGross = Number((grossAmount + adjustmentsAmount).toFixed(2));
-    if (commissionsRes.rowCount === 0 && adjustmentsRes.rowCount === 0) {
+    const commissionAvailableTotal = commissionsRes.rows.reduce(
+      (sum, row) => sum + Number(row.available_amount || 0),
+      0
+    );
+    const positiveAdjustmentsTotal = positiveAdjustmentsRes.rows.reduce(
+      (sum, row) => sum + Number(row.available_amount || 0),
+      0
+    );
+    const negativeAdjustmentsTotal = Number(negativeAdjustmentsRes.rows[0]?.total || 0);
+
+    const totalGross = Number(
+      (commissionAvailableTotal + positiveAdjustmentsTotal + negativeAdjustmentsTotal).toFixed(2)
+    );
+    if (commissionsRes.rowCount === 0 && positiveAdjustmentsRes.rowCount === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
@@ -862,30 +906,75 @@ async function requestAffiliatePayout(req, res, next) {
     }
 
     const debt = Number(affiliate.affiliate_debt || 0);
-    const debtApplied = Math.min(debt, totalGross);
-    const payoutAmount = Number((totalGross - debtApplied).toFixed(2));
+    const debtAppliedTotal = Math.min(debt, totalGross);
+    const availableAfterDebt = Number((totalGross - debtAppliedTotal).toFixed(2));
+    if (availableAfterDebt <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "DEBT_PENDING" });
+    }
+
+    let targetPayout = availableAfterDebt;
+    if (requestedAmount !== null) {
+      if (requestedAmount > availableAfterDebt) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "INSUFFICIENT_BALANCE" });
+      }
+      targetPayout = requestedAmount;
+    }
+    const targetGross = Number((targetPayout + debtAppliedTotal).toFixed(2));
+    const targetPositive = targetGross;
+
+    let remaining = targetPositive;
+    const selectedCommissions = [];
+    const selectedAdjustments = [];
+
+    for (const row of commissionsRes.rows) {
+      if (remaining <= 0) {
+        break;
+      }
+      const availableAmount = Number(row.available_amount || 0);
+      if (availableAmount <= 0) {
+        continue;
+      }
+      const takeAmount = Number(Math.min(availableAmount, remaining).toFixed(2));
+      if (takeAmount <= 0) {
+        continue;
+      }
+      selectedCommissions.push({ id: row.id, amount: takeAmount });
+      remaining = Number((remaining - takeAmount).toFixed(2));
+    }
+
+    for (const row of positiveAdjustmentsRes.rows) {
+      if (remaining <= 0) {
+        break;
+      }
+      const availableAmount = Number(row.available_amount || 0);
+      if (availableAmount <= 0) {
+        continue;
+      }
+      const takeAmount = Number(Math.min(availableAmount, remaining).toFixed(2));
+      if (takeAmount <= 0) {
+        continue;
+      }
+      selectedAdjustments.push({ id: row.id, amount: takeAmount });
+      remaining = Number((remaining - takeAmount).toFixed(2));
+    }
+
+    if (remaining > 0.01) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
+    }
+    const selectedPositiveTotal = selectedCommissions.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    ) + selectedAdjustments.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const selectedGross = Number(selectedPositiveTotal.toFixed(2));
+
+    const debtApplied = Math.min(debtAppliedTotal, selectedGross);
+    const payoutAmount = Number((selectedGross - debtApplied).toFixed(2));
     if (payoutAmount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "DEBT_EXCEEDS_BALANCE" });
-    }
-
-    const commissionIds = commissionsRes.rows.map((row) => row.id);
-    const positiveAdjustments = adjustmentsRes.rows.filter(
-      (row) => Number(row.amount || 0) > 0
-    );
-    const adjustmentIds = positiveAdjustments.map((row) => row.id);
-
-    await client.query(
-      `DELETE FROM payout_items
-       WHERE commission_id = ANY($1::uuid[])`,
-      [commissionIds]
-    );
-    if (adjustmentIds.length > 0) {
-      await client.query(
-        `DELETE FROM payout_adjustments
-         WHERE adjustment_id = ANY($1::uuid[])`,
-        [adjustmentIds]
-      );
     }
 
     const payoutRes = await client.query(
@@ -896,6 +985,10 @@ async function requestAffiliatePayout(req, res, next) {
     );
 
     const payoutId = payoutRes.rows[0].id;
+    const commissionIds = selectedCommissions.map((item) => item.id);
+    const commissionAmounts = selectedCommissions.map((item) => item.amount);
+    const adjustmentIds = selectedAdjustments.map((item) => item.id);
+    const adjustmentAmounts = selectedAdjustments.map((item) => item.amount);
 
     if (debtApplied > 0) {
       await client.query(
@@ -906,35 +999,65 @@ async function requestAffiliatePayout(req, res, next) {
       );
     }
 
-    await client.query(
-      `INSERT INTO payout_items (payout_id, commission_id, amount)
-       SELECT $1, id, (amount - COALESCE(refunded_amount, 0))
-       FROM commissions
-       WHERE id = ANY($2::uuid[])
-         AND (amount - COALESCE(refunded_amount, 0)) > 0`,
-      [payoutId, commissionIds]
-    );
+    if (commissionIds.length > 0) {
+      await client.query(
+        `WITH selected AS (
+           SELECT UNNEST($2::uuid[]) AS id,
+                  UNNEST($3::numeric[]) AS amount
+         )
+         INSERT INTO payout_items (payout_id, commission_id, amount)
+         SELECT $1, id, amount
+         FROM selected`,
+        [payoutId, commissionIds, commissionAmounts]
+      );
 
-    await client.query(
-      `UPDATE commissions
-       SET status = 'RESERVED'
-       WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
-      [commissionIds]
-    );
+      await client.query(
+        `WITH selected AS (
+           SELECT UNNEST($1::uuid[]) AS id,
+                  UNNEST($2::numeric[]) AS amount
+         )
+         UPDATE commissions c
+         SET reserved_amount = c.reserved_amount + selected.amount,
+             status = CASE
+               WHEN (c.amount - COALESCE(c.refunded_amount, 0)
+                 - (c.reserved_amount + selected.amount)
+                 - COALESCE(c.paid_out_amount, 0)) <= 0.01
+                 THEN 'RESERVED'
+               ELSE c.status
+             END
+         FROM selected
+         WHERE c.id = selected.id`,
+        [commissionIds, commissionAmounts]
+      );
+    }
 
     if (adjustmentIds.length > 0) {
       await client.query(
-        `INSERT INTO payout_adjustments (payout_id, adjustment_id, amount)
+        `WITH selected AS (
+           SELECT UNNEST($2::uuid[]) AS id,
+                  UNNEST($3::numeric[]) AS amount
+         )
+         INSERT INTO payout_adjustments (payout_id, adjustment_id, amount)
          SELECT $1, id, amount
-         FROM affiliate_adjustments
-         WHERE id = ANY($2::uuid[]) AND amount > 0`,
-        [payoutId, adjustmentIds]
+         FROM selected`,
+        [payoutId, adjustmentIds, adjustmentAmounts]
       );
       await client.query(
-        `UPDATE affiliate_adjustments
-         SET status = 'RESERVED'
-         WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
-        [adjustmentIds]
+        `WITH selected AS (
+           SELECT UNNEST($1::uuid[]) AS id,
+                  UNNEST($2::numeric[]) AS amount
+         )
+         UPDATE affiliate_adjustments a
+         SET reserved_amount = a.reserved_amount + selected.amount,
+             status = CASE
+               WHEN (a.amount - (a.reserved_amount + selected.amount)
+                 - COALESCE(a.paid_out_amount, 0)) <= 0.01
+                 THEN 'RESERVED'
+               ELSE a.status
+             END
+         FROM selected
+         WHERE a.id = selected.id`,
+        [adjustmentIds, adjustmentAmounts]
       );
     }
 
@@ -1034,6 +1157,8 @@ async function getUserBanStatus(req, res, next) {
   }
 }
 
+const { buildAffiliateInvoiceMessage } = require("../../services/affiliateInvoiceMessage");
+
 async function decideAffiliateInvoice(req, res, next) {
   const { invoice_id: invoiceId, decision } = req.body || {};
   if (!invoiceId || !decision) {
@@ -1061,9 +1186,50 @@ async function decideAffiliateInvoice(req, res, next) {
       return res.status(404).json({ error: "INVOICE_NOT_FOUND" });
     }
     const invoice = invoiceRes.rows[0];
+    const affiliateInfoRes = await client.query(
+      `WITH ranked AS (
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY approved_at, id) AS affiliate_number
+         FROM affiliates
+         WHERE approved_at IS NOT NULL
+       )
+       SELECT a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       LEFT JOIN ranked ON ranked.id = a.id
+       WHERE a.id = $1`,
+      [invoice.affiliate_id]
+    );
+    const affiliateInfo = affiliateInfoRes.rows[0] || null;
+    const now = new Date();
+    const expiresAt = invoice.expires_at
+      ? new Date(invoice.expires_at)
+      : new Date(new Date(invoice.created_at || now).getTime() + 10 * 60 * 1000);
+    if (invoice.status === "PENDING" && expiresAt.getTime() <= now.getTime()) {
+      const expiredRes = await client.query(
+        `UPDATE affiliate_invoices
+         SET status = 'EXPIRED', expired_at = now()
+         WHERE id = $1
+         RETURNING *`,
+        [invoiceId]
+      );
+      await client.query("COMMIT");
+      const expiredInvoice = expiredRes.rows[0];
+      const message = affiliateInfo
+        ? buildAffiliateInvoiceMessage({ affiliate: affiliateInfo, invoice: expiredInvoice })
+        : null;
+      return res.status(400).json({
+        error: "INVOICE_EXPIRED",
+        invoice: expiredInvoice,
+        message,
+      });
+    }
     if (invoice.status !== "PENDING") {
       await client.query("COMMIT");
-      return res.json({ status: invoice.status });
+      const message = affiliateInfo
+        ? buildAffiliateInvoiceMessage({ affiliate: affiliateInfo, invoice })
+        : null;
+      return res.json({ status: invoice.status, invoice, message });
     }
 
     if (normalizedDecision === "CANCEL") {
@@ -1075,25 +1241,54 @@ async function decideAffiliateInvoice(req, res, next) {
         [invoiceId]
       );
       await client.query("COMMIT");
-      return res.json({ invoice: cancelledRes.rows[0] });
+      const cancelledInvoice = cancelledRes.rows[0];
+      const message = affiliateInfo
+        ? buildAffiliateInvoiceMessage({ affiliate: affiliateInfo, invoice: cancelledInvoice })
+        : null;
+      return res.json({ invoice: cancelledInvoice, message });
     }
 
     const availableRes = await client.query(
-      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
+      `SELECT COALESCE(SUM(
+        GREATEST(
+          (amount - COALESCE(refunded_amount, 0))
+          - COALESCE(reserved_amount, 0)
+          - COALESCE(paid_out_amount, 0),
+          0
+        )
+      ), 0) AS total
        FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+       WHERE affiliate_id = $1 AND status != 'REFUNDED'`,
       [invoice.affiliate_id]
     );
     const adjustmentsRes = await client.query(
-      `SELECT COALESCE(SUM(amount), 0) AS total
+      `SELECT COALESCE(SUM(
+        CASE
+          WHEN amount > 0 THEN GREATEST(
+            amount
+            - COALESCE(reserved_amount, 0)
+            - COALESCE(paid_out_amount, 0),
+            0
+          )
+          ELSE amount
+        END
+      ), 0) AS total
        FROM affiliate_adjustments
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+       WHERE affiliate_id = $1`,
       [invoice.affiliate_id]
     );
     const availableGross =
       Number(availableRes.rows[0]?.total || 0)
       + Number(adjustmentsRes.rows[0]?.total || 0);
     const affiliateDebt = Number(invoice.affiliate_debt || 0);
+    const debtRemaining = Math.max(
+      Number((affiliateDebt - availableGross).toFixed(2)),
+      0
+    );
+    if (debtRemaining > 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "DEBT_PENDING" });
+    }
     const availableNet = Math.max(
       Number((availableGross - affiliateDebt).toFixed(2)),
       0
@@ -1108,7 +1303,11 @@ async function decideAffiliateInvoice(req, res, next) {
       `INSERT INTO affiliate_adjustments
         (affiliate_id, amount, reason, status)
        VALUES ($1, $2, $3, 'EARNED')`,
-      [invoice.affiliate_id, -Number(invoice.amount), invoice.reason || null]
+      [
+        invoice.affiliate_id,
+        -Number(invoice.amount),
+        invoice.reason ? `Factura: ${invoice.reason}` : "Factura",
+      ]
     );
 
     const paidRes = await client.query(
@@ -1120,7 +1319,11 @@ async function decideAffiliateInvoice(req, res, next) {
     );
 
     await client.query("COMMIT");
-    return res.json({ invoice: paidRes.rows[0] });
+    const paidInvoice = paidRes.rows[0];
+    const message = affiliateInfo
+      ? buildAffiliateInvoiceMessage({ affiliate: affiliateInfo, invoice: paidInvoice })
+      : null;
+    return res.json({ invoice: paidInvoice, message });
   } catch (error) {
     await client.query("ROLLBACK");
     return next(error);

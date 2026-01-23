@@ -66,10 +66,19 @@ _CATEGORY_TITLES = {
 }
 class PaymentStates(StatesGroup):
     waiting_photo = State()
+def _format_usd_amount(amount: float) -> str:
+    formatted = f"{amount:,.2f}".rstrip("0").rstrip(".")
+    return formatted
+
+
 def _format_usd(amount: float) -> str:
     if amount <= 0:
         return "Gratis"
-    return f"${amount:,.0f} USD"
+    return f"${_format_usd_amount(amount)} USD"
+
+
+def _format_usd_value(amount: float) -> str:
+    return f"{_format_usd_amount(amount)} USD"
 def _build_cart_text(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
@@ -283,22 +292,27 @@ async def _build_payment_instructions(
                     account=html.escape(PAYPAL_ACCOUNT)
                 )
             )
-        if summary_text:
-            instructions.append("")
-            instructions.append(t(locale, "payment_products_title"))
-            instructions.append("")
-            instructions.append(summary_text)
         instructions.append("")
         instructions.append(
             t(locale, "payment_paypal_amount_note").format(amount=base_total_text)
         )
         paypal_total = total * 1.25
         total_text = _format_usd(paypal_total)
+        instructions.append(f"➡️ Total a Enviar: {total_text}")
+        instructions.append("")
+        instructions.append(t(locale, "payment_paypal_steps_title"))
+        instructions.append("")
         instructions.append(
-            t(locale, "payment_send_total_label").format(amount=total_text)
+            f"{t(locale, 'payment_paypal_note_title')} {t(locale, 'payment_paypal_note_body')}"
         )
         instructions.append("")
-        instructions.append(t(locale, "payment_after_pay_short"))
+        instructions.append(t(locale, "payment_paypal_capture"))
+        instructions.append("")
+        instructions.append(t(locale, "payment_paypal_forward"))
+        instructions.append("")
+        instructions.append(t(locale, "payment_paypal_after"))
+        instructions.append("")
+        instructions.append(t(locale, "payment_paypal_warning"))
         include_final_total = False
     else:
         instructions.append(t(locale, "payment_method_default"))
@@ -567,7 +581,9 @@ def _format_price_label(price: float | int | None, locale: str | None = None) ->
         price_value = 0.0
     if price_value <= 0:
         return t(locale, "product_price_free_label")
-    return t(locale, "product_price_label").format(price=int(price_value))
+    return t(locale, "product_price_label").format(
+        price=_format_usd_amount(price_value)
+    )
 def _format_description(raw: Optional[str], locale: str | None = None) -> str:
     if not raw:
         return f"⌾ {t(locale, 'description_fallback')}"
@@ -715,6 +731,8 @@ def build_payment_prompt_keyboard(
                     text=t(locale, "btn_paid"),
                     callback_data=f"order:pay:{order_id}",
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
                     callback_data="nav:back",
@@ -733,7 +751,21 @@ async def render_shop_page(
     items = catalog["items"]
     total_pages = catalog["total_pages"]
     if not items:
-        await render_main_view(target, user_id, t(locale, "no_more_products"))
+        await render_main_view(
+            target,
+            user_id,
+            t(locale, "no_more_products"),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=t(locale, "btn_home"),
+                            callback_data="home:show",
+                        )
+                    ]
+                ]
+            ),
+        )
         return
     text = format_products(items, page, locale)
     await render_main_view(
@@ -748,7 +780,21 @@ async def render_category_page(
 ) -> None:
     items = await _get_category_items(category_key, user_id)
     if not items:
-        await render_main_view(target, user_id, t(locale, "no_more_products"))
+        await render_main_view(
+            target,
+            user_id,
+            t(locale, "no_more_products"),
+            reply_markup=InlineKeyboardMarkup(
+                inline_keyboard=[
+                    [
+                        InlineKeyboardButton(
+                            text=t(locale, "btn_home"),
+                            callback_data="home:show",
+                        )
+                    ]
+                ]
+            ),
+        )
         return
     text = format_category_products(category_key, items, locale)
     await render_main_view(
@@ -1575,7 +1621,7 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
     text = (
         f"{t(locale, 'order_created_title')}\n\n"
         f"{t(locale, 'order_id_label').format(order_id=order['id'])}\n"
-        f"{t(locale, 'order_total_label').format(total=order.get('total'))}\n\n"
+        f"{t(locale, 'order_total_label').format(total=_format_usd_value(float(order.get('total') or 0)))}\n\n"
         f"{t(locale, 'payment_instructions_title')}\n"
         f"{t(locale, 'payment_network_label').format(network=instructions.get('network'))}\n"
         f"{t(locale, 'payment_asset_label').format(asset=instructions.get('asset'))}\n"
@@ -1929,7 +1975,7 @@ def format_receipt(order: Dict[str, Any], locale: str | None = None) -> str:
     total_text = "0 USD"
     try:
         numeric_total = float(total or 0)
-        total_text = f"{numeric_total:,.0f} USD"
+        total_text = _format_usd_value(numeric_total)
     except (TypeError, ValueError):
         total_text = str(total or "0")
     return (

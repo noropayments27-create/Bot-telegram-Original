@@ -563,6 +563,13 @@ function formatUsd(amount) {
   return `$${value.toFixed(2)}`;
 }
 
+function formatUsdWithCurrency(amount) {
+  const value = Number(amount || 0);
+  const fixed = value.toFixed(2);
+  const trimmed = fixed.replace(/\.00$/, "").replace(/(\.\d)0$/, "$1");
+  return `$${trimmed} USD`;
+}
+
 async function getOrderTotalUsd(client, orderId, fallback) {
   const itemsRes = await client.query(
     `SELECT COALESCE(SUM(line_total_usd), 0) AS total
@@ -1455,9 +1462,12 @@ router.post("/stock/holds/:id/release", async (req, res, next) => {
         ]
       );
 
-      const cancelRes = await client.query(
+    const cancelRes = await client.query(
         `UPDATE orders
-         SET status = 'CANCELLED'
+         SET status = 'CANCELLED',
+             cancelled_at = now(),
+             cancel_source = 'ADMIN',
+             order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
          WHERE id = $1 AND status = 'WAITING_PAYMENT'`,
         [orderId]
       );
@@ -1560,7 +1570,10 @@ router.post("/stock/holds/:id/release", async (req, res, next) => {
     if (hold.order_id) {
       const cancelRes = await client.query(
         `UPDATE orders
-         SET status = 'CANCELLED'
+         SET status = 'CANCELLED',
+             cancelled_at = now(),
+             cancel_source = 'ADMIN',
+             order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
          WHERE id = $1 AND status = 'WAITING_PAYMENT'`,
         [hold.order_id]
       );
@@ -1972,14 +1985,20 @@ router.get("/orders", async (req, res, next) => {
   const filters = [];
   const values = [];
 
-  filters.push("op.id IS NOT NULL");
-
   if (status) {
     values.push(status);
     filters.push(`o.status = $${values.length}`);
+    if (status !== "EXPIRED") {
+      filters.push("op.id IS NOT NULL");
+    }
+  } else {
+    filters.push(`o.status != 'EXPIRED'`);
+    filters.push("op.id IS NOT NULL");
   }
 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
+  const orderClause =
+    status === "EXPIRED" ? "ORDER BY o.created_at ASC" : "ORDER BY o.created_at DESC";
 
   try {
     const countRes = await pool.query(
@@ -2002,7 +2021,7 @@ router.get("/orders", async (req, res, next) => {
        JOIN products p ON p.id = o.product_id
        LEFT JOIN order_payments op ON op.order_id = o.id
        ${whereClause}
-       ORDER BY o.created_at DESC
+       ${orderClause}
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
     );
@@ -2016,6 +2035,27 @@ router.get("/orders", async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/orders/status-counts", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const countsRes = await pool.query(
+      `SELECT o.status, COUNT(*)::int AS count
+       FROM orders o
+       LEFT JOIN order_payments op ON op.order_id = o.id
+       WHERE o.status = 'EXPIRED'
+          OR (o.status != 'EXPIRED' AND op.id IS NOT NULL)
+       GROUP BY o.status`
+    );
+    const counts = {};
+    for (const row of countsRes.rows) {
+      counts[row.status] = row.count || 0;
+    }
+    return res.json({ counts });
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -2645,7 +2685,8 @@ router.get("/summary", async (req, res, next) => {
 
 router.post("/stats/reset", async (req, res, next) => {
   const confirm = req.body?.confirm ? String(req.body.confirm).trim() : "";
-  if (confirm !== "Reset") {
+  const normalized = confirm.toLowerCase();
+  if (normalized !== "reset" && normalized !== "reiniciar") {
     return res.status(400).json({ error: "CONFIRM_REQUIRED" });
   }
 
@@ -2692,7 +2733,7 @@ router.post("/stats/reset", async (req, res, next) => {
     await client.query("DELETE FROM ticket_messages");
     await client.query("DELETE FROM tickets");
     await client.query("DELETE FROM broadcasts");
-    await client.query("SELECT setval('orders_order_number_seq', 0, false)");
+    await client.query("SELECT setval('orders_order_number_seq', 1, false)");
 
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, meta)
@@ -2800,7 +2841,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
-       SET status = 'PAID', paid_at = now()
+       SET status = 'PAID',
+           paid_at = now(),
+           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
        WHERE id = $1
        RETURNING *`,
       [orderId]
@@ -2872,12 +2915,42 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         (Number(order.unit_price_at_purchase) * rate).toFixed(2)
       );
 
-      await client.query(
+      const commissionInsertRes = await client.query(
         `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
          VALUES ($1, $2, $3, $4)
          ON CONFLICT (order_id) DO NOTHING`,
         [order.id, order.affiliate_id, rate, amount]
       );
+
+      if (commissionInsertRes.rowCount > 0 && amount > 0) {
+        const debtRes = await client.query(
+          `SELECT affiliate_debt
+           FROM affiliates
+           WHERE id = $1
+           FOR UPDATE`,
+          [order.affiliate_id]
+        );
+        const debt = Number(debtRes.rows[0]?.affiliate_debt || 0);
+        const appliedDebt = Math.min(debt, amount);
+        if (appliedDebt > 0) {
+          await client.query(
+            `UPDATE affiliates
+             SET affiliate_debt = affiliate_debt - $2
+             WHERE id = $1`,
+            [order.affiliate_id, appliedDebt]
+          );
+          await client.query(
+            `INSERT INTO affiliate_adjustments
+              (affiliate_id, amount, reason, status, created_by_admin_id)
+             VALUES ($1, $2, $3, 'EARNED', NULL)`,
+            [
+              order.affiliate_id,
+              -Number(appliedDebt.toFixed(2)),
+              "Pago automatico de deuda",
+            ]
+          );
+        }
+      }
 
       // Commission rate is based on level + optional boost, no per-affiliate override.
     }
@@ -3234,7 +3307,7 @@ router.post("/orders/:id/refund", async (req, res, next) => {
       const commission = commissionRes.rows[0];
       affiliateUserId = commission.affiliate_user_id;
 
-      if (commission.status === "RESERVED") {
+      if (Number(commission.reserved_amount || 0) > 0) {
         await client.query("ROLLBACK");
         return res.status(409).json({ error: "COMMISSION_RESERVED" });
       }
@@ -3265,12 +3338,14 @@ router.post("/orders/:id/refund", async (req, res, next) => {
           [commission.id, updatedRefunded, reason || null, commissionFullyRefunded]
         );
 
-        if (commission.status === "PAID_OUT") {
+        const paidOutAmount = Number(commission.paid_out_amount || 0);
+        const refundDebt = Math.min(commissionRefunded, paidOutAmount);
+        if (refundDebt > 0) {
           await client.query(
             `UPDATE affiliates
              SET affiliate_debt = affiliate_debt + $2
              WHERE id = $1`,
-            [commission.affiliate_id, commissionRefunded]
+            [commission.affiliate_id, refundDebt]
           );
         }
       }
@@ -3314,7 +3389,7 @@ router.post("/orders/:id/refund", async (req, res, next) => {
     const refundMessage =
       (MESSAGES[locale]?.[fullyRefunded ? "refund_full" : "refund_partial"]
         || MESSAGES.es[fullyRefunded ? "refund_full" : "refund_partial"])
-        .replace("{amount}", formatUsd(refundAmount));
+        .replace("{amount}", formatUsdWithCurrency(refundAmount));
 
     try {
       await sendMessage(order.telegram_id, refundMessage);
@@ -3335,7 +3410,7 @@ router.post("/orders/:id/refund", async (req, res, next) => {
             (AFFILIATE_MESSAGES[affiliateLocale]?.[
               fullyRefunded ? "refund_full" : "refund_partial"
             ] || AFFILIATE_MESSAGES.es[fullyRefunded ? "refund_full" : "refund_partial"])
-              .replace("{amount}", formatUsd(commissionRefunded));
+              .replace("{amount}", formatUsdWithCurrency(commissionRefunded));
           await sendMessage(affiliateRow.telegram_id, affiliateMessage);
         }
       } catch (err) {
@@ -3402,7 +3477,13 @@ router.post("/orders/:id/reject", async (req, res, next) => {
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
-       SET status = $2
+       SET status = $2,
+           cancelled_at = CASE WHEN $2 = 'CANCELLED' THEN now() ELSE cancelled_at END,
+           cancel_source = CASE WHEN $2 = 'CANCELLED' THEN 'ADMIN' ELSE cancel_source END,
+           order_number = CASE
+             WHEN $2 = 'CANCELLED' THEN COALESCE(order_number, nextval('orders_order_number_seq'))
+             ELSE order_number
+           END
        WHERE id = $1
        RETURNING *`,
       [orderId, nextStatus]
@@ -3486,8 +3567,14 @@ router.get("/affiliates", async (req, res, next) => {
               a.created_at, a.approved_at,
               u.telegram_id, u.telegram_username,
               ranked.affiliate_number,
-              COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0))
-                FILTER (WHERE c.status = 'EARNED'), 0)
+              COALESCE(SUM(
+                GREATEST(
+                  (c.amount - COALESCE(c.refunded_amount, 0))
+                  - COALESCE(c.reserved_amount, 0)
+                  - COALESCE(c.paid_out_amount, 0),
+                  0
+                )
+              ) FILTER (WHERE c.status != 'REFUNDED'), 0)
                 + COALESCE(adj.adjustments_total, 0) AS available_balance,
               COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0)
                 + COALESCE(adj_all.adjustments_total, 0) AS earnings_total,
@@ -3497,9 +3584,19 @@ router.get("/affiliates", async (req, res, next) => {
        JOIN users u ON u.id = a.user_id
        LEFT JOIN ranked ON ranked.id = a.id
        LEFT JOIN (
-         SELECT affiliate_id, COALESCE(SUM(amount), 0) AS adjustments_total
+         SELECT affiliate_id,
+                COALESCE(SUM(
+                  CASE
+                    WHEN amount > 0 THEN GREATEST(
+                      amount
+                      - COALESCE(reserved_amount, 0)
+                      - COALESCE(paid_out_amount, 0),
+                      0
+                    )
+                    ELSE amount
+                  END
+                ), 0) AS adjustments_total
          FROM affiliate_adjustments
-         WHERE status = 'EARNED'
          GROUP BY affiliate_id
        ) adj ON adj.affiliate_id = a.id
        LEFT JOIN (
@@ -3829,17 +3926,33 @@ router.get("/affiliates/:id", async (req, res, next) => {
     }
 
     const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS available_balance
+      `SELECT COALESCE(SUM(
+        GREATEST(
+          (amount - COALESCE(refunded_amount, 0))
+          - COALESCE(reserved_amount, 0)
+          - COALESCE(paid_out_amount, 0),
+          0
+        )
+      ), 0) AS available_balance
        FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+       WHERE affiliate_id = $1 AND status != 'REFUNDED'`,
       [affiliateId]
     );
 
     const adjustmentsRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS adjustments_total
+      `SELECT COALESCE(SUM(
+        CASE
+          WHEN amount > 0 THEN GREATEST(
+            amount
+            - COALESCE(reserved_amount, 0)
+            - COALESCE(paid_out_amount, 0),
+            0
+          )
+          ELSE amount
+        END
+      ), 0) AS adjustments_total
        FROM affiliate_adjustments
-       WHERE affiliate_id = $1
-         AND status = 'EARNED'`,
+       WHERE affiliate_id = $1`,
       [affiliateId]
     );
 
@@ -3857,6 +3970,15 @@ router.get("/affiliates/:id", async (req, res, next) => {
       [affiliateId]
     );
 
+    await pool.query(
+      `UPDATE affiliate_invoices
+       SET status = 'EXPIRED', expired_at = now()
+       WHERE affiliate_id = $1
+         AND status = 'PENDING'
+         AND COALESCE(expires_at, created_at + interval '10 minutes') <= now()`,
+      [affiliateId]
+    );
+
     const invoicesRes = await pool.query(
       `SELECT id,
               amount,
@@ -3865,7 +3987,9 @@ router.get("/affiliates/:id", async (req, res, next) => {
               created_by_admin_id,
               created_at,
               paid_at,
-              cancelled_at
+              cancelled_at,
+              expires_at,
+              expired_at
        FROM affiliate_invoices
        WHERE affiliate_id = $1
        ORDER BY created_at DESC
@@ -3935,6 +4059,14 @@ router.get("/affiliates/:id/invoices/watch", async (req, res, next) => {
   const startedAt = Date.now();
 
   try {
+    await pool.query(
+      `UPDATE affiliate_invoices
+       SET status = 'EXPIRED', expired_at = now()
+       WHERE affiliate_id = $1
+         AND status = 'PENDING'
+         AND COALESCE(expires_at, created_at + interval '10 minutes') <= now()`,
+      [affiliateId]
+    );
     while (Date.now() - startedAt < timeoutMs) {
       const watchRes = await pool.query(
         `SELECT id,
@@ -3944,12 +4076,14 @@ router.get("/affiliates/:id/invoices/watch", async (req, res, next) => {
                 status,
                 created_at,
                 paid_at,
-                cancelled_at
+                cancelled_at,
+                expires_at,
+                expired_at
          FROM affiliate_invoices
          WHERE affiliate_id = $1
-           AND status IN ('PAID', 'CANCELLED')
-           AND COALESCE(paid_at, cancelled_at, created_at) > $2
-         ORDER BY COALESCE(paid_at, cancelled_at, created_at) DESC
+           AND status IN ('PAID', 'CANCELLED', 'EXPIRED')
+           AND COALESCE(paid_at, cancelled_at, expired_at, created_at) > $2
+         ORDER BY COALESCE(paid_at, cancelled_at, expired_at, created_at) DESC
          LIMIT 1`,
         [affiliateId, sinceDate]
       );
@@ -4112,7 +4246,7 @@ router.post("/affiliates/:id/adjustments", async (req, res, next) => {
     await client.query("BEGIN");
 
     const affiliateRes = await client.query(
-      `SELECT a.id, u.telegram_id, u.telegram_username
+      `SELECT a.id, a.affiliate_debt, u.telegram_id, u.telegram_username
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        WHERE a.id = $1
@@ -4127,15 +4261,32 @@ router.post("/affiliates/:id/adjustments", async (req, res, next) => {
 
     if (amount < 0) {
       const availableRes = await client.query(
-        `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
+        `SELECT COALESCE(SUM(
+          GREATEST(
+            (amount - COALESCE(refunded_amount, 0))
+            - COALESCE(reserved_amount, 0)
+            - COALESCE(paid_out_amount, 0),
+            0
+          )
+        ), 0) AS total
          FROM commissions
-         WHERE affiliate_id = $1 AND status = 'EARNED'`,
+         WHERE affiliate_id = $1 AND status != 'REFUNDED'`,
         [affiliateId]
       );
       const adjustmentsTotalRes = await client.query(
-        `SELECT COALESCE(SUM(amount), 0) AS total
+        `SELECT COALESCE(SUM(
+          CASE
+            WHEN amount > 0 THEN GREATEST(
+              amount
+              - COALESCE(reserved_amount, 0)
+              - COALESCE(paid_out_amount, 0),
+              0
+            )
+            ELSE amount
+          END
+        ), 0) AS total
          FROM affiliate_adjustments
-         WHERE affiliate_id = $1 AND status = 'EARNED'`,
+         WHERE affiliate_id = $1`,
         [affiliateId]
       );
       const availableGross =
@@ -4161,6 +4312,25 @@ router.post("/affiliates/:id/adjustments", async (req, res, next) => {
       [affiliateId, amount, reason || null, adminTelegramId]
     );
 
+    if (amount > 0) {
+      const debt = Number(affiliateRow.affiliate_debt || 0);
+      const appliedDebt = Math.min(debt, amount);
+      if (appliedDebt > 0) {
+        await client.query(
+          `UPDATE affiliates
+           SET affiliate_debt = affiliate_debt - $2
+           WHERE id = $1`,
+          [affiliateId, appliedDebt]
+        );
+        await client.query(
+          `INSERT INTO affiliate_adjustments
+            (affiliate_id, amount, reason, status, created_by_admin_id)
+           VALUES ($1, $2, $3, 'EARNED', $4)`,
+          [affiliateId, -Number(appliedDebt.toFixed(2)), "Pago automatico de deuda", adminTelegramId]
+        );
+      }
+    }
+
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
        VALUES ($1, $2, $3, $4::jsonb)`,
@@ -4184,7 +4354,7 @@ router.post("/affiliates/:id/adjustments", async (req, res, next) => {
         if (telegramId) {
           const locale = await getUserLocaleByTelegramId(pool, telegramId);
           const messageKey = amount >= 0 ? "adjustment_credit" : "adjustment_debit";
-          const formattedAmount = formatUsd(Math.abs(amount));
+          const formattedAmount = formatUsdWithCurrency(Math.abs(amount));
           const text = (AFFILIATE_MESSAGES[locale]?.[messageKey]
             || AFFILIATE_MESSAGES.es[messageKey])
             .replace("{amount}", formattedAmount)
@@ -4225,9 +4395,16 @@ router.post("/affiliates/:id/invoices", async (req, res, next) => {
 
   try {
     const affiliateRes = await pool.query(
-      `SELECT a.id, u.telegram_id, u.telegram_username
+      `WITH ranked AS (
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY approved_at, id) AS affiliate_number
+         FROM affiliates
+         WHERE approved_at IS NOT NULL
+       )
+       SELECT a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
+       LEFT JOIN ranked ON ranked.id = a.id
        WHERE a.id = $1`,
       [affiliateId]
     );
@@ -4245,14 +4422,8 @@ router.post("/affiliates/:id/invoices", async (req, res, next) => {
     );
 
     const invoice = invoiceRes.rows[0];
-    const formattedAmount = Number(amount).toLocaleString("en-US", {
-      minimumFractionDigits: Number.isInteger(Number(amount)) ? 0 : 2,
-      maximumFractionDigits: 2,
-    });
-    const reasonText = reason ? `\n📝 Motivo: ${reason}` : "";
-    const message =
-      `🧾 Factura de pago\n\n💵 Monto a pagar: $${formattedAmount} USD` +
-      `${reasonText}\n\nℹ️ Este monto se descontará de tu saldo disponible.`;
+    const { buildAffiliateInvoiceMessage } = require("../services/affiliateInvoiceMessage");
+    const message = buildAffiliateInvoiceMessage({ affiliate, invoice });
     const replyMarkup = {
       inline_keyboard: [
         [
@@ -4263,10 +4434,19 @@ router.post("/affiliates/:id/invoices", async (req, res, next) => {
     };
 
     if (affiliate.telegram_id) {
-      sendMessage(affiliate.telegram_id, message, {
+      sendPhoto(affiliate.telegram_id, {
+        url: "https://i.ibb.co/hJL9BQSr/FACTURA.png",
+        caption: message,
+        parse_mode: "HTML",
         reply_markup: replyMarkup,
       }).catch((err) => {
-        console.error("Affiliate invoice notification failed", err);
+        console.error("Affiliate invoice photo failed", err);
+        sendMessage(affiliate.telegram_id, message, {
+          parse_mode: "HTML",
+          reply_markup: replyMarkup,
+        }).catch((fallbackErr) => {
+          console.error("Affiliate invoice notification failed", fallbackErr);
+        });
       });
     }
 
@@ -4381,24 +4561,47 @@ router.get("/payouts", async (req, res, next) => {
   }
 });
 
+router.get("/payouts/status-counts", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const countsRes = await pool.query(
+      `SELECT status, COUNT(*)::int AS count
+       FROM payouts
+       GROUP BY status`
+    );
+    const counts = {};
+    for (const row of countsRes.rows) {
+      counts[row.status] = row.count || 0;
+    }
+    return res.json({ counts });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/payouts/:id", async (req, res, next) => {
   const payoutId = req.params.id;
+  if (!/^[0-9a-fA-F-]{36}$/.test(payoutId || "")) {
+    return res.status(400).json({ error: "INVALID_PAYOUT_ID" });
+  }
   const pool = getPool();
 
   try {
     const payoutRes = await pool.query(
       `WITH numbered AS (
-         SELECT p.*,
-                ROW_NUMBER() OVER (ORDER BY p.created_at, p.id) AS payout_number
-         FROM payouts p
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY created_at, id) AS payout_number
+         FROM payouts
        )
-       SELECT numbered.*, a.status AS affiliate_status, a.commission_rate,
+       SELECT p.*, a.status AS affiliate_status, a.commission_rate,
               a.wallet_usdt_bsc, a.wallet_nequi, a.binance_id,
-              u.telegram_id, u.telegram_username
-       FROM numbered
-       JOIN affiliates a ON a.id = numbered.affiliate_id
+              u.telegram_id, u.telegram_username,
+              numbered.payout_number
+       FROM payouts p
+       JOIN affiliates a ON a.id = p.affiliate_id
        JOIN users u ON u.id = a.user_id
-       WHERE numbered.id = $1`,
+       LEFT JOIN numbered ON numbered.id = p.id
+       WHERE p.id = $1`,
       [payoutId]
     );
 
@@ -4408,20 +4611,39 @@ router.get("/payouts/:id", async (req, res, next) => {
 
     const payout = payoutRes.rows[0];
     const balanceRes = await pool.query(
-      `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS available_balance
+      `SELECT COALESCE(SUM(
+        GREATEST(
+          (amount - COALESCE(refunded_amount, 0))
+          - COALESCE(reserved_amount, 0)
+          - COALESCE(paid_out_amount, 0),
+          0
+        )
+      ), 0) AS available_balance
        FROM commissions
-       WHERE affiliate_id = $1 AND status = 'EARNED'`,
+       WHERE affiliate_id = $1 AND status != 'REFUNDED'`,
       [payout.affiliate_id]
     );
 
     const adjustmentsRes = await pool.query(
-      `SELECT COALESCE(SUM(amount), 0) AS adjustments_total
+      `SELECT COALESCE(SUM(
+        CASE
+          WHEN amount > 0 THEN GREATEST(
+            amount
+            - COALESCE(reserved_amount, 0)
+            - COALESCE(paid_out_amount, 0),
+            0
+          )
+          ELSE amount
+        END
+      ), 0) AS adjustments_total
        FROM affiliate_adjustments
-       WHERE affiliate_id = $1
-         AND status = 'EARNED'`,
+       WHERE affiliate_id = $1`,
       [payout.affiliate_id]
     );
 
+    const availableBalance =
+      Number(balanceRes.rows[0].available_balance || 0)
+      + Number(adjustmentsRes.rows[0].adjustments_total || 0);
     return res.json({
       payout,
         affiliate: {
@@ -4436,9 +4658,7 @@ router.get("/payouts/:id", async (req, res, next) => {
         telegram_id: payout.telegram_id,
         telegram_username: payout.telegram_username,
       },
-      available_balance:
-        Number(balanceRes.rows[0].available_balance || 0)
-        + Number(adjustmentsRes.rows[0].adjustments_total || 0),
+      available_balance: Math.max(availableBalance, 0),
     });
   } catch (error) {
     next(error);
@@ -4446,7 +4666,7 @@ router.get("/payouts/:id", async (req, res, next) => {
 });
 
 router.post("/payouts", async (req, res, next) => {
-  const { affiliate_id: affiliateId, method, destination } = req.body || {};
+  const { affiliate_id: affiliateId, method, destination, amount } = req.body || {};
   const pool = getPool();
 
   if (!affiliateId) {
@@ -4455,6 +4675,9 @@ router.post("/payouts", async (req, res, next) => {
 
   if (!method || (method !== "USDT_BSC" && method !== "BINANCE_ID" && method !== "NEQUI")) {
     return res.status(400).json({ error: "INVALID_METHOD" });
+  }
+  if (amount != null && (!Number.isFinite(Number(amount)) || Number(amount) <= 0)) {
+    return res.status(400).json({ error: "INVALID_AMOUNT" });
   }
 
   const client = await pool.connect();
@@ -4472,6 +4695,7 @@ router.post("/payouts", async (req, res, next) => {
     }
 
     const affiliate = affiliateRes.rows[0];
+    const debt = Number(affiliate.affiliate_debt || 0);
     const resolvedDestination =
       destination ||
       (method === "USDT_BSC"
@@ -4489,37 +4713,61 @@ router.post("/payouts", async (req, res, next) => {
       `SELECT id,
               amount,
               COALESCE(refunded_amount, 0) AS refunded_amount,
-              (amount - COALESCE(refunded_amount, 0)) AS net_amount
+              COALESCE(reserved_amount, 0) AS reserved_amount,
+              COALESCE(paid_out_amount, 0) AS paid_out_amount,
+              (amount - COALESCE(refunded_amount, 0)
+                - COALESCE(reserved_amount, 0)
+                - COALESCE(paid_out_amount, 0)) AS available_amount
        FROM commissions
        WHERE affiliate_id = $1
-         AND status = 'EARNED'
-         AND (amount - COALESCE(refunded_amount, 0)) > 0
+         AND status != 'REFUNDED'
+         AND (amount - COALESCE(refunded_amount, 0)
+           - COALESCE(reserved_amount, 0)
+           - COALESCE(paid_out_amount, 0)) > 0
        ORDER BY earned_at ASC
        FOR UPDATE`,
       [affiliateId]
     );
 
-    const adjustmentsRes = await client.query(
-      `SELECT id, amount
+    const positiveAdjustmentsRes = await client.query(
+      `SELECT id,
+              amount,
+              COALESCE(reserved_amount, 0) AS reserved_amount,
+              COALESCE(paid_out_amount, 0) AS paid_out_amount,
+              (amount - COALESCE(reserved_amount, 0)
+                - COALESCE(paid_out_amount, 0)) AS available_amount
        FROM affiliate_adjustments
        WHERE affiliate_id = $1
-         AND status = 'EARNED'
+         AND amount > 0
+         AND (amount - COALESCE(reserved_amount, 0)
+           - COALESCE(paid_out_amount, 0)) > 0
        ORDER BY created_at ASC
        FOR UPDATE`,
       [affiliateId]
     );
 
-    const grossAmount = commissionsRes.rows.reduce(
-      (sum, row) => sum + Number(row.net_amount || 0),
-      0
-    );
-    const adjustmentsAmount = adjustmentsRes.rows.reduce(
-      (sum, row) => sum + Number(row.amount || 0),
-      0
+    const negativeAdjustmentsRes = await client.query(
+      `SELECT COALESCE(SUM(amount), 0) AS total
+       FROM affiliate_adjustments
+       WHERE affiliate_id = $1
+         AND amount < 0`,
+      [affiliateId]
     );
 
-    const totalGross = Number((grossAmount + adjustmentsAmount).toFixed(2));
-    if (commissionsRes.rowCount === 0 && adjustmentsRes.rowCount === 0) {
+    const commissionAvailableTotal = commissionsRes.rows.reduce(
+      (sum, row) => sum + Number(row.available_amount || 0),
+      0
+    );
+    const positiveAdjustmentsTotal = positiveAdjustmentsRes.rows.reduce(
+      (sum, row) => sum + Number(row.available_amount || 0),
+      0
+    );
+    const negativeAdjustmentsTotal = Number(negativeAdjustmentsRes.rows[0]?.total || 0);
+
+    const totalGross = Number(
+      (commissionAvailableTotal + positiveAdjustmentsTotal + negativeAdjustmentsTotal).toFixed(2)
+    );
+    if (commissionsRes.rowCount === 0 && positiveAdjustmentsRes.rowCount === 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
@@ -4529,9 +4777,73 @@ router.post("/payouts", async (req, res, next) => {
       return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
     }
 
-    const debt = Number(affiliate.affiliate_debt || 0);
-    const debtApplied = Math.min(debt, totalGross);
-    const payoutAmount = Number((totalGross - debtApplied).toFixed(2));
+    const debtAppliedTotal = Math.min(debt, totalGross);
+    const availableAfterDebt = Number((totalGross - debtAppliedTotal).toFixed(2));
+    if (availableAfterDebt <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "DEBT_PENDING" });
+    }
+
+    let targetPayout = availableAfterDebt;
+    if (amount != null) {
+      const requestedAmount = Number(amount);
+      if (requestedAmount > availableAfterDebt) {
+        await client.query("ROLLBACK");
+        return res.status(400).json({ error: "INSUFFICIENT_BALANCE" });
+      }
+      targetPayout = requestedAmount;
+    }
+    const targetGross = Number((targetPayout + debtAppliedTotal).toFixed(2));
+    const targetPositive = targetGross;
+
+    let remaining = targetPositive;
+    const selectedCommissions = [];
+    const selectedAdjustments = [];
+
+    for (const row of commissionsRes.rows) {
+      if (remaining <= 0) {
+        break;
+      }
+      const availableAmount = Number(row.available_amount || 0);
+      if (availableAmount <= 0) {
+        continue;
+      }
+      const takeAmount = Number(Math.min(availableAmount, remaining).toFixed(2));
+      if (takeAmount <= 0) {
+        continue;
+      }
+      selectedCommissions.push({ id: row.id, amount: takeAmount });
+      remaining = Number((remaining - takeAmount).toFixed(2));
+    }
+
+    for (const row of positiveAdjustmentsRes.rows) {
+      if (remaining <= 0) {
+        break;
+      }
+      const availableAmount = Number(row.available_amount || 0);
+      if (availableAmount <= 0) {
+        continue;
+      }
+      const takeAmount = Number(Math.min(availableAmount, remaining).toFixed(2));
+      if (takeAmount <= 0) {
+        continue;
+      }
+      selectedAdjustments.push({ id: row.id, amount: takeAmount });
+      remaining = Number((remaining - takeAmount).toFixed(2));
+    }
+
+    if (remaining > 0.01) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "NO_EARNED_COMMISSIONS" });
+    }
+    const selectedPositiveTotal = selectedCommissions.reduce(
+      (sum, item) => sum + Number(item.amount || 0),
+      0
+    ) + selectedAdjustments.reduce((sum, item) => sum + Number(item.amount || 0), 0);
+    const selectedGross = Number(selectedPositiveTotal.toFixed(2));
+
+    const debtApplied = Math.min(debtAppliedTotal, selectedGross);
+    const payoutAmount = Number((selectedGross - debtApplied).toFixed(2));
     if (payoutAmount <= 0) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "DEBT_EXCEEDS_BALANCE" });
@@ -4544,12 +4856,11 @@ router.post("/payouts", async (req, res, next) => {
       [affiliateId, payoutAmount, method, resolvedDestination, debtApplied]
     );
 
-    const commissionIds = commissionsRes.rows.map((row) => row.id);
-    const positiveAdjustments = adjustmentsRes.rows.filter(
-      (row) => Number(row.amount || 0) > 0
-    );
-    const adjustmentIds = positiveAdjustments.map((row) => row.id);
     const payoutId = payoutRes.rows[0].id;
+    const commissionIds = selectedCommissions.map((item) => item.id);
+    const commissionAmounts = selectedCommissions.map((item) => item.amount);
+    const adjustmentIds = selectedAdjustments.map((item) => item.id);
+    const adjustmentAmounts = selectedAdjustments.map((item) => item.amount);
 
     if (debtApplied > 0) {
       await client.query(
@@ -4560,40 +4871,66 @@ router.post("/payouts", async (req, res, next) => {
       );
     }
 
-    await client.query(
-      `INSERT INTO payout_items (payout_id, commission_id, amount)
-       SELECT $1, id, (amount - COALESCE(refunded_amount, 0))
-       FROM commissions
-       WHERE id = ANY($2::uuid[])
-         AND (amount - COALESCE(refunded_amount, 0)) > 0`,
-      [payoutId, commissionIds]
-    );
+    if (commissionIds.length > 0) {
+      await client.query(
+        `WITH selected AS (
+           SELECT UNNEST($2::uuid[]) AS id,
+                  UNNEST($3::numeric[]) AS amount
+         )
+         INSERT INTO payout_items (payout_id, commission_id, amount)
+         SELECT $1, id, amount
+         FROM selected`,
+        [payoutId, commissionIds, commissionAmounts]
+      );
 
-    await client.query(
-      `UPDATE commissions
-       SET status = 'RESERVED'
-       WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
-      [commissionIds]
-    );
+      await client.query(
+        `WITH selected AS (
+           SELECT UNNEST($1::uuid[]) AS id,
+                  UNNEST($2::numeric[]) AS amount
+         )
+         UPDATE commissions c
+         SET reserved_amount = c.reserved_amount + selected.amount,
+             status = CASE
+               WHEN (c.amount - COALESCE(c.refunded_amount, 0)
+                 - (c.reserved_amount + selected.amount)
+                 - COALESCE(c.paid_out_amount, 0)) <= 0.01
+                 THEN 'RESERVED'
+               ELSE c.status
+             END
+         FROM selected
+         WHERE c.id = selected.id`,
+        [commissionIds, commissionAmounts]
+      );
+    }
 
     if (adjustmentIds.length > 0) {
       await client.query(
-        `DELETE FROM payout_adjustments
-         WHERE adjustment_id = ANY($1::uuid[])`,
-        [adjustmentIds]
-      );
-      await client.query(
-        `INSERT INTO payout_adjustments (payout_id, adjustment_id, amount)
+        `WITH selected AS (
+           SELECT UNNEST($2::uuid[]) AS id,
+                  UNNEST($3::numeric[]) AS amount
+         )
+         INSERT INTO payout_adjustments (payout_id, adjustment_id, amount)
          SELECT $1, id, amount
-         FROM affiliate_adjustments
-         WHERE id = ANY($2::uuid[]) AND amount > 0`,
-        [payoutId, adjustmentIds]
+         FROM selected`,
+        [payoutId, adjustmentIds, adjustmentAmounts]
       );
+
       await client.query(
-        `UPDATE affiliate_adjustments
-         SET status = 'RESERVED'
-         WHERE id = ANY($1::uuid[]) AND status = 'EARNED'`,
-        [adjustmentIds]
+        `WITH selected AS (
+           SELECT UNNEST($1::uuid[]) AS id,
+                  UNNEST($2::numeric[]) AS amount
+         )
+         UPDATE affiliate_adjustments a
+         SET reserved_amount = a.reserved_amount + selected.amount,
+             status = CASE
+               WHEN (a.amount - (a.reserved_amount + selected.amount)
+                 - COALESCE(a.paid_out_amount, 0)) <= 0.01
+                 THEN 'RESERVED'
+               ELSE a.status
+             END
+         FROM selected
+         WHERE a.id = selected.id`,
+        [adjustmentIds, adjustmentAmounts]
       );
     }
 
@@ -4616,10 +4953,24 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
     await client.query("BEGIN");
 
     const payoutRes = await client.query(
-      `SELECT p.*, u.telegram_id, u.telegram_username
+      `WITH ranked AS (
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY approved_at, id) AS affiliate_number
+         FROM affiliates
+         WHERE approved_at IS NOT NULL
+       ),
+       numbered AS (
+         SELECT id,
+                ROW_NUMBER() OVER (ORDER BY created_at, id) AS payout_number
+         FROM payouts
+       )
+       SELECT p.*, u.telegram_id, u.telegram_username,
+              ranked.affiliate_number, numbered.payout_number
        FROM payouts p
        JOIN affiliates a ON a.id = p.affiliate_id
        JOIN users u ON u.id = a.user_id
+       LEFT JOIN ranked ON ranked.id = a.id
+       LEFT JOIN numbered ON numbered.id = p.id
        WHERE p.id = $1
        FOR UPDATE OF p`,
       [payoutId]
@@ -4651,7 +5002,7 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
     );
 
     const payoutItemsRes = await client.query(
-      `SELECT commission_id
+      `SELECT commission_id, amount
        FROM payout_items
        WHERE payout_id = $1`,
       [payoutId]
@@ -4660,40 +5011,97 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
     let commissionsRes = { rowCount: 0 };
     if (payoutItemsRes.rowCount > 0) {
       const commissionIds = payoutItemsRes.rows.map((row) => row.commission_id);
+      const commissionAmounts = payoutItemsRes.rows.map((row) => Number(row.amount || 0));
       commissionsRes = await client.query(
-        `UPDATE commissions
-         SET status = 'PAID_OUT', paid_out_at = now()
-         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
-        [commissionIds]
+        `WITH selected AS (
+           SELECT UNNEST($1::uuid[]) AS id,
+                  UNNEST($2::numeric[]) AS amount
+         )
+         UPDATE commissions c
+         SET reserved_amount = GREATEST(c.reserved_amount - selected.amount, 0),
+             paid_out_amount = LEAST(
+               c.paid_out_amount + selected.amount,
+               (c.amount - COALESCE(c.refunded_amount, 0))
+             ),
+             paid_out_at = CASE
+               WHEN (c.amount - COALESCE(c.refunded_amount, 0))
+                 - LEAST(
+                   c.paid_out_amount + selected.amount,
+                   (c.amount - COALESCE(c.refunded_amount, 0))
+                 ) <= 0.01
+                 THEN COALESCE(c.paid_out_at, now())
+               ELSE c.paid_out_at
+             END,
+             status = CASE
+               WHEN (c.amount - COALESCE(c.refunded_amount, 0))
+                 - LEAST(
+                   c.paid_out_amount + selected.amount,
+                   (c.amount - COALESCE(c.refunded_amount, 0))
+                 ) <= 0.01
+                 THEN 'PAID_OUT'::commission_status
+               WHEN GREATEST(c.reserved_amount - selected.amount, 0) > 0.01
+                 THEN 'RESERVED'::commission_status
+               ELSE 'EARNED'::commission_status
+             END
+         FROM selected
+         WHERE c.id = selected.id
+           AND c.status != 'REFUNDED'`,
+        [commissionIds, commissionAmounts]
       );
     }
 
     const payoutAdjustmentsRes = await client.query(
-      `SELECT adjustment_id
+      `SELECT adjustment_id, amount
        FROM payout_adjustments
        WHERE payout_id = $1`,
       [payoutId]
     );
     if (payoutAdjustmentsRes.rowCount > 0) {
-      const adjustmentIds = payoutAdjustmentsRes.rows.map(
-        (row) => row.adjustment_id
+      const positiveAdjustments = payoutAdjustmentsRes.rows.filter(
+        (row) => Number(row.amount || 0) > 0
       );
-      await client.query(
-        `UPDATE affiliate_adjustments
-         SET status = 'PAID_OUT'
-         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
-        [adjustmentIds]
-      );
+      if (positiveAdjustments.length > 0) {
+        const adjustmentIds = positiveAdjustments.map((row) => row.adjustment_id);
+        const adjustmentAmounts = positiveAdjustments.map((row) => Number(row.amount || 0));
+        await client.query(
+          `WITH selected AS (
+             SELECT UNNEST($1::uuid[]) AS id,
+                    UNNEST($2::numeric[]) AS amount
+           )
+           UPDATE affiliate_adjustments a
+           SET reserved_amount = GREATEST(a.reserved_amount - selected.amount, 0),
+               paid_out_amount = LEAST(a.paid_out_amount + selected.amount, a.amount),
+               status = CASE
+                 WHEN a.amount - LEAST(a.paid_out_amount + selected.amount, a.amount) <= 0.01
+                   THEN 'PAID_OUT'::commission_status
+                 WHEN GREATEST(a.reserved_amount - selected.amount, 0) > 0.01
+                   THEN 'RESERVED'::commission_status
+                 ELSE 'EARNED'::commission_status
+               END
+           FROM selected
+           WHERE a.id = selected.id`,
+          [adjustmentIds, adjustmentAmounts]
+        );
+      }
     }
 
     await client.query("COMMIT");
 
     const message = "🎉 **¡Pago de comisiones realizado con éxito!** 💸\n\nHemos procesado correctamente el pago de tus comisiones. Gracias por tu trabajo y por confiar en nosotros 🙌\n\n🚀 Sigue publicando y promocionando para llegar a más clientes y aumentar tus ganancias.\n\n💼✨ ¡Vamos por más!";
     try {
+      const affiliateNumber = payout.affiliate_number
+        ? `#${payout.affiliate_number}`
+        : "#-";
+      const paidToUsername = payout.telegram_username || "N/A";
+      const botUsername = (process.env.BOT_USERNAME || process.env.NEXT_PUBLIC_BOT_USERNAME || "")
+        .replace(/^@/, "");
+      const payoutNumber = payout.payout_number
+        ? String(payout.payout_number).padStart(5, "0")
+        : "-";
       const receiptPng = await renderReceiptPng({
         orderId: payout.id,
-        orderNumber: payout.id,
-        orderNumberLabel: "ID de retiro:",
+        orderNumber: payoutNumber,
+        orderNumberLabel: "Numero de pago:",
         receiptTitle: "RECIBO DE RETIRO",
         telegramId: payout.telegram_id,
         username: payout.telegram_username,
@@ -4703,6 +5111,13 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
         commission: 0,
         total: payout.amount,
         referredBy: "N/A",
+        templateName: "recibo_retiro.html",
+        totalLabel: "Total retirado",
+        thankYou: "Gracias<br>Por trabajar con nosotros<br>Sigue adelante",
+        affiliateNumber,
+        paidToUsername,
+        paidToTelegramId: payout.telegram_id,
+        botUsername: botUsername || undefined,
         locale: "es",
       });
       try {
@@ -4785,7 +5200,7 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
     }
 
     const payoutItemsRes = await client.query(
-      `SELECT commission_id
+      `SELECT commission_id, amount
        FROM payout_items
        WHERE payout_id = $1`,
       [payoutId]
@@ -4793,11 +5208,26 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
 
     if (payoutItemsRes.rowCount > 0) {
       const commissionIds = payoutItemsRes.rows.map((row) => row.commission_id);
+      const commissionAmounts = payoutItemsRes.rows.map((row) => Number(row.amount || 0));
       await client.query(
-        `UPDATE commissions
-         SET status = 'EARNED', paid_out_at = NULL
-         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
-        [commissionIds]
+        `WITH selected AS (
+           SELECT UNNEST($1::uuid[]) AS id,
+                  UNNEST($2::numeric[]) AS amount
+         )
+         UPDATE commissions c
+         SET reserved_amount = GREATEST(c.reserved_amount - selected.amount, 0),
+             status = CASE
+               WHEN (c.amount - COALESCE(c.refunded_amount, 0)
+                 - COALESCE(c.paid_out_amount, 0)) <= 0.01
+                 THEN 'PAID_OUT'::commission_status
+               WHEN GREATEST(c.reserved_amount - selected.amount, 0) > 0.01
+                 THEN 'RESERVED'::commission_status
+               ELSE 'EARNED'::commission_status
+             END
+         FROM selected
+         WHERE c.id = selected.id
+           AND c.status != 'REFUNDED'`,
+        [commissionIds, commissionAmounts]
       );
     }
 
@@ -4808,21 +5238,37 @@ router.post("/payouts/:id/cancel", async (req, res, next) => {
     );
 
     const payoutAdjustmentsRes = await client.query(
-      `SELECT adjustment_id
+      `SELECT adjustment_id, amount
        FROM payout_adjustments
        WHERE payout_id = $1`,
       [payoutId]
     );
     if (payoutAdjustmentsRes.rowCount > 0) {
-      const adjustmentIds = payoutAdjustmentsRes.rows.map(
-        (row) => row.adjustment_id
+      const positiveAdjustments = payoutAdjustmentsRes.rows.filter(
+        (row) => Number(row.amount || 0) > 0
       );
-      await client.query(
-        `UPDATE affiliate_adjustments
-         SET status = 'EARNED'
-         WHERE id = ANY($1::uuid[]) AND status = 'RESERVED'`,
-        [adjustmentIds]
-      );
+      if (positiveAdjustments.length > 0) {
+        const adjustmentIds = positiveAdjustments.map((row) => row.adjustment_id);
+        const adjustmentAmounts = positiveAdjustments.map((row) => Number(row.amount || 0));
+        await client.query(
+          `WITH selected AS (
+             SELECT UNNEST($1::uuid[]) AS id,
+                    UNNEST($2::numeric[]) AS amount
+           )
+           UPDATE affiliate_adjustments a
+           SET reserved_amount = GREATEST(a.reserved_amount - selected.amount, 0),
+               status = CASE
+                 WHEN a.amount - COALESCE(a.paid_out_amount, 0) <= 0.01
+                   THEN 'PAID_OUT'::commission_status
+                 WHEN GREATEST(a.reserved_amount - selected.amount, 0) > 0.01
+                   THEN 'RESERVED'::commission_status
+                 ELSE 'EARNED'::commission_status
+               END
+           FROM selected
+           WHERE a.id = selected.id`,
+          [adjustmentIds, adjustmentAmounts]
+        );
+      }
     }
 
     await client.query(

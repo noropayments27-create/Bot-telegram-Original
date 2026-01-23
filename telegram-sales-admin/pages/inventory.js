@@ -326,7 +326,7 @@ export default function InventoryPage() {
       if (!modeFilter && !detail) {
         loadProducts({ silent: true });
       }
-    }, 10000);
+    }, 20000);
     return () => clearInterval(interval);
   }, [detail, modeFilter]);
 
@@ -1387,7 +1387,7 @@ export default function InventoryPage() {
                     <div className="summary-value">
                       {unitsSummaryList.reduce((sum, row) => sum + Number(row.count || 0), 0)}
                     </div>
-                    <div className="summary-label">Total UNITS</div>
+                    <div className="summary-label">Total UNIDADES</div>
                   </div>
                 </div>
               </section>

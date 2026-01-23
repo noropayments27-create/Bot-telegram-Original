@@ -83,7 +83,7 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           text: `Retiro #${
             formatSequenceNumber(item.payout_number) || "-----"
           }`,
-          href: "/payouts",
+          href: `/payouts?payoutId=${item.id}`,
         }));
 
         const affiliates = (affiliatesRes.items || []).map((item) => ({
@@ -111,9 +111,6 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           if (item.type === "Ticket" && path.startsWith("/tickets")) {
             return false;
           }
-          if (item.type === "Pago" && path.startsWith("/payouts")) {
-            return false;
-          }
           if (item.type === "Afiliado" && path.startsWith("/affiliates")) {
             return false;
           }
@@ -127,7 +124,7 @@ export default function NotificationsBell({ variant = "sidebar" }) {
     };
 
     loadNotifications();
-    const interval = setInterval(loadNotifications, 5000);
+    const interval = setInterval(loadNotifications, 20000);
     return () => clearInterval(interval);
   }, [router.pathname]);
 
@@ -160,9 +157,6 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           return false;
         }
         if (item.type === "Ticket" && path.startsWith("/tickets")) {
-          return false;
-        }
-        if (item.type === "Pago" && path.startsWith("/payouts")) {
           return false;
         }
         if (item.type === "Afiliado" && path.startsWith("/affiliates")) {

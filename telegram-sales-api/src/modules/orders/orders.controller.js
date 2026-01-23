@@ -461,7 +461,8 @@ async function submitPaymentProof(req, res, next) {
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
-       SET status = $2
+       SET status = $2,
+           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
        WHERE id = $1
        RETURNING *`,
       [orderId, ORDER_STATUS_WAITING_CONFIRMATION]
@@ -536,7 +537,9 @@ async function markOrderPaid(req, res, next) {
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
-       SET status = $2, paid_at = now()
+       SET status = $2,
+           paid_at = now(),
+           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
        WHERE id = $1
        RETURNING *`,
       [orderId, ORDER_STATUS_PAID]
@@ -662,7 +665,10 @@ async function rejectPayment(req, res, next) {
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
-       SET status = $2
+       SET status = $2,
+           cancelled_at = now(),
+           cancel_source = 'ADMIN',
+           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
        WHERE id = $1
        RETURNING *`,
       [orderId, ORDER_STATUS_REJECTED]

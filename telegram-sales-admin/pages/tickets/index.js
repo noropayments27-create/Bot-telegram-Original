@@ -28,6 +28,25 @@ export default function TicketsPage() {
   const [imageByMessageId, setImageByMessageId] = useState({});
   const [previewImageUrl, setPreviewImageUrl] = useState("");
   const [toast, setToast] = useState("");
+  const ticketCounts = useMemo(() => {
+    const counts = { OPEN: 0, CLOSED: 0, NEW: 0, TOTAL: 0 };
+    for (const ticket of allItems) {
+      if (!ticket) {
+        continue;
+      }
+      const statusValue = ticket.status;
+      if (statusValue === "OPEN") {
+        counts.OPEN += 1;
+        if (!ticket.has_admin_reply) {
+          counts.NEW += 1;
+        }
+      } else if (statusValue === "CLOSED") {
+        counts.CLOSED += 1;
+      }
+      counts.TOTAL += 1;
+    }
+    return counts;
+  }, [allItems]);
 
   useEffect(() => {
     if (!getAuthToken()) {
@@ -224,7 +243,7 @@ export default function TicketsPage() {
         }
         loadDetail(ticketId, { silent: true });
       });
-    }, 4000);
+    }, 20000);
     return () => clearInterval(interval);
   }, [details, loadDetail, selectedTicketIds]);
 
@@ -426,7 +445,23 @@ export default function TicketsPage() {
   return (
     <main className="page">
       <section className="card orders-card">
-        <h1 className="icon-inline"><IconTickets className="panel-icon" /> Tickets</h1>
+        <div className="orders-header-row">
+          <h1 className="icon-inline"><IconTickets className="panel-icon" /> Tickets</h1>
+          {status !== "NEW" && (
+            <div className="orders-status-counts">
+              <span className="orders-count-label">Total:</span>
+              <span className="orders-count-value">
+                {status === ""
+                  ? ticketCounts.TOTAL
+                  : status === "OPEN"
+                  ? ticketCounts.OPEN
+                  : status === "CLOSED"
+                  ? ticketCounts.CLOSED
+                  : 0}
+              </span>
+            </div>
+          )}
+        </div>
         {error && <p className="error">{error}</p>}
         <div className="form">
           <label>

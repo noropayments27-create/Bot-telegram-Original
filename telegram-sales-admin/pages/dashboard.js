@@ -196,7 +196,7 @@ export default function Dashboard() {
     loadSummary();
     const interval = setInterval(() => {
       loadSummary();
-    }, 5000);
+    }, 20000);
     return () => clearInterval(interval);
   }, [loadSummary]);
 
@@ -230,7 +230,8 @@ export default function Dashboard() {
     }
   }, []);
 
-  const canReset = resetText.trim() === "Reset";
+  const normalizedReset = resetText.trim().toLowerCase();
+  const canReset = normalizedReset === "reiniciar" || normalizedReset === "reset";
 
   const handleResetStats = async () => {
     if (!canReset) {
@@ -240,7 +241,7 @@ export default function Dashboard() {
     try {
       await apiFetch("/admin/stats/reset", {
         method: "POST",
-        body: JSON.stringify({ confirm: "Reset" }),
+        body: JSON.stringify({ confirm: "Reiniciar" }),
       });
       setResetText("");
       setResetStatus("done");
@@ -263,7 +264,7 @@ export default function Dashboard() {
           <div className="dashboard-reset">
             <input
               type="text"
-              placeholder="Escribe Reset para habilitar"
+              placeholder="Escribe Reiniciar para habilitar"
               value={resetText}
               onChange={(event) => setResetText(event.target.value)}
               className="dashboard-reset-input"
@@ -275,7 +276,7 @@ export default function Dashboard() {
                 onClick={handleResetStats}
                 disabled={resetStatus === "processing"}
               >
-                Reset
+                Reiniciar
               </button>
             )}
             {resetStatus === "error" && (

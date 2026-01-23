@@ -1,11 +1,18 @@
 from datetime import datetime, timezone
+import logging
 import asyncio
 
 from aiogram import F, Router
 from aiogram.enums import ParseMode
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    InputMediaPhoto,
+    Message,
+)
 
 from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET, BOT_USERNAME, ADMIN_TELEGRAM_IDS
 from ..services.api_client import ApiClient
@@ -22,6 +29,7 @@ from ..config import (
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
+logger = logging.getLogger(__name__)
 
 
 class AffiliateStates(StatesGroup):
@@ -129,6 +137,53 @@ def _build_affiliate_info_keyboard(
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=buttons)
+
+
+def _build_affiliate_info_sections_keyboard(locale: str | None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_info_rules_button"),
+                    callback_data="affiliate:info:rules",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_info_antifraud_button"),
+                    callback_data="affiliate:info:antifraud",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_info_withdrawals_button"),
+                    callback_data="affiliate:info:withdrawals",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_info_commissions_button"),
+                    callback_data="affiliate:info:commissions",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_info_levels_button"),
+                    callback_data="affiliate:info:levels",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_info_withdraw_by_level_button"),
+                    callback_data="affiliate:info:withdraw-level",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="home:affiliates",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
+            ],
+        ]
+    )
 
 
 def _build_method_keyboard(locale: str | None, action: str) -> InlineKeyboardMarkup:
@@ -308,8 +363,8 @@ def _build_panel_keyboard(locale: str | None) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=t(locale, "affiliate_channel_button"),
-                    url="https://t.me/+2h-faKXvtNU3ZjVh",
+                    text=t(locale, "affiliate_top_button"),
+                    callback_data="affiliate:top",
                 )
             ],
             [
@@ -320,8 +375,8 @@ def _build_panel_keyboard(locale: str | None) -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(
-                    text=t(locale, "affiliate_top_button"),
-                    callback_data="affiliate:top",
+                    text=t(locale, "affiliate_channel_button"),
+                    url="https://t.me/+2h-faKXvtNU3ZjVh",
                 )
             ],
             [
@@ -368,9 +423,20 @@ def _build_top_keyboard(locale: str | None) -> InlineKeyboardMarkup:
 
 
 def _build_withdraw_keyboard(
-    locale: str | None, allow_withdraw: bool
+    locale: str | None,
+    allow_withdraw: bool,
+    allow_min_withdraw: bool,
 ) -> InlineKeyboardMarkup:
     rows = []
+    if allow_min_withdraw:
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "affiliate_withdraw_min_button"),
+                    callback_data="affiliate:withdraw:min",
+                )
+            ]
+        )
     if allow_withdraw:
         rows.append(
             [
@@ -431,7 +497,8 @@ def _format_money(value: object) -> str:
         amount = float(value)
     except (TypeError, ValueError):
         amount = 0.0
-    return f"${amount:.2f}"
+    formatted = f"{amount:.2f}".rstrip("0").rstrip(".")
+    return f"${formatted} USD"
 
 
 async def _render_affiliates_home(
@@ -585,8 +652,100 @@ async def handle_affiliate_info(callback: CallbackQuery, state: FSMContext) -> N
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_info_text"),
-        reply_markup=_build_affiliate_info_keyboard(locale, has_affiliate, is_approved),
+        reply_markup=_build_affiliate_info_sections_keyboard(locale),
         parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
+
+async def _render_affiliate_info_section(
+    message: Message, user_id: int, locale: str | None, text_key: str
+) -> None:
+    await render_main_view(
+        message,
+        user_id,
+        t(locale, text_key),
+        reply_markup=_build_affiliate_info_sections_keyboard(locale),
+    )
+
+
+@router.callback_query(F.data == "affiliate:info:rules")
+async def handle_affiliate_info_rules(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_info_section(
+        callback.message, callback.from_user.id, locale, "affiliate_info_rules_text"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "affiliate:info:antifraud")
+async def handle_affiliate_info_antifraud(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_info_section(
+        callback.message, callback.from_user.id, locale, "affiliate_info_antifraud_text"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "affiliate:info:withdrawals")
+async def handle_affiliate_info_withdrawals(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_info_section(
+        callback.message, callback.from_user.id, locale, "affiliate_info_withdrawals_text"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "affiliate:info:commissions")
+async def handle_affiliate_info_commissions(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_info_section(
+        callback.message, callback.from_user.id, locale, "affiliate_info_commissions_text"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "affiliate:info:levels")
+async def handle_affiliate_info_levels(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_info_section(
+        callback.message, callback.from_user.id, locale, "affiliate_info_levels_text"
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "affiliate:info:withdraw-level")
+async def handle_affiliate_info_withdraw_level(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await _render_affiliate_info_section(
+        callback.message,
+        callback.from_user.id,
+        locale,
+        "affiliate_info_withdraw_level_text",
     )
     await callback.answer()
 
@@ -666,8 +825,8 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
                 daily_percent = min(int((float(earnings_today) / 10) * 100), 100)
             except Exception:
                 daily_percent = 0
-            earnings_today_text = f"${float(earnings_today):.2f}"
-            earnings_total_text = f"${float(earnings_total):.2f}"
+            earnings_today_text = _format_money(earnings_today)
+            earnings_total_text = _format_money(earnings_total)
             text = (
                 f"{t(locale, 'affiliate_stats_header')}\n\n"
                 f"{t(locale, 'affiliate_stats_footer')}\n"
@@ -807,8 +966,9 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
             days_since_last_sale = None
         level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
         min_required = float(level.get("min_withdraw_value") or 0)
-        allow_withdraw = min_required <= 0 or balance_value >= min_required
-        balance = f"${float(balance_value):.2f}"
+        allow_withdraw = (min_required <= 0 or balance_value >= min_required) and debt_value <= 0
+        allow_min_withdraw = min_required > 0 and balance_value >= min_required and debt_value <= 0
+        balance = _format_money(balance_value)
         debt_line = ""
         if debt_value > 0:
             debt_amount = _format_money(-debt_value)
@@ -843,7 +1003,7 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
             callback.message,
             callback.from_user.id,
             text,
-            reply_markup=_build_withdraw_keyboard(locale, allow_withdraw),
+            reply_markup=_build_withdraw_keyboard(locale, allow_withdraw, allow_min_withdraw),
             parse_mode=ParseMode.HTML,
         )
         await callback.answer()
@@ -865,6 +1025,11 @@ async def handle_affiliate_withdraw_all(callback: CallbackQuery, state: FSMConte
         affiliate = data.get("affiliate") or {}
         destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
         balance_value = float(affiliate.get("earnings_available") or 0)
+        debt_value = float(
+            affiliate.get("debt_remaining")
+            if affiliate.get("debt_remaining") is not None
+            else affiliate.get("affiliate_debt") or 0
+        )
         sales_count = int(affiliate.get("sales_count") or 0)
         earnings_total = float(affiliate.get("earnings_total") or 0)
         days_since_last_sale = None
@@ -883,20 +1048,98 @@ async def handle_affiliate_withdraw_all(callback: CallbackQuery, state: FSMConte
                 show_alert=True,
             )
             return
+        if debt_value > 0:
+            await callback.answer(t(locale, "affiliate_debt_pending"), show_alert=True)
+            return
         if balance_value <= 0:
             await callback.answer(t(locale, "affiliate_withdraw_no_balance"), show_alert=True)
             return
         if min_required > 0 and balance_value < min_required:
             await callback.answer(
-                t(locale, "affiliate_withdraw_minimum_required").format(amount=min_required),
+                t(locale, "affiliate_withdraw_minimum_required").format(
+                    amount=_format_money(min_required)
+                ),
                 show_alert=True,
             )
             return
         balance = _format_money(balance_value)
+        await state.update_data(affiliate_withdraw_amount=None)
         text = (
             f"{t(locale, 'affiliate_withdraw_confirm_title')}\n\n"
             f"{t(locale, 'affiliate_withdraw_confirm_destination').format(destination=destination)}\n"
-            f"{t(locale, 'affiliate_withdraw_confirm_amount').format(amount=balance)}"
+            f"{t(locale, 'affiliate_withdraw_confirm_amount').format(amount=balance)}\n\n"
+            f"{t(locale, 'affiliate_withdraw_confirm_warning')}"
+        )
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            text,
+            reply_markup=_build_withdraw_confirm_keyboard(locale),
+            parse_mode=ParseMode.HTML,
+        )
+        await callback.answer()
+        return
+    except Exception:
+        pass
+    await callback.answer()
+
+
+@router.callback_query(F.data == "affiliate:withdraw:min")
+async def handle_affiliate_withdraw_min(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    try:
+        data = await api_client.get_affiliate_status(callback.from_user.id)
+        affiliate = data.get("affiliate") or {}
+        destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
+        balance_value = float(affiliate.get("earnings_available") or 0)
+        debt_value = float(
+            affiliate.get("debt_remaining")
+            if affiliate.get("debt_remaining") is not None
+            else affiliate.get("affiliate_debt") or 0
+        )
+        sales_count = int(affiliate.get("sales_count") or 0)
+        earnings_total = float(affiliate.get("earnings_total") or 0)
+        days_since_last_sale = None
+        try:
+            last_sale_raw = affiliate.get("last_sale_at")
+            if last_sale_raw:
+                last_sale_dt = datetime.fromisoformat(last_sale_raw.replace("Z", "+00:00"))
+                days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
+        except Exception:
+            days_since_last_sale = None
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        min_required = float(level.get("min_withdraw_value") or 0)
+        if destination == "-":
+            await callback.answer(
+                t(locale, "affiliate_withdraw_missing_destination"),
+                show_alert=True,
+            )
+            return
+        if debt_value > 0:
+            await callback.answer(t(locale, "affiliate_debt_pending"), show_alert=True)
+            return
+        if min_required <= 0:
+            await callback.answer(t(locale, "affiliate_withdraw_no_balance"), show_alert=True)
+            return
+        if balance_value < min_required:
+            await callback.answer(
+                t(locale, "affiliate_withdraw_minimum_required").format(
+                    amount=_format_money(min_required)
+                ),
+                show_alert=True,
+            )
+            return
+        min_amount_text = _format_money(min_required)
+        await state.update_data(affiliate_withdraw_amount=min_required)
+        text = (
+            f"{t(locale, 'affiliate_withdraw_confirm_title')}\n\n"
+            f"{t(locale, 'affiliate_withdraw_confirm_destination').format(destination=destination)}\n"
+            f"{t(locale, 'affiliate_withdraw_confirm_amount').format(amount=min_amount_text)}\n\n"
+            f"{t(locale, 'affiliate_withdraw_confirm_warning')}"
         )
         await render_main_view(
             callback.message,
@@ -920,7 +1163,23 @@ async def handle_affiliate_withdraw_confirm(callback: CallbackQuery, state: FSMC
         api_client, callback.from_user.id, callback.from_user.language_code
     )
     try:
-        await api_client.request_affiliate_withdraw(callback.from_user.id)
+        data = await state.get_data()
+        withdraw_amount = data.get("affiliate_withdraw_amount")
+        response = await api_client.request_affiliate_withdraw(
+            callback.from_user.id,
+            withdraw_amount if withdraw_amount else None,
+        )
+        if isinstance(response, dict) and response.get("status_code"):
+            error = (response.get("data") or {}).get("error")
+            if error == "DEBT_PENDING":
+                await callback.answer(t(locale, "affiliate_debt_pending"), show_alert=True)
+                return
+            if error == "INSUFFICIENT_BALANCE":
+                await callback.answer(t(locale, "affiliate_withdraw_no_balance"), show_alert=True)
+                return
+            await callback.answer(t(locale, "affiliate_withdraw_failed"), show_alert=True)
+            return
+        await state.update_data(affiliate_withdraw_amount=None)
         await render_main_view(
             callback.message,
             callback.from_user.id,
@@ -962,17 +1221,72 @@ async def handle_affiliate_invoice_decision(callback: CallbackQuery) -> None:
         )
         if isinstance(response, dict) and response.get("status_code"):
             error = (response.get("data") or {}).get("error")
+            if error == "DEBT_PENDING":
+                await callback.answer(t(locale, "affiliate_debt_pending"), show_alert=True)
+                return
             if error == "INSUFFICIENT_BALANCE":
                 await callback.answer(
                     t(locale, "affiliate_invoice_insufficient"), show_alert=True
                 )
                 return
+            if error == "INVOICE_EXPIRED":
+                await callback.answer(
+                    t(locale, "affiliate_invoice_expired"), show_alert=True
+                )
+                return
             await callback.answer(t(locale, "admin_decision_failed"), show_alert=True)
             return
+        response_data = response if isinstance(response, dict) else {}
+        final_notice = (
+            t(locale, "affiliate_invoice_paid")
+            if decision == "PAY"
+            else t(locale, "affiliate_invoice_cancelled")
+        )
+        api_message = response_data.get("message")
+        if api_message and final_notice not in api_message:
+            api_message = f"{api_message}\n\n{final_notice}"
+        desired_text_override = api_message
+        base_text = None
+        if callback.message and callback.message.caption:
+            base_text = callback.message.caption
+        elif callback.message and callback.message.text:
+            base_text = callback.message.text
+        desired_text = base_text
+        if desired_text_override:
+            desired_text = desired_text_override
+        elif desired_text and final_notice not in desired_text:
+            desired_text = f"{desired_text}\n\n{final_notice}"
+
+        photo_id = None
+        if callback.message and callback.message.photo:
+            photo_id = callback.message.photo[-1].file_id
+
         try:
-            await callback.message.edit_reply_markup(reply_markup=None)
-        except Exception:
-            pass
+            if photo_id and desired_text and callback.message:
+                await callback.message.answer_photo(
+                    photo_id, caption=desired_text, parse_mode=ParseMode.HTML
+                )
+                await callback.message.delete()
+                return
+            if callback.message and callback.message.text and desired_text:
+                await callback.message.edit_text(
+                    desired_text, reply_markup=None, parse_mode=ParseMode.HTML
+                )
+            else:
+                await callback.message.edit_reply_markup(reply_markup=None)
+        except Exception as err:
+            logger.exception("Invoice update failed: %s", err)
+            try:
+                if photo_id and desired_text:
+                    await callback.message.answer_photo(
+                        photo_id, caption=desired_text, parse_mode=ParseMode.HTML
+                    )
+                elif desired_text:
+                    await callback.message.answer(desired_text, parse_mode=ParseMode.HTML)
+                else:
+                    await callback.message.answer(final_notice)
+            except Exception as fallback_err:
+                logger.exception("Invoice fallback send failed: %s", fallback_err)
         if decision == "PAY":
             await callback.answer(t(locale, "affiliate_invoice_paid"))
         else:

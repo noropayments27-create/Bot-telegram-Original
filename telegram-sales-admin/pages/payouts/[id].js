@@ -14,6 +14,7 @@ export default function PayoutDetail() {
   const [reason, setReason] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
+  const [isMarkingSent, setIsMarkingSent] = useState(false);
   const formatMethod = (method) => {
     if (method === "USDT_BSC") {
       return "USDT";
@@ -28,6 +29,17 @@ export default function PayoutDetail() {
       return null;
     }
     return String(value).padStart(5, "0");
+  };
+  const formatUsdAmount = (value) => {
+    const numeric = Number(value);
+    if (!Number.isFinite(numeric)) {
+      return value || "-";
+    }
+    const formatted = numeric.toLocaleString("en-US", {
+      minimumFractionDigits: numeric % 1 === 0 ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
+    return `$${formatted} USD`;
   };
 
   useEffect(() => {
@@ -55,12 +67,18 @@ export default function PayoutDetail() {
   }, [id]);
 
   const handleMarkSent = async () => {
+    if (isMarkingSent) {
+      return;
+    }
+    setIsMarkingSent(true);
     try {
       await apiFetch(`/admin/payouts/${id}/mark-sent`, { method: "POST" });
       setMessage("Payout marcado como enviado.");
       await loadDetail();
     } catch (err) {
       setError("No se pudo marcar como enviado.");
+    } finally {
+      setIsMarkingSent(false);
     }
   };
 
@@ -113,7 +131,7 @@ export default function PayoutDetail() {
         <p>ID: {affiliate.id}</p>
         <p>Estado: {affiliate.status}</p>
         <p>Tasa: {affiliate.commission_rate}</p>
-        <p>Balance disponible: {available_balance}</p>
+        <p>Balance disponible: {formatUsdAmount(available_balance)}</p>
 
         <h3 className="icon-inline"><IconAffiliates className="panel-icon" /> Usuario</h3>
         <p>Telegram ID: {user.telegram_id}</p>
@@ -132,8 +150,13 @@ export default function PayoutDetail() {
           </label>
         </div>
         <div className="actions">
-          <button type="button" onClick={handleMarkSent} disabled={isSent || isCancelled}>
-            Marcar como ENVIADO
+          <button
+            type="button"
+            onClick={handleMarkSent}
+            disabled={isSent || isCancelled || isMarkingSent}
+          >
+            {isMarkingSent && <span className="button-spinner" aria-hidden="true" />}
+            {isMarkingSent ? "Enviando..." : "Marcar como ENVIADO"}
           </button>
           <button type="button" onClick={handleCancel} disabled={isSent || isCancelled}>
             Cancelar

@@ -39,7 +39,10 @@ async function expireWaitingPaymentOrders() {
     for (const order of ordersRes.rows) {
       const updateRes = await client.query(
         `UPDATE orders
-         SET status = 'CANCELLED'
+         SET status = 'EXPIRED',
+             cancelled_at = now(),
+             cancel_source = 'EXPIRED',
+             order_number = NULL
          WHERE id = $1 AND status = 'WAITING_PAYMENT'
          RETURNING id`,
         [order.id]

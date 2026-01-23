@@ -19,11 +19,12 @@ function cleanProductName(name) {
 
 const STATUS_LABELS = {
   CREATED: "CREADA",
-  WAITING_PAYMENT: "ESPERANDO PAGO",
+  WAITING_PAYMENT: "PENDIENTE",
   PAID: "PAGADA",
   DELIVERED: "ENTREGADA",
   REFUNDED: "REEMBOLSADA",
   CANCELLED: "CANCELADA",
+  EXPIRED: "EXPIRADA",
   APPROVED: "APROBADO",
   REJECTED: "RECHAZADO",
   PENDING: "PENDIENTE",
@@ -118,7 +119,7 @@ function getOrderTone(order, payment) {
   if (orderStatus === "PAID" || orderStatus === "DELIVERED" || reviewStatus === "APPROVED") {
     return "success";
   }
-  if (orderStatus === "CANCELLED" || orderStatus === "REFUNDED" || reviewStatus === "REJECTED") {
+  if (orderStatus === "CANCELLED" || orderStatus === "REFUNDED" || orderStatus === "EXPIRED" || reviewStatus === "REJECTED") {
     return "danger";
   }
   if (orderStatus === "WAITING_PAYMENT" || orderStatus === "CREATED" || reviewStatus === "PENDING" || reviewStatus === "SUBMITTED") {
@@ -128,12 +129,10 @@ function getOrderTone(order, payment) {
 }
 
 const STATUS_OPTIONS = [
-  { value: "RECENT", label: "Nuevos" },
+  { value: "RECENT", label: "Nuevas" },
   { value: "", label: "Todos" },
-  { value: "WAITING_PAYMENT", label: "Esperando Pago" },
-  { value: "CREATED", label: "Creado" },
-  { value: "PAID", label: "Pagado" },
   { value: "CANCELLED", label: "Cancelado" },
+  { value: "EXPIRED", label: "Expiradas" },
   { value: "DELIVERED", label: "Entregado" },
   { value: "REFUNDED", label: "Reembolsado" },
 ];
@@ -157,6 +156,16 @@ export default function OrdersPage() {
   const [isSubmittingApprove, setIsSubmittingApprove] = useState({});
   const [isSubmittingRefund, setIsSubmittingRefund] = useState({});
   const [toast, setToast] = useState("");
+  const [orderCounts, setOrderCounts] = useState({});
+
+  const getOrderCount = (key) => Number(orderCounts[key] || 0);
+  const totalNonExpired = Object.entries(orderCounts).reduce((sum, [key, value]) => {
+    if (key === "EXPIRED") {
+      return sum;
+    }
+    return sum + Number(value || 0);
+  }, 0);
+  const newOrdersCount = getOrderCount("WAITING_PAYMENT") + getOrderCount("CREATED");
 
   const filterRecent = (orders) => {
     return orders.filter((order) => {
@@ -181,12 +190,16 @@ export default function OrdersPage() {
         params.set("status", status);
       }
 
-      const data = await apiFetch(`/admin/orders?${params.toString()}`);
+      const [data, countsRes] = await Promise.all([
+        apiFetch(`/admin/orders?${params.toString()}`),
+        apiFetch("/admin/orders/status-counts"),
+      ]);
       const fetchedItems = data.items || [];
       const nextItems = isRecent ? filterRecent(fetchedItems) : fetchedItems;
       setItems(nextItems);
       setTotalPages(isRecent ? 1 : data.total_pages || 1);
       setError("");
+      setOrderCounts(countsRes?.counts || {});
     } catch (err) {
       setError("No se pudo cargar las ordenes.");
     }
@@ -197,7 +210,7 @@ export default function OrdersPage() {
     if (status !== "RECENT") {
       return undefined;
     }
-    const interval = setInterval(loadOrders, 10 * 1000);
+    const interval = setInterval(loadOrders, 20 * 1000);
     return () => clearInterval(interval);
   }, [loadOrders, status]);
 
@@ -653,7 +666,27 @@ export default function OrdersPage() {
   return (
     <main className="page">
       <section className="card orders-card">
-        <h1 className="icon-inline"><IconOrders className="panel-icon" /> Ordenes</h1>
+        <div className="orders-header-row">
+          <h1 className="icon-inline"><IconOrders className="panel-icon" /> Ordenes</h1>
+          {status !== "RECENT" && (
+            <div className="orders-status-counts">
+              <span className="orders-count-label">Total:</span>
+              <span className="orders-count-value">
+                {status === ""
+                  ? totalNonExpired
+                  : status === "CANCELLED"
+                  ? getOrderCount("CANCELLED")
+                  : status === "EXPIRED"
+                  ? getOrderCount("EXPIRED")
+                  : status === "DELIVERED"
+                  ? getOrderCount("DELIVERED")
+                  : status === "REFUNDED"
+                  ? getOrderCount("REFUNDED")
+                  : 0}
+              </span>
+            </div>
+          )}
+        </div>
         <div className="form">
           <label>
             Estado
@@ -713,7 +746,9 @@ export default function OrdersPage() {
                     className={selectedOrderIds.includes(order.id) ? "orders-row-active" : ""}
                   >
                     <td>
-                      {order.order_number
+                      {order.status === "EXPIRED"
+                        ? "-"
+                        : order.order_number
                         ? String(order.order_number).padStart(5, "0")
                         : "-"}
                     </td>
@@ -1088,7 +1123,10 @@ export default function OrdersPage() {
                             isApproving
                           }
                         >
-                          Aprobar
+                          {isApproving && (
+                            <span className="button-spinner" aria-hidden="true" />
+                          )}
+                          {isApproving ? "Aprobando..." : "Aprobar"}
                         </button>
                         <button
                           type="button"

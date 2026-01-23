@@ -149,9 +149,13 @@ class ApiClient:
 
         return await _request_with_retry(_do)
 
-    async def request_affiliate_withdraw(self, telegram_id: int) -> Dict[str, Any]:
+    async def request_affiliate_withdraw(
+        self, telegram_id: int, amount: float | None = None
+    ) -> Dict[str, Any]:
         url = f"{self.base_url}/users/affiliates/withdraw"
         payload = {"telegram_id": telegram_id}
+        if amount is not None:
+            payload["amount"] = amount
         async def _do() -> Dict[str, Any]:
             async with httpx.AsyncClient() as client:
                 response = await client.post(
@@ -160,7 +164,14 @@ class ApiClient:
                     headers=self._headers(),
                     timeout=15,
                 )
-                response.raise_for_status()
+                if response.status_code >= 400:
+                    try:
+                        return {
+                            "status_code": response.status_code,
+                            "data": response.json(),
+                        }
+                    except ValueError:
+                        return {"status_code": response.status_code, "data": {}}
                 return response.json()
 
         return await _request_with_retry(_do)

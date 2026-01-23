@@ -2,6 +2,7 @@ const DEFAULT_BASE_URL = "http://localhost:3001";
 const AUTH_TOKEN_KEY = "ADMIN_TOKEN";
 const AUTH_TOKEN_EXPIRES_KEY = "ADMIN_TOKEN_EXPIRES_AT";
 const AUTH_TOKEN_TTL_MS = 60 * 60 * 1000;
+let unauthorizedRedirected = false;
 
 export function getApiBaseUrl() {
   return process.env.NEXT_PUBLIC_API_BASE_URL || DEFAULT_BASE_URL;
@@ -43,6 +44,9 @@ export function clearAuthToken() {
 }
 
 export async function apiFetch(path, options = {}) {
+  if (unauthorizedRedirected && typeof window !== "undefined") {
+    throw new Error("UNAUTHORIZED");
+  }
   const baseUrl = getApiBaseUrl();
   const headers = { ...(options.headers || {}) };
   const token = getAuthToken();
@@ -56,6 +60,7 @@ export async function apiFetch(path, options = {}) {
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
+    cache: "no-store",
     ...options,
     headers,
   });
@@ -63,9 +68,15 @@ export async function apiFetch(path, options = {}) {
   if (response.status === 401) {
     clearAuthToken();
     if (typeof window !== "undefined") {
-      window.location.href = "/login";
+      if (!unauthorizedRedirected) {
+        unauthorizedRedirected = true;
+        window.location.href = "/login";
+      }
     }
     throw new Error("UNAUTHORIZED");
+  }
+  if (response.status === 304) {
+    return null;
   }
 
   const contentType = response.headers.get("content-type") || "";
@@ -84,6 +95,9 @@ export async function apiFetch(path, options = {}) {
 }
 
 export async function apiFetchBinary(path, options = {}) {
+  if (unauthorizedRedirected && typeof window !== "undefined") {
+    throw new Error("UNAUTHORIZED");
+  }
   const baseUrl = getApiBaseUrl();
   const headers = { ...(options.headers || {}) };
   const token = getAuthToken();
@@ -93,6 +107,7 @@ export async function apiFetchBinary(path, options = {}) {
   }
 
   const response = await fetch(`${baseUrl}${path}`, {
+    cache: "no-store",
     ...options,
     headers,
   });
@@ -100,9 +115,15 @@ export async function apiFetchBinary(path, options = {}) {
   if (response.status === 401) {
     clearAuthToken();
     if (typeof window !== "undefined") {
-      window.location.href = "/login";
+      if (!unauthorizedRedirected) {
+        unauthorizedRedirected = true;
+        window.location.href = "/login";
+      }
     }
     throw new Error("UNAUTHORIZED");
+  }
+  if (response.status === 304) {
+    return { buffer: new ArrayBuffer(0), contentType: "application/octet-stream" };
   }
 
   if (!response.ok) {

@@ -45,8 +45,8 @@ const RECEIPT_LABELS = {
   },
 };
 
-async function loadTemplate() {
-  const templatePath = path.join(__dirname, "..", "templates", "recibo.html");
+async function loadTemplate(templateName = "recibo.html") {
+  const templatePath = path.join(__dirname, "..", "templates", templateName);
   return fs.readFile(templatePath, "utf-8");
 }
 
@@ -62,10 +62,14 @@ function escapeHtml(str) {
 function formatMoney(value) {
   // mantiene simple: string o number -> string
   if (value == null) return "0";
-  if (typeof value === "number") {
-    return value.toLocaleString("en-US", { maximumFractionDigits: 0 });
+  const numeric = Number(value);
+  if (Number.isFinite(numeric)) {
+    return numeric.toLocaleString("en-US", {
+      minimumFractionDigits: Number.isInteger(numeric) ? 0 : 2,
+      maximumFractionDigits: 2,
+    });
   }
-  return String(value);
+  return String(value ?? "");
 }
 
 function formatUsdLabel(value, allowFree = false) {
@@ -139,7 +143,7 @@ async function renderReceiptPng(data) {
     throw new Error("playwright_not_installed");
   }
 
-  const template = await loadTemplate();
+  const template = await loadTemplate(data.templateName);
   const locale = data.locale || "es";
   const labels = RECEIPT_LABELS[locale] || RECEIPT_LABELS.es;
 
@@ -168,23 +172,23 @@ async function renderReceiptPng(data) {
     DATE_LABEL: labels.date,
     DATE_TIME: escapeHtml(data.dateTime || new Date().toLocaleString()),
     DESCRIPTION_LABEL: labels.description,
-    VALUE_LABEL: labels.value,
+    VALUE_LABEL: data.valueLabel || labels.value,
     ITEM_ROWS_HTML: buildItemRowsHtml(data.items || []),
     SUBTOTAL_LABEL: labels.subtotal,
     SUBTOTAL: escapeHtml(formatUsdLabel(data.subtotal, true)),
     COMMISSION_LABEL: labels.commission,
-    COMMISSION: escapeHtml(`$${Number(data.commission || 0).toFixed(2)} USD`),
-    TOTAL_LABEL: labels.total,
+    COMMISSION: escapeHtml(formatUsdLabel(data.commission ?? 0, true)),
+    TOTAL_LABEL: data.totalLabel || labels.total,
     TOTAL: escapeHtml(formatUsdLabel(data.total, true)),
     LOCAL_TOTAL_LINE: localTotalLine,
     REFERRED_BY_LABEL: labels.referred_by,
     REFERRED_BY: escapeHtml(data.referredBy || "N/A"),
-    THANK_YOU: labels.thank_you,
+    THANK_YOU: data.thankYou || labels.thank_you,
     BOT_USERNAME: escapeHtml(
       data.botUsername
         || process.env.BOT_USERNAME
         || process.env.NEXT_PUBLIC_BOT_USERNAME
-        || "Noroventas_bot"
+        || "Noropayments_bot"
     ),
     ADMIN_TELEGRAM: escapeHtml(
       data.adminTelegram
@@ -192,6 +196,9 @@ async function renderReceiptPng(data) {
         || process.env.ADMIN_USERNAME
         || "Noropayments"
     ),
+    AFFILIATE_NUMBER: escapeHtml(data.affiliateNumber || "N/A"),
+    PAID_TO_USERNAME: escapeHtml(data.paidToUsername || "N/A"),
+    PAID_TO_TELEGRAM_ID: escapeHtml(data.paidToTelegramId || "N/A"),
   });
 
   const tmpName = `receipt-${crypto.randomBytes(8).toString("hex")}.png`;

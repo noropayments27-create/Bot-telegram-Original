@@ -120,7 +120,20 @@ export default function AffiliatesPage() {
     if (status === "PENDING") return "PENDIENTE";
     if (status === "PAID") return "PAGADA";
     if (status === "CANCELLED") return "CANCELADA";
+    if (status === "EXPIRED") return "VENCIDA";
     return status || "-";
+  };
+
+  const formatApiError = (value, fallback) => {
+    const code = String(value || "").toUpperCase();
+    if (code === "INVALID_REQUEST") return "Solicitud inválida.";
+    if (code === "AFFILIATE_REQUIRED") return "Afiliado requerido.";
+    if (code === "AFFILIATE_NOT_FOUND") return "Afiliado no encontrado.";
+    if (code === "INVALID_AMOUNT") return "Monto inválido.";
+    if (code === "INSUFFICIENT_BALANCE") return "Saldo insuficiente.";
+    if (code === "DEBT_PENDING") return "Tienes una deuda pendiente.";
+    if (code === "INVOICE_EXPIRED") return "La factura expiró.";
+    return fallback;
   };
 
   const getLevelBaseRate = (levelLabel) => {
@@ -346,8 +359,10 @@ export default function AffiliatesPage() {
       await loadDetail(affiliateId);
       setToast(direction === "subtract" ? "Saldo descontado." : "Saldo agregado.");
     } catch (err) {
-      const detail =
-        err?.payload?.error || "No se pudo ajustar el saldo del afiliado.";
+      const detail = formatApiError(
+        err?.payload?.error,
+        "No se pudo ajustar el saldo del afiliado."
+      );
       setAdjustmentErrorById((prev) => ({ ...prev, [affiliateId]: detail }));
     } finally {
       setAdjustmentStatusById((prev) => ({ ...prev, [affiliateId]: "" }));
@@ -374,8 +389,10 @@ export default function AffiliatesPage() {
       });
       setToast("Factura enviada.");
     } catch (err) {
-      const detail =
-        err?.payload?.error || "No se pudo enviar la factura.";
+      const detail = formatApiError(
+        err?.payload?.error,
+        "No se pudo enviar la factura."
+      );
       setInvoiceErrorById((prev) => ({ ...prev, [affiliateId]: detail }));
     } finally {
       setInvoiceStatusById((prev) => ({ ...prev, [affiliateId]: "" }));
@@ -447,6 +464,9 @@ export default function AffiliatesPage() {
     setDetailErrors((prev) => ({ ...prev, [affiliateId]: "" }));
     try {
       const data = await apiFetch(`/admin/affiliates/${affiliateId}`);
+      if (!data || typeof data !== "object") {
+        return;
+      }
       setDetails((prev) => ({ ...prev, [affiliateId]: data }));
     } catch (err) {
       setDetailErrors((prev) => ({
@@ -498,6 +518,7 @@ export default function AffiliatesPage() {
         since,
       };
       const run = async () => {
+        const sleep = (ms) => new Promise((resolve) => setTimeout(resolve, ms));
         while (invoiceWatchRef.current[affiliateId]?.active) {
           try {
             const params = new URLSearchParams({
@@ -510,16 +531,27 @@ export default function AffiliatesPage() {
               const changedAt = new Date(
                 data.invoice.paid_at
                   || data.invoice.cancelled_at
+                  || data.invoice.expired_at
                   || data.invoice.created_at
                   || Date.now()
               ).getTime();
-              invoiceWatchRef.current[affiliateId].since = changedAt;
+              const nextSince = Number.isFinite(changedAt)
+                ? changedAt + 1
+                : Date.now();
+              invoiceWatchRef.current[affiliateId].since = nextSince;
               await loadDetail(affiliateId);
               invoiceWatchRef.current[affiliateId].active = false;
               setInvoiceWatchById((prev) => ({ ...prev, [affiliateId]: false }));
+              break;
             }
+            await sleep(2000);
           } catch (err) {
-            // ignore and retry
+            if (err && err.message === "UNAUTHORIZED") {
+              invoiceWatchRef.current[affiliateId].active = false;
+              setInvoiceWatchById((prev) => ({ ...prev, [affiliateId]: false }));
+              break;
+            }
+            await sleep(2000);
           }
         }
       };
@@ -552,11 +584,16 @@ export default function AffiliatesPage() {
       }
       const lastChange = invoices.reduce((maxValue, invoice) => {
         const timestamp = new Date(
-          invoice.paid_at || invoice.cancelled_at || invoice.created_at || 0
+          invoice.paid_at
+            || invoice.cancelled_at
+            || invoice.expired_at
+            || invoice.created_at
+            || 0
         ).getTime();
         return Math.max(maxValue, timestamp || 0);
       }, 0);
-      startInvoiceWatch(affiliateId, lastChange);
+      const nextSince = Number.isFinite(lastChange) ? lastChange + 1 : Date.now();
+      startInvoiceWatch(affiliateId, nextSince);
     });
     return () => {
       selectedAffiliateIds.forEach((affiliateId) => {
@@ -871,14 +908,47 @@ export default function AffiliatesPage() {
             const commissions = detail?.commissions || [];
             const availableBalance = Number(detail?.available_balance || 0);
             const affiliateDebt = Number(detail?.affiliate?.affiliate_debt || 0);
-            const netBalance = Math.max(availableBalance - affiliateDebt, 0);
+            const netBalanceRaw = Number(availableBalance - affiliateDebt);
+            const netBalance = Math.max(netBalanceRaw, 0);
             const debtRemaining = Math.max(affiliateDebt - availableBalance, 0);
             const debtClassName = affiliateDebt > 0 ? "error" : "muted";
             const netClassName = netBalance < 0 ? "error" : "";
             const adjustments = detail?.adjustments || [];
             const invoices = detail?.invoices || [];
+            const isInvoiceAdjustment = (adjustment) => {
+              const reason = String(adjustment?.reason || "").toLowerCase();
+              if (reason.startsWith("factura") || reason.startsWith("invoice")) {
+                return true;
+              }
+              const amount = Math.abs(Number(adjustment?.amount || 0));
+              if (!amount) {
+                return false;
+              }
+              return invoices.some((invoice) => {
+                const status = String(invoice?.status || "").toUpperCase();
+                if (status !== "PAID") {
+                  return false;
+                }
+                const invoiceAmount = Math.abs(Number(invoice?.amount || 0));
+                if (invoiceAmount !== amount) {
+                  return false;
+                }
+                const invoiceTime = new Date(
+                  invoice?.paid_at || invoice?.created_at || 0
+                ).getTime();
+                const adjustmentTime = new Date(
+                  adjustment?.created_at || 0
+                ).getTime();
+                if (!Number.isFinite(invoiceTime) || !Number.isFinite(adjustmentTime)) {
+                  return false;
+                }
+                return Math.abs(invoiceTime - adjustmentTime) <= 2 * 60 * 1000;
+              });
+            };
             const controlItems = [
-              ...adjustments.map((item) => ({ ...item, type: "ADJUSTMENT" })),
+              ...adjustments
+                .filter((item) => !isInvoiceAdjustment(item))
+                .map((item) => ({ ...item, type: "ADJUSTMENT" })),
               ...invoices.map((item) => ({ ...item, type: "INVOICE" })),
             ].sort((a, b) => {
               const aTime = new Date(a.created_at || 0).getTime();
@@ -1045,6 +1115,11 @@ export default function AffiliatesPage() {
                         <p className={netClassName}>
                           Saldo disponible: {formatUsdAmount(netBalance)}
                         </p>
+                        {netBalanceRaw < 0 && (
+                          <p className="error">
+                            ⚠️ Saldo neto negativo (posible ajuste pendiente o duplicado).
+                          </p>
+                        )}
                         <p className={debtClassName}>
                           Deuda pendiente: {formatUsdAmount(-debtRemaining)}
                         </p>
@@ -1116,10 +1191,23 @@ export default function AffiliatesPage() {
                         </p>
                         <p>
                           Destino:{" "}
-                          {affiliate.wallet_usdt_bsc
-                            || affiliate.wallet_nequi
-                            || affiliate.binance_id
-                            || "-"}
+                          <button
+                            type="button"
+                            className="orders-copy"
+                            onClick={() =>
+                              handleCopy(
+                                "Destino",
+                                affiliate.wallet_usdt_bsc
+                                  || affiliate.wallet_nequi
+                                  || affiliate.binance_id
+                              )
+                            }
+                          >
+                            {affiliate.wallet_usdt_bsc
+                              || affiliate.wallet_nequi
+                              || affiliate.binance_id
+                              || "-"}
+                          </button>
                         </p>
                       </div>
                     </div>
@@ -1155,7 +1243,13 @@ export default function AffiliatesPage() {
                                     <button
                                       type="button"
                                       className="link-button commission-order-link"
-                                      onClick={() => router.push(`/orders/${row.order_id}`)}
+                                      onClick={() =>
+                                        router.push(
+                                          `/orders?orderId=${encodeURIComponent(
+                                            row.order_id
+                                          )}`
+                                        )
+                                      }
                                     >
                                       <span className="truncate-id">{row.order_id}</span>
                                     </button>
@@ -1293,13 +1387,19 @@ export default function AffiliatesPage() {
                                   : row.reason || "-";
                                 const status = row.type === "INVOICE"
                                   ? formatInvoiceStatus(row.status)
-                                  : formatAdjustmentStatus(row.status);
+                                  : Number(row.amount || 0) >= 0
+                                  ? "Agregado"
+                                  : "Descontado";
                                 return (
                                   <tr key={`${row.type}-${row.id}`}>
                                     <td>{new Date(row.created_at).toLocaleString()}</td>
                                     <td>{formatCommissionAmount(amount)}</td>
                                     <td>{status}</td>
-                                    <td>{reason}</td>
+                                    <td>
+                                      <span className="affiliate-reason-truncate">
+                                        {reason}
+                                      </span>
+                                    </td>
                                   </tr>
                                 );
                               })}

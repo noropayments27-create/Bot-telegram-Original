@@ -3,7 +3,7 @@
 <head>
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>Recibo de Pago</title>
+    <title>Recibo de Retiro</title>
     <style>
         body {
             font-family: 'Courier New', Courier, monospace;
@@ -14,7 +14,7 @@
             padding: 20px;
         }
         .receipt {
-            width: 300px; /* Ancho típico de un recibo térmico */
+            width: 300px;
             background-color: #fff;
             padding: 20px;
             border: 1px solid #ccc;
@@ -55,16 +55,13 @@
         }
         .thank-you {
             margin-top: 20px;
-            font-size: 16px;
+            font-size: 14px;
             font-weight: bold;
+            text-transform: none;
         }
         .barcode {
             margin-top: 15px;
             text-align: center;
-        }
-        .barcode img {
-             width: 100%;
-             height: auto;
         }
     </style>
 </head>
@@ -77,8 +74,7 @@
 
     <div class="details">
         <div><span>{{ORDER_NUMBER_LABEL}}</span> <span>{{ORDER_NUMBER}}</span></div>
-        <div><span>{{TELEGRAM_ID_LABEL}}</span> <span>{{TELEGRAM_ID}}</span></div>
-        <div><span>{{USERNAME_LABEL}}</span> <span>{{USERNAME}}</span></div>
+        <div><span>Administrador:</span> <span>{{USERNAME}}</span></div>
     </div>
 
     <div class="divider"></div>
@@ -110,11 +106,11 @@
     <div class="divider"></div>
 
     <div class="totals">
-        <div><span>{{SUBTOTAL_LABEL}}</span> <span>{{SUBTOTAL}}</span></div>
-        <div><span>{{COMMISSION_LABEL}}</span> <span>{{COMMISSION}}</span></div>
         <div><span><strong>{{TOTAL_LABEL}}</strong></span> <span><strong>{{TOTAL}}</strong></span></div>
         {{LOCAL_TOTAL_LINE}}
-        <div><span>{{REFERRED_BY_LABEL}}</span> <span>{{REFERRED_BY}}</span></div>
+        <div><span>Afiliado:</span> <span>{{AFFILIATE_NUMBER}}</span></div>
+        <div><span>Pagado a:</span> <span>{{PAID_TO_USERNAME}}</span></div>
+        <div><span>Telegram ID:</span> <span>{{PAID_TO_TELEGRAM_ID}}</span></div>
     </div>
 
     <div class="divider"></div>
@@ -127,7 +123,6 @@
         <div class="thank-you">{{THANK_YOU}}</div>
         <div class="barcode">
             ||||||||||||||||||||||||||||||
-            <!-- Representación visual del código de barras (placeholder) -->
         </div>
     </div>
 </div>
