@@ -1145,6 +1145,12 @@ body.login-success {
   max-height: 260px;
   overflow-y: auto;
   padding-right: 6px;
+  background: #0b0b0b5d;
+  border: 1px solid rgba(255, 34, 0, 0.41);
+  border-radius: 12px;
+  padding: 12px;
+  overscroll-behavior: contain;
+  touch-action: pan-y;
 }
 
 .ticket-message {

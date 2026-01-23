@@ -82,10 +82,12 @@ async def start_support_flow(message: Message, user: User, state: FSMContext) ->
         return
 
     if result.get("status_code") == 409:
-        await state.clear()
-        await message.answer(
-            t(locale, "support_ticket_open")
-        )
+        await state.set_state(SupportStates.active)
+        await message.answer(t(locale, "support_wait_admin_reply"))
+        return
+    if result.get("status_code") == 400:
+        await state.set_state(SupportStates.active)
+        await message.answer(t(locale, "support_start_prompt"))
         return
 
     data = result.get("data", {})
@@ -94,9 +96,7 @@ async def start_support_flow(message: Message, user: User, state: FSMContext) ->
         await state.update_data(ticket_id=ticket["id"])
         await state.set_state(SupportStates.active)
 
-    await message.answer(
-        t(locale, "support_ticket_created")
-    )
+    await message.answer(t(locale, "support_start_prompt"))
 
 
 @router.message(Command("soporte"))
@@ -142,23 +142,46 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
 
     data = await state.get_data()
     ticket_id = data.get("ticket_id")
-    if not ticket_id:
-        await message.answer(t(locale, "support_no_active_ticket"))
-        await state.clear()
-        return
 
     payload = {
         "telegram_id": message.from_user.id,
         "message": text,
     }
 
+    if not ticket_id:
+        payload.update(
+            {
+                "telegram_username": message.from_user.username,
+                "subject": "Soporte",
+            }
+        )
+        result = await api_client.open_or_create_ticket(payload)
+        if result.get("status_code") == 403:
+            await message.answer(t(locale, "support_banned"))
+            await state.clear()
+            return
+        if result.get("status_code") == 409:
+            await message.answer(t(locale, "support_wait_admin_reply"))
+            return
+        data = result.get("data", {})
+        ticket = data.get("ticket")
+        if ticket:
+            await state.update_data(ticket_id=ticket["id"])
+            await state.set_state(SupportStates.active)
+        await message.answer(t(locale, "support_message_received"))
+        await message.answer(t(locale, "support_wait_admin_reply"))
+        return
+
     result = await api_client.send_ticket_message(ticket_id, payload)
     if result.get("status_code") == 403:
         await message.answer(t(locale, "support_banned"))
         await state.clear()
         return
+    if result.get("status_code") == 409:
+        await message.answer(t(locale, "support_wait_admin_reply"))
+        return
     await message.answer(t(locale, "support_message_received"))
-    await state.clear()
+    await message.answer(t(locale, "support_wait_admin_reply"))
 
 
 @router.message(F.photo)
@@ -199,6 +222,9 @@ async def handle_support_photo(message: Message, state: FSMContext) -> None:
     if result.get("status_code") == 403:
         await message.answer(t(locale, "support_banned"))
         await state.clear()
+        return
+    if result.get("status_code") == 409:
+        await message.answer(t(locale, "support_image_not_allowed"))
         return
     await message.answer(t(locale, "support_image_received"))
 
@@ -242,5 +268,8 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
     if result.get("status_code") == 403:
         await message.answer(t(locale, "support_banned"))
         await state.clear()
+        return
+    if result.get("status_code") == 409:
+        await message.answer(t(locale, "support_image_not_allowed"))
         return
     await message.answer(t(locale, "support_image_received"))

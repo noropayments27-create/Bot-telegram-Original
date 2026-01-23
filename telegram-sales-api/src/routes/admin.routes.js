@@ -39,11 +39,13 @@ const MESSAGES = {
 
 const SUPPORT_MESSAGES = {
   es: {
-    image_allowed: "🖼️ Ya puedes enviar una imagen en este ticket.",
+    image_allowed: "🖼️ Ya puedes enviar una imagen en este ticket. Solo 1 captura.",
+    ticket_closed: "✅ Tu ticket de soporte fue cerrado. Si necesitas más ayuda, abre un nuevo ticket.",
     user_banned: "⛔️ Has sido baneado de soporte por uso indebido de mensajes.",
   },
   en: {
-    image_allowed: "🖼️ You can now send one image in this ticket.",
+    image_allowed: "🖼️ You can now send one image in this ticket. Only 1 capture.",
+    ticket_closed: "✅ Your support ticket was closed. If you need more help, open a new ticket.",
     user_banned: "⛔️ You have been banned from support for misuse of messages.",
   },
 };
@@ -5639,6 +5641,26 @@ router.post("/tickets/:id/close", async (req, res, next) => {
 
     if (ticketRes.rowCount === 0) {
       return res.status(404).json({ error: "TICKET_NOT_FOUND" });
+    }
+
+    const userRes = await pool.query(
+      `SELECT u.telegram_id
+       FROM tickets t
+       JOIN users u ON u.id = t.user_id
+       WHERE t.id = $1`,
+      [ticketId]
+    );
+    const telegramId = userRes.rows[0]?.telegram_id;
+    if (telegramId) {
+      const userLocale = await getUserLocaleByTelegramId(pool, telegramId);
+      const text =
+        SUPPORT_MESSAGES[userLocale]?.ticket_closed
+        || SUPPORT_MESSAGES.es.ticket_closed;
+      try {
+        await sendMessage(telegramId, text);
+      } catch (err) {
+        console.error("Telegram notification failed", err);
+      }
     }
 
     return res.json({ ticket: ticketRes.rows[0] });

@@ -663,7 +663,21 @@ export default function TicketsPage() {
                     <div className="orders-detail-separator"></div>
                     <div className="orders-detail-section">
                       <h3>Conversación</h3>
-                      <div className="ticket-thread" style={{ maxHeight: "220px", overflowY: "auto" }}>
+                      <div
+                        className="ticket-thread"
+                        style={{ maxHeight: "220px", overflowY: "auto" }}
+                        onWheel={(event) => {
+                          const target = event.currentTarget;
+                          const delta = event.deltaY;
+                          const atTop = target.scrollTop <= 0;
+                          const atBottom =
+                            target.scrollTop + target.clientHeight >= target.scrollHeight - 1;
+                          if ((delta < 0 && atTop) || (delta > 0 && atBottom)) {
+                            event.preventDefault();
+                            event.stopPropagation();
+                          }
+                        }}
+                      >
                         {(detail.messages || []).length === 0 && (
                           <p className="muted">Sin mensajes.</p>
                         )}
@@ -680,7 +694,12 @@ export default function TicketsPage() {
                                   <img
                                     src={imageByMessageId[msg.id]}
                                     alt="Imagen del ticket"
-                                    style={{ maxWidth: "220px", borderRadius: "8px" }}
+                                    style={{ maxWidth: "220px", borderRadius: "8px", cursor: "zoom-in" }}
+                                    onClick={(event) => {
+                                      event.preventDefault();
+                                      event.stopPropagation();
+                                      setPreviewImageUrl(imageByMessageId[msg.id]);
+                                    }}
                                   />
                                 ) : (
                                   <div className="muted">Cargando imagen...</div>
@@ -752,7 +771,7 @@ export default function TicketsPage() {
                           onClick={() => handleAllowImage(ticketId)}
                           disabled={detail.ticket.allow_image}
                         >
-                          {detail.ticket.allow_image ? "Imagen permitida" : "Permitir imagen"}
+                        Permitir imagen
                         </button>
                         <button
                           type="button"

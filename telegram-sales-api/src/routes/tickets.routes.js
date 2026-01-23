@@ -91,27 +91,49 @@ router.post("/open-or-create", async (req, res, next) => {
 
     if (openTicketRes.rowCount > 0) {
       const openTicket = openTicketRes.rows[0];
-      const adminReplyRes = await client.query(
-        `SELECT 1 FROM ticket_messages
-         WHERE ticket_id = $1 AND sender = 'ADMIN'
+      const lastMsgRes = await client.query(
+        `SELECT sender
+         FROM ticket_messages
+         WHERE ticket_id = $1
+         ORDER BY created_at DESC
          LIMIT 1`,
         [openTicket.id]
       );
-
-      if (adminReplyRes.rowCount === 0) {
+      const lastSender = lastMsgRes.rows[0]?.sender || null;
+      if (!messageText) {
+        if (lastSender === "USER") {
+          await client.query("ROLLBACK");
+          return res.status(409).json({
+            error: "WAIT_ADMIN_REPLY",
+            ticket: openTicket,
+          });
+        }
+        await client.query("COMMIT");
+        return res.status(200).json({ ticket: openTicket });
+      }
+      if (lastSender === "USER") {
         await client.query("ROLLBACK");
         return res.status(409).json({
-          error: "TICKET_BLOCKED_NEED_ADMIN_REPLY",
+          error: "WAIT_ADMIN_REPLY",
           ticket: openTicket,
         });
       }
-
-      await client.query(
-        `UPDATE tickets
-         SET status = 'CLOSED', closed_at = now()
-         WHERE id = $1`,
-        [openTicket.id]
+      const msgRes = await client.query(
+        `INSERT INTO ticket_messages (ticket_id, sender, message_text)
+         VALUES ($1, 'USER', $2)
+         RETURNING *`,
+        [openTicket.id, messageText]
       );
+      await client.query("COMMIT");
+      return res.status(201).json({
+        ticket: openTicket,
+        message: msgRes.rows[0],
+      });
+    }
+
+    if (!messageText) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "MESSAGE_REQUIRED" });
     }
 
     const ticketRes = await client.query(
@@ -121,22 +143,18 @@ router.post("/open-or-create", async (req, res, next) => {
       [user.id, subject]
     );
 
-    let createdMessage = null;
-    if (messageText) {
-      const msgRes = await client.query(
-        `INSERT INTO ticket_messages (ticket_id, sender, message_text)
-         VALUES ($1, 'USER', $2)
-         RETURNING *`,
-        [ticketRes.rows[0].id, messageText]
-      );
-      createdMessage = msgRes.rows[0];
-    }
+    const msgRes = await client.query(
+      `INSERT INTO ticket_messages (ticket_id, sender, message_text)
+       VALUES ($1, 'USER', $2)
+       RETURNING *`,
+      [ticketRes.rows[0].id, messageText]
+    );
 
     await client.query("COMMIT");
 
     return res.status(201).json({
       ticket: ticketRes.rows[0],
-      message: createdMessage,
+      message: msgRes.rows[0],
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -174,7 +192,7 @@ router.post("/:id/message", async (req, res, next) => {
       return res.status(403).json({ error: "USER_BANNED" });
     }
     const ticketRes = await pool.query(
-      `SELECT t.id, t.status
+      `SELECT t.id, t.status, t.allow_image
        FROM tickets t
        JOIN users u ON u.id = t.user_id
        WHERE t.id = $1 AND u.telegram_id = $2`,
@@ -196,6 +214,18 @@ router.post("/:id/message", async (req, res, next) => {
       );
       if (!allowRes.rows[0]?.allow_image) {
         return res.status(409).json({ error: "IMAGE_NOT_ALLOWED" });
+      }
+    } else {
+      const lastMsgRes = await pool.query(
+        `SELECT sender
+         FROM ticket_messages
+         WHERE ticket_id = $1
+         ORDER BY created_at DESC
+         LIMIT 1`,
+        [ticketId]
+      );
+      if (lastMsgRes.rows[0]?.sender === "USER") {
+        return res.status(409).json({ error: "WAIT_ADMIN_REPLY" });
       }
     }
 

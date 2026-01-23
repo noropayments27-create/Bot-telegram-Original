@@ -1718,14 +1718,14 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         reply_markup=None,
     )
     await callback.answer()
-@router.message(F.photo)
+@router.message(PaymentStates.waiting_photo, F.photo)
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
     await _process_payment_proof(message, state, message.photo[-1].file_id)
 
 
-@router.message(F.document)
+@router.message(PaymentStates.waiting_photo, F.document)
 async def handle_payment_document(message: Message, state: FSMContext) -> None:
     if not message.document or not message.from_user:
         return
@@ -1755,6 +1755,12 @@ async def _process_payment_proof(
     current_state = await state.get_state()
     order_id = data.get("order_id") or data.get("current_order_id")
     if not order_id:
+        try:
+            active_ticket = await api_client.get_active_ticket(message.from_user.id)
+            if active_ticket.get("ticket", {}).get("allow_image"):
+                return
+        except Exception:
+            pass
         await message.answer(t(locale, "no_active_order"))
         await state.set_state(None)
         return

@@ -272,7 +272,7 @@ class ApiClient:
         url = f"{self.base_url}/tickets/open-or-create"
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=5)
-            if response.status_code in (403, 409):
+            if response.status_code in (400, 403, 409):
                 return {"status_code": response.status_code, "data": response.json()}
             response.raise_for_status()
             return {"status_code": response.status_code, "data": response.json()}
@@ -312,8 +312,8 @@ class ApiClient:
         url = f"{self.base_url}/tickets/{ticket_id}/message"
         async with httpx.AsyncClient() as client:
             response = await client.post(url, json=payload, timeout=5)
-            if response.status_code == 403:
-                return {"status_code": 403, "data": response.json()}
+            if response.status_code in (403, 409):
+                return {"status_code": response.status_code, "data": response.json()}
             response.raise_for_status()
             return {"status_code": response.status_code, "data": response.json()}
 
