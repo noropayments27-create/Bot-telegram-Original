@@ -2,7 +2,7 @@ from typing import Dict, Optional
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.enums import ParseMode
-from aiogram.types import InlineKeyboardMarkup, Message
+from aiogram.types import InlineKeyboardMarkup, InputMediaPhoto, Message
 
 _MAIN_MESSAGE_BY_USER: Dict[int, int] = {}
 _LAST_VIEW_BY_USER: Dict[int, Dict[str, object]] = {}
@@ -42,6 +42,10 @@ def pop_previous_view(user_id: int) -> Optional[Dict[str, object]]:
     previous = history.pop()
     _LAST_VIEW_BY_USER[user_id] = previous
     return previous
+
+
+def get_main_message_id(user_id: int) -> Optional[int]:
+    return _MAIN_MESSAGE_BY_USER.get(user_id)
 
 
 async def try_edit_main_view(
@@ -154,6 +158,51 @@ async def render_main_view(
                         return message
 
     sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    if sent:
+        _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
+        _record_view_state(
+            user_id, text, reply_markup, parse_mode, push_history=push_history
+        )
+    return sent
+
+
+async def render_main_view_with_photo(
+    message: Message,
+    user_id: int,
+    text: str,
+    photo: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+    parse_mode: Optional[ParseMode | str] = None,
+    *,
+    push_history: bool = True,
+) -> Message:
+    chat_id = message.chat.id
+    message_id = _MAIN_MESSAGE_BY_USER.get(user_id)
+    media = InputMediaPhoto(media=photo, caption=text, parse_mode=parse_mode)
+
+    if message_id:
+        try:
+            await message.bot.edit_message_media(
+                chat_id=chat_id,
+                message_id=message_id,
+                media=media,
+                reply_markup=reply_markup,
+            )
+            _record_view_state(
+                user_id, text, reply_markup, parse_mode, push_history=push_history
+            )
+            return message
+        except TelegramBadRequest as exc:
+            error_text = str(exc).lower()
+            if "message is not modified" in error_text:
+                return message
+
+    sent = await message.answer_photo(
+        photo=photo,
+        caption=text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
     if sent:
         _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
         _record_view_state(

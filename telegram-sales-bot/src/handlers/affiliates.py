@@ -14,11 +14,22 @@ from aiogram.types import (
     Message,
 )
 
-from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET, BOT_USERNAME, ADMIN_TELEGRAM_IDS
+from ..config import (
+    API_BASE_URL,
+    API_TOKEN,
+    BOT_AFFILIATE_PANEL_IMAGE_URL,
+    BOT_TO_API_SECRET,
+    BOT_USERNAME,
+    ADMIN_TELEGRAM_IDS,
+)
 from ..services.api_client import ApiClient
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
-from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.main_view import (
+    render_main_view,
+    render_main_view_with_photo,
+    set_main_message_id,
+)
 from .menu import build_main_keyboard
 from ..utils.rate_limit import check_global_rate_limit
 from ..config import (
@@ -29,6 +40,35 @@ from ..config import (
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
+
+
+async def _render_affiliate_view(
+    message: Message,
+    user_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: ParseMode | str | None = None,
+    *,
+    push_history: bool = True,
+) -> Message:
+    if BOT_AFFILIATE_PANEL_IMAGE_URL:
+        return await render_main_view_with_photo(
+            message,
+            user_id,
+            text,
+            BOT_AFFILIATE_PANEL_IMAGE_URL,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            push_history=push_history,
+        )
+    return await render_main_view(
+        message,
+        user_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+        push_history=push_history,
+    )
 logger = logging.getLogger(__name__)
 
 
@@ -219,14 +259,16 @@ def _build_method_keyboard(locale: str | None, action: str) -> InlineKeyboardMar
 
 def _build_referral_text(locale: str | None, code: str) -> str:
     if BOT_USERNAME:
-        link = f"https://t.me/{BOT_USERNAME}?start={code}"
+        clean_bot = str(BOT_USERNAME or "").lstrip("@")
+        link = f"https://t.me/{clean_bot}?start={code}"
         return t(locale, "affiliate_referral_link").format(code=code, link=link)
     return t(locale, "affiliate_referral_code").format(code=code)
 
 
 def _build_referral_link(code: str) -> str:
     if BOT_USERNAME:
-        return f"https://t.me/{BOT_USERNAME}?start={code}"
+        clean_bot = str(BOT_USERNAME or "").lstrip("@")
+        return f"https://t.me/{clean_bot}?start={code}"
     return code
 
 
@@ -522,7 +564,7 @@ async def _render_affiliates_home(
 
     if affiliate_status == "REJECTED":
         await state.clear()
-        await render_main_view(
+        await _render_affiliate_view(
             callback.message,
             callback.from_user.id,
             t(locale, "affiliate_blocked_notice"),
@@ -599,7 +641,7 @@ async def _render_affiliates_home(
             )
 
     await state.clear()
-    await render_main_view(
+    await _render_affiliate_view(
         callback.message,
         callback.from_user.id,
         text,
@@ -648,7 +690,7 @@ async def handle_affiliate_info(callback: CallbackQuery, state: FSMContext) -> N
             is_approved = affiliate.get("status") == "APPROVED"
     except Exception:
         pass
-    await render_main_view(
+    await _render_affiliate_view(
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_info_text"),
@@ -661,7 +703,7 @@ async def handle_affiliate_info(callback: CallbackQuery, state: FSMContext) -> N
 async def _render_affiliate_info_section(
     message: Message, user_id: int, locale: str | None, text_key: str
 ) -> None:
-    await render_main_view(
+    await _render_affiliate_view(
         message,
         user_id,
         t(locale, text_key),
@@ -765,7 +807,7 @@ async def _render_affiliate_faq(
             is_approved = affiliate.get("status") == "APPROVED"
     except Exception:
         pass
-    await render_main_view(
+    await _render_affiliate_view(
         message,
         user_id,
         t(locale, "affiliate_faq_text"),
@@ -841,18 +883,28 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
                 f"{t(locale, 'affiliate_stats_footer')}\n"
                 f"{t(locale, 'affiliate_stats_streak').format(days=daily_streak)}"
             )
-            await render_main_view(
-                callback.message,
-                callback.from_user.id,
-                text,
-                reply_markup=_build_panel_keyboard(locale),
-                parse_mode=ParseMode.HTML,
-            )
+            if BOT_AFFILIATE_PANEL_IMAGE_URL:
+                await render_main_view_with_photo(
+                    callback.message,
+                    callback.from_user.id,
+                    text,
+                    BOT_AFFILIATE_PANEL_IMAGE_URL,
+                    reply_markup=_build_panel_keyboard(locale),
+                    parse_mode=ParseMode.HTML,
+                )
+            else:
+                await _render_affiliate_view(
+                    callback.message,
+                    callback.from_user.id,
+                    text,
+                    reply_markup=_build_panel_keyboard(locale),
+                    parse_mode=ParseMode.HTML,
+                )
             await callback.answer()
             return
     except Exception:
         pass
-    await render_main_view(
+    await _render_affiliate_view(
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_panel_unavailable"),
@@ -923,7 +975,7 @@ async def _render_affiliate_top(callback: CallbackQuery, period: str) -> None:
         my_earnings = _format_money(data.get("my_earnings"))
         lines.append(t(locale, "affiliate_top_position").format(position=position))
         lines.append(t(locale, "affiliate_top_earnings").format(amount=my_earnings))
-        await render_main_view(
+        await _render_affiliate_view(
             callback.message,
             callback.from_user.id,
             "\n".join(lines),
@@ -999,7 +1051,7 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
             f"{separator}\n"
             f"{pending_lines}"
         )
-        await render_main_view(
+        await _render_affiliate_view(
             callback.message,
             callback.from_user.id,
             text,
@@ -1070,7 +1122,7 @@ async def handle_affiliate_withdraw_all(callback: CallbackQuery, state: FSMConte
             f"{t(locale, 'affiliate_withdraw_confirm_amount').format(amount=balance)}\n\n"
             f"{t(locale, 'affiliate_withdraw_confirm_warning')}"
         )
-        await render_main_view(
+        await _render_affiliate_view(
             callback.message,
             callback.from_user.id,
             text,
@@ -1141,7 +1193,7 @@ async def handle_affiliate_withdraw_min(callback: CallbackQuery, state: FSMConte
             f"{t(locale, 'affiliate_withdraw_confirm_amount').format(amount=min_amount_text)}\n\n"
             f"{t(locale, 'affiliate_withdraw_confirm_warning')}"
         )
-        await render_main_view(
+        await _render_affiliate_view(
             callback.message,
             callback.from_user.id,
             text,
@@ -1180,7 +1232,7 @@ async def handle_affiliate_withdraw_confirm(callback: CallbackQuery, state: FSMC
             await callback.answer(t(locale, "affiliate_withdraw_failed"), show_alert=True)
             return
         await state.update_data(affiliate_withdraw_amount=None)
-        await render_main_view(
+        await _render_affiliate_view(
             callback.message,
             callback.from_user.id,
             t(locale, "affiliate_withdraw_requested"),
@@ -1339,7 +1391,7 @@ async def handle_affiliate_start(callback: CallbackQuery, state: FSMContext) -> 
     action = callback.data.split(":")[-1]
     await state.update_data(affiliate_action=action)
     await state.set_state(AffiliateStates.waiting_method)
-    await render_main_view(
+    await _render_affiliate_view(
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_choose_method"),
@@ -1375,7 +1427,7 @@ async def handle_affiliate_method(callback: CallbackQuery, state: FSMContext) ->
         "NEQUI": t(locale, "affiliate_method_nequi"),
         "BINANCE_ID": t(locale, "affiliate_method_binance"),
     }.get(method, method)
-    await render_main_view(
+    await _render_affiliate_view(
         callback.message,
         callback.from_user.id,
         t(locale, "affiliate_withdraw_prompt").format(method=method_label),

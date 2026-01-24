@@ -23,9 +23,11 @@ from ..services.user_locale import get_user_locale
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
+    BOT_CART_IMAGE_URL,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
+    BOT_SHOP_SECTION_IMAGE_URL,
     BOT_TO_API_SECRET,
     BINANCE_ID,
     CRYPTO_WALLET_BTC,
@@ -38,7 +40,7 @@ from ..config import (
     NEQUI_NUMBER,
     PAYPAL_ACCOUNT,
 )
-from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id
 from ..utils.order_flow import (
     guard_order_payable_or_redirect,
     show_not_payable_and_redirect,
@@ -79,6 +81,58 @@ def _format_usd(amount: float) -> str:
 
 def _format_usd_value(amount: float) -> str:
     return f"{_format_usd_amount(amount)} USD"
+
+
+async def _render_shop_view(
+    target: Message,
+    user_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: ParseMode | str | None = None,
+) -> None:
+    if BOT_SHOP_SECTION_IMAGE_URL:
+        await render_main_view_with_photo(
+            target,
+            user_id,
+            text,
+            BOT_SHOP_SECTION_IMAGE_URL,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return
+    await render_main_view(
+        target,
+        user_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
+
+
+async def _render_cart_view(
+    target: Message,
+    user_id: int,
+    text: str,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: ParseMode | str | None = None,
+) -> None:
+    if BOT_CART_IMAGE_URL:
+        await render_main_view_with_photo(
+            target,
+            user_id,
+            text,
+            BOT_CART_IMAGE_URL,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return
+    await render_main_view(
+        target,
+        user_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
 def _build_cart_text(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
@@ -751,7 +805,7 @@ async def render_shop_page(
     items = catalog["items"]
     total_pages = catalog["total_pages"]
     if not items:
-        await render_main_view(
+        await _render_shop_view(
             target,
             user_id,
             t(locale, "no_more_products"),
@@ -768,7 +822,7 @@ async def render_shop_page(
         )
         return
     text = format_products(items, page, locale)
-    await render_main_view(
+    await _render_shop_view(
         target,
         user_id,
         text,
@@ -780,7 +834,7 @@ async def render_category_page(
 ) -> None:
     items = await _get_category_items(category_key, user_id)
     if not items:
-        await render_main_view(
+        await _render_shop_view(
             target,
             user_id,
             t(locale, "no_more_products"),
@@ -797,7 +851,7 @@ async def render_category_page(
         )
         return
     text = format_category_products(category_key, items, locale)
-    await render_main_view(
+    await _render_shop_view(
         target,
         user_id,
         text,
@@ -1338,7 +1392,7 @@ async def handle_home_cart(callback: CallbackQuery) -> None:
         if cart_items
         else _build_cart_empty_keyboard(locale)
     )
-    await render_main_view(
+    await _render_cart_view(
         callback.message,
         callback.from_user.id,
         _build_cart_text(cart_items, total_usd, locale),
@@ -1367,7 +1421,7 @@ async def handle_cart_clear(callback: CallbackQuery) -> None:
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await api_client.clear_cart({"telegram_id": callback.from_user.id})
-    await render_main_view(
+    await _render_cart_view(
         callback.message,
         callback.from_user.id,
         _build_cart_text([], 0.0, locale),

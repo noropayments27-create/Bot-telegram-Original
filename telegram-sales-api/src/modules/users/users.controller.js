@@ -126,6 +126,9 @@ async function getUserLocaleByTelegramId(pool, telegramId) {
 }
 
 async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
+  if (!startAffiliateCode) {
+    return null;
+  }
   let affiliateId = null;
   let numericCode = null;
   if (typeof startAffiliateCode === "string" && /^[0-9]+$/.test(startAffiliateCode)) {
@@ -167,39 +170,53 @@ async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
     }
   }
 
-  if (!affiliateId) {
-    const adminIds = parseAdminTelegramIds();
-    if (adminIds.length > 0) {
-      const adminAffiliateRes = await client.query(
-        `SELECT a.id
-         FROM affiliates a
-         JOIN users u ON u.id = a.user_id
-         WHERE u.telegram_id = ANY($1::bigint[])
-         ORDER BY a.created_at ASC
-         LIMIT 1`,
-        [adminIds]
-      );
-      if (adminAffiliateRes.rowCount > 0) {
-        affiliateId = adminAffiliateRes.rows[0].id;
-      }
-    }
-  }
-
-  if (!affiliateId) {
-    const fallback = await client.query(
-      `SELECT id
-       FROM affiliates
-       ORDER BY created_at ASC
-       LIMIT 1`
-    );
-
-    if (fallback.rowCount > 0) {
-      // Fallback: use the earliest affiliate when no code or admin affiliate exists.
-      affiliateId = fallback.rows[0].id;
-    }
-  }
-
   return affiliateId;
+}
+
+async function validateAffiliateCode(client, code, telegramId) {
+  if (!code) {
+    return { error: "INVALID_CODE" };
+  }
+  const raw = String(code).trim();
+  if (raw.length === 0) {
+    return { error: "INVALID_CODE" };
+  }
+  if (/^[0-9]+$/.test(raw)) {
+    const numeric = Number(raw);
+    if (Number(numeric) === Number(telegramId)) {
+      return { error: "SELF_CODE" };
+    }
+    const res = await client.query(
+      `SELECT a.id
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE u.telegram_id = $1 AND a.status = 'APPROVED'
+       LIMIT 1`,
+      [numeric]
+    );
+    if (res.rowCount === 0) {
+      return { error: "INVALID_CODE" };
+    }
+    return { affiliateId: res.rows[0].id };
+  }
+  if (isUuid(raw)) {
+    const res = await client.query(
+      `SELECT a.id, u.telegram_id
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       WHERE a.id = $1 AND a.status = 'APPROVED'
+       LIMIT 1`,
+      [raw]
+    );
+    if (res.rowCount === 0) {
+      return { error: "INVALID_CODE" };
+    }
+    if (Number(res.rows[0].telegram_id) === Number(telegramId)) {
+      return { error: "SELF_CODE" };
+    }
+    return { affiliateId: res.rows[0].id };
+  }
+  return { error: "INVALID_CODE" };
 }
 
 async function isUserBanned(client, telegramId) {
@@ -248,7 +265,14 @@ async function upsertTelegramUser(req, res, next) {
        ON CONFLICT (telegram_id)
        DO UPDATE SET telegram_username = EXCLUDED.telegram_username,
                      telegram_photo_file_id = COALESCE(EXCLUDED.telegram_photo_file_id, users.telegram_photo_file_id),
-                     locale = COALESCE(EXCLUDED.locale, users.locale)
+                     locale = COALESCE(EXCLUDED.locale, users.locale),
+                     referred_by_affiliate_id = COALESCE(users.referred_by_affiliate_id, EXCLUDED.referred_by_affiliate_id),
+                     referred_at = CASE
+                       WHEN users.referred_by_affiliate_id IS NULL
+                         AND EXCLUDED.referred_by_affiliate_id IS NOT NULL
+                       THEN EXCLUDED.referred_at
+                       ELSE users.referred_at
+                     END
        RETURNING *, (xmax = 0) AS is_new`,
       [telegramId, username, photoFileId, affiliateId, referredAt, userLocale]
     );
@@ -264,6 +288,81 @@ async function upsertTelegramUser(req, res, next) {
       is_new: isNew,
       affiliate_assigned: affiliateAssigned,
     });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+}
+
+async function assignAffiliateCode(req, res, next) {
+  const telegramId = Number(req.body.telegram_id);
+  const code = req.body.code;
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  if (!code) {
+    return res.status(400).json({ error: "INVALID_CODE" });
+  }
+
+  const pool = getPool();
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const userRes = await client.query(
+      `SELECT id, referred_by_affiliate_id
+       FROM users
+       WHERE telegram_id = $1
+       FOR UPDATE`,
+      [telegramId]
+    );
+    if (userRes.rowCount === 0) {
+      await client.query(
+        `INSERT INTO users (telegram_id)
+         VALUES ($1)`,
+        [telegramId]
+      );
+    }
+
+    const currentRes = await client.query(
+      `SELECT referred_by_affiliate_id
+       FROM users
+       WHERE telegram_id = $1
+       FOR UPDATE`,
+      [telegramId]
+    );
+    const currentReferrer = currentRes.rows[0]?.referred_by_affiliate_id;
+    if (currentReferrer) {
+      await client.query("COMMIT");
+      return res.status(409).json({ error: "ALREADY_ASSIGNED" });
+    }
+
+    const validation = await validateAffiliateCode(client, code, telegramId);
+    if (validation.error) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: validation.error });
+    }
+
+    const affiliateId = validation.affiliateId;
+    const updateRes = await client.query(
+      `UPDATE users
+       SET referred_by_affiliate_id = $1,
+           referred_at = now()
+       WHERE telegram_id = $2
+         AND referred_by_affiliate_id IS NULL
+       RETURNING referred_by_affiliate_id`,
+      [affiliateId, telegramId]
+    );
+    if (updateRes.rowCount === 0) {
+      await client.query("COMMIT");
+      return res.status(409).json({ error: "ALREADY_ASSIGNED" });
+    }
+
+    await client.query("COMMIT");
+    return res.json({ ok: true, affiliate_id: affiliateId });
   } catch (error) {
     await client.query("ROLLBACK");
     return next(error);
@@ -1340,6 +1439,7 @@ module.exports = {
   getAffiliateStatus,
   getAffiliateTop,
   applyAffiliate,
+  assignAffiliateCode,
   requestAffiliatePayout,
   decideAffiliateStatus,
   decideAffiliateInvoice,

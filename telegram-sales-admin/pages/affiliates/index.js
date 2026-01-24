@@ -1137,7 +1137,7 @@ export default function AffiliatesPage() {
                             onClick={() =>
                               handleCopy(
                                 "Link de afiliado",
-                                `https://t.me/${botUsername}?start=${user?.telegram_id || ""}`
+                                `https://t.me/${String(botUsername || "").replace(/^@/, "")}?start=${user?.telegram_id || ""}`
                               )
                             }
                           >

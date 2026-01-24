@@ -10,6 +10,11 @@ API_BASE_URL = os.getenv("API_BASE_URL", "http://localhost:3001")
 API_TOKEN = os.getenv("API_TOKEN")
 BOT_TO_API_SECRET = os.getenv("BOT_TO_API_SECRET")
 BOT_USERNAME = os.getenv("BOT_USERNAME")
+BOT_MAIN_IMAGE_URL = os.getenv("BOT_MAIN_IMAGE_URL")
+BOT_AFFILIATE_PANEL_IMAGE_URL = os.getenv("BOT_AFFILIATE_PANEL_IMAGE_URL")
+BOT_CART_IMAGE_URL = os.getenv("BOT_CART_IMAGE_URL")
+BOT_COMMUNITY_IMAGE_URL = os.getenv("BOT_COMMUNITY_IMAGE_URL")
+BOT_SHOP_SECTION_IMAGE_URL = os.getenv("BOT_SHOP_SECTION_IMAGE_URL")
 
 
 def _parse_bool(value: str, default: bool = False) -> bool:

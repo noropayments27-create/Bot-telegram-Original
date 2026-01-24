@@ -7,6 +7,7 @@ from aiogram.fsm.storage.memory import MemoryStorage
 from .config import TELEGRAM_BOT_TOKEN
 from .handlers import admin_auth, affiliates, lang, start, shop, support
 from .middlewares.ban_guard import BanGuardMiddleware
+from .middlewares.access_code import AccessCodeMiddleware
 
 
 async def main() -> None:
@@ -19,8 +20,11 @@ async def main() -> None:
     dp = Dispatcher(storage=MemoryStorage())
 
     ban_guard = BanGuardMiddleware()
+    access_guard = AccessCodeMiddleware()
     dp.message.middleware(ban_guard)
     dp.callback_query.middleware(ban_guard)
+    dp.message.middleware(access_guard)
+    dp.callback_query.middleware(access_guard)
 
     dp.include_router(start.router)
     dp.include_router(lang.router)

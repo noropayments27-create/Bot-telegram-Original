@@ -7,6 +7,7 @@ const {
   getAffiliateStatus,
   getAffiliateTop,
   applyAffiliate,
+  assignAffiliateCode,
   requestAffiliatePayout,
   decideAffiliateStatus,
   decideAffiliateInvoice,
@@ -26,6 +27,7 @@ function requireBotSecret(req, res, next) {
 router.get("/affiliates/status", requireBotSecret, getAffiliateStatus);
 router.get("/affiliates/top", requireBotSecret, getAffiliateTop);
 router.post("/affiliates/apply", requireBotSecret, applyAffiliate);
+router.post("/affiliates/code/assign", requireBotSecret, assignAffiliateCode);
 router.post("/affiliates/withdraw", requireBotSecret, requestAffiliatePayout);
 router.post("/affiliates/invoices/decision", requireBotSecret, decideAffiliateInvoice);
 router.post("/affiliates/:id/decision", requireBotSecret, decideAffiliateStatus);

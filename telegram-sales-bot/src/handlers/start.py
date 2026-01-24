@@ -3,11 +3,16 @@ from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
 from aiogram.types import FSInputFile
 import os
+import re
 from aiogram.fsm.context import FSMContext
+import logging
 
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
+    BOT_COMMUNITY_IMAGE_URL,
+    BOT_MAIN_IMAGE_URL,
+    ADMIN_TELEGRAM_IDS,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
@@ -21,16 +26,78 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .menu import build_home_text, build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
 from .support import start_support_flow
-from ..utils.main_view import render_main_view, set_main_message_id, pop_previous_view
+from ..utils.main_view import (
+    render_main_view,
+    render_main_view_with_photo,
+    set_main_message_id,
+    pop_previous_view,
+)
 from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
+from ..states.access import AccessStates
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
+logger = logging.getLogger(__name__)
+
+
+def _get_home_photo():
+    if BOT_MAIN_IMAGE_URL:
+        return BOT_MAIN_IMAGE_URL
+    return FSInputFile(
+        os.path.join(os.path.dirname(__file__), "..", "..", "assets", "bot-noropayments.png")
+    )
+
+
+async def _render_home_view(
+    message: Message,
+    user_id: int,
+    locale: str | None,
+    *,
+    push_history: bool = True,
+) -> None:
+    await render_main_view_with_photo(
+        message,
+        user_id,
+        build_home_text(locale),
+        _get_home_photo(),
+        reply_markup=build_main_keyboard(locale),
+        parse_mode="HTML",
+        push_history=push_history,
+    )
+
+
+async def _assign_access_code(
+    message: Message,
+    user_id: int,
+    code: str,
+    locale: str | None,
+) -> bool:
+    if not code:
+        await message.answer(t(locale, "access_code_invalid"))
+        return False
+    result = await api_client.assign_affiliate_code(
+        {"telegram_id": user_id, "code": code}, BOT_TO_API_SECRET
+    )
+    if result.get("status_code") == 409:
+        await message.answer(t(locale, "access_code_already_assigned"))
+        return False
+    if result.get("status_code") == 400:
+        error = (result.get("data") or {}).get("error")
+        if error == "SELF_CODE":
+            await message.answer(t(locale, "access_code_self"))
+            return False
+        await message.answer(t(locale, "access_code_invalid"))
+        return False
+    if result.get("status_code") and result.get("status_code") >= 400:
+        await message.answer(t(locale, "access_code_invalid"))
+        return False
+    await message.answer(t(locale, "access_code_accepted"))
+    return True
 
 
 @router.message(Command("start"))
-async def handle_start(message: Message) -> None:
+async def handle_start(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
     locale = await get_user_locale(
@@ -76,8 +143,6 @@ async def handle_start(message: Message) -> None:
             if not message.from_user.language_code
             or (message.from_user.language_code or "").lower().startswith("es")
             else "en",
-            "start_payload": start_payload,
-            "start_affiliate_code": start_payload,
         }
         result = await api_client.upsert_telegram_user(payload)
         if result["status_code"] == 403:
@@ -90,20 +155,49 @@ async def handle_start(message: Message) -> None:
     except Exception:
         pass
 
+    if message.from_user.id not in ADMIN_TELEGRAM_IDS:
+        try:
+            user_data = await api_client.get_user(message.from_user.id)
+            referred = (user_data.get("user") or {}).get("referred_by_affiliate_id")
+        except Exception:
+            referred = None
+
+        if referred:
+            if start_payload:
+                await message.answer(t(locale, "access_code_already_assigned"))
+            locale = await get_user_locale(
+                api_client, message.from_user.id, message.from_user.language_code
+            )
+            await state.clear()
+            await _render_home_view(message, message.from_user.id, locale)
+            return
+
+        if start_payload:
+            locale = await get_user_locale(
+                api_client, message.from_user.id, message.from_user.language_code
+            )
+            accepted = await _assign_access_code(
+                message, message.from_user.id, start_payload, locale
+            )
+            if accepted:
+                await state.clear()
+                await _render_home_view(message, message.from_user.id, locale)
+                return
+            await state.set_state(AccessStates.awaiting_code)
+            return
+
+        locale = await get_user_locale(
+            api_client, message.from_user.id, message.from_user.language_code
+        )
+        await message.answer(t(locale, "access_code_prompt"))
+        await state.set_state(AccessStates.awaiting_code)
+        return
+
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
-    photo_path = os.path.join(
-        os.path.dirname(__file__), "..", "..", "assets", "bot-noropayments.png"
-    )
-    sent = await message.answer_photo(
-        photo=FSInputFile(photo_path),
-        caption=build_home_text(locale),
-        reply_markup=build_main_keyboard(locale),
-        parse_mode="HTML",
-    )
-    if sent:
-        set_main_message_id(message.from_user.id, sent.message_id)
+    await state.clear()
+    await _render_home_view(message, message.from_user.id, locale)
 
 
 @router.callback_query(F.data == "home:show")
@@ -127,14 +221,59 @@ async def handle_home_show(callback: CallbackQuery) -> None:
         return
     await stop_order_watch(callback.from_user.id, "home")
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    await render_main_view(
+    await _render_home_view(
         callback.message,
         callback.from_user.id,
-        build_home_text(locale),
-        reply_markup=build_main_keyboard(locale),
-        parse_mode="HTML",
+        locale,
     )
     await callback.answer()
+
+
+@router.message(AccessStates.awaiting_code, F.text)
+async def handle_access_code_message(message: Message, state: FSMContext) -> None:
+    if not message.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
+    code = (message.text or "").strip()
+    if not code:
+        await message.answer(t(locale, "access_code_wait_numeric"))
+        return
+    if not (code.isdigit() or re.match(r"^[0-9a-fA-F-]{32,36}$", code)):
+        await message.answer(t(locale, "access_code_wait_numeric"))
+        return
+
+    try:
+        user_data = await api_client.get_user(message.from_user.id)
+        referred = (user_data.get("user") or {}).get("referred_by_affiliate_id")
+    except Exception:
+        referred = None
+
+    if referred:
+        await message.answer(t(locale, "access_code_already_assigned"))
+        await state.clear()
+        await _render_home_view(message, message.from_user.id, locale)
+        return
+
+    accepted = await _assign_access_code(message, message.from_user.id, code, locale)
+    if accepted:
+        logger.info("access_code_valid user=%s", message.from_user.id)
+        await state.clear()
+        await _render_home_view(message, message.from_user.id, locale)
+        return
+    logger.info("access_code_invalid user=%s", message.from_user.id)
+    await state.set_state(AccessStates.awaiting_code)
+
+
+@router.callback_query(AccessStates.awaiting_code)
+async def handle_access_code_callback(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    await callback.answer(t(locale, "access_code_required"), show_alert=True)
 
 
 @router.callback_query(F.data == "nav:back")
@@ -146,12 +285,10 @@ async def handle_nav_back(callback: CallbackQuery) -> None:
         locale = await get_user_locale(
             api_client, callback.from_user.id, callback.from_user.language_code
         )
-        await render_main_view(
+        await _render_home_view(
             callback.message,
             callback.from_user.id,
-            build_home_text(locale),
-            reply_markup=build_main_keyboard(locale),
-            parse_mode="HTML",
+            locale,
             push_history=False,
         )
         await callback.answer()
@@ -272,11 +409,21 @@ async def handle_home_community(callback: CallbackQuery) -> None:
             ]
         ]
     )
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        build_community_text(locale),
-        reply_markup=keyboard,
-        parse_mode="HTML",
-    )
+    if BOT_COMMUNITY_IMAGE_URL:
+        await render_main_view_with_photo(
+            callback.message,
+            callback.from_user.id,
+            build_community_text(locale),
+            BOT_COMMUNITY_IMAGE_URL,
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
+    else:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            build_community_text(locale),
+            reply_markup=keyboard,
+            parse_mode="HTML",
+        )
     await callback.answer()

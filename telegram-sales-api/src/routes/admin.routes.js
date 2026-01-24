@@ -19,6 +19,7 @@ const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
 const { deliverOrderToTelegram } = require("../services/delivery");
 const { getAffiliateLevel } = require("../services/affiliateLevels");
+const env = require("../config/env");
 
 const MESSAGES = {
   es: {
@@ -4437,7 +4438,7 @@ router.post("/affiliates/:id/invoices", async (req, res, next) => {
 
     if (affiliate.telegram_id) {
       sendPhoto(affiliate.telegram_id, {
-        url: "https://i.ibb.co/hJL9BQSr/FACTURA.png",
+        url: env.AFFILIATE_INVOICE_IMAGE_URL || "https://i.ibb.co/hJL9BQSr/FACTURA.png",
         caption: message,
         parse_mode: "HTML",
         reply_markup: replyMarkup,

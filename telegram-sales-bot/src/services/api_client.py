@@ -306,6 +306,21 @@ class ApiClient:
                 "status_code": response.status_code,
             }
 
+    async def assign_affiliate_code(
+        self, payload: Dict[str, Any], bot_secret: Optional[str]
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/affiliates/code/assign"
+        headers = {"x-bot-secret": bot_secret} if bot_secret else {}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=headers, timeout=10)
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            if response.status_code >= 400:
+                return {"status_code": response.status_code, "data": data}
+            return {"status_code": response.status_code, "data": data}
+
     async def send_ticket_message(
         self, ticket_id: str, payload: Dict[str, Any]
     ) -> Dict[str, Any]:
