@@ -1,6 +1,9 @@
 const dotenv = require('dotenv');
 
-dotenv.config();
+// SOLO cargar .env en desarrollo/local
+if (process.env.NODE_ENV !== 'production') {
+  dotenv.config();
+}
 
 const env = {
   NODE_ENV: process.env.NODE_ENV || 'development',
@@ -13,7 +16,7 @@ const env = {
   AFFILIATE_INVOICE_IMAGE_URL: process.env.AFFILIATE_INVOICE_IMAGE_URL,
   TELEGRAM_BOT_WEBHOOK_SECRET: process.env.TELEGRAM_BOT_WEBHOOK_SECRET,
   DELIVERY_INITIAL_DELAY_MS: process.env.DELIVERY_INITIAL_DELAY_MS,
-  DELIVERY_MESSAGE_INTERVAL_MS: process.env.DELIVERY_MESSAGE_INTERVAL_MS
+  DELIVERY_MESSAGE_INTERVAL_MS: process.env.DELIVERY_MESSAGE_INTERVAL_MS,
 };
 
 module.exports = env;
