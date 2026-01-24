@@ -17,10 +17,11 @@ async function expireWaitingPaymentOrders() {
     1
   );
   const pool = getPool();
-  const client = await pool.connect();
+  let client;
   const expiredOrders = [];
 
   try {
+    client = await pool.connect();
     await client.query("BEGIN");
 
     const ordersRes = await client.query(
@@ -76,10 +77,18 @@ async function expireWaitingPaymentOrders() {
 
     await client.query("COMMIT");
   } catch (error) {
-    await client.query("ROLLBACK");
+    if (client) {
+      try {
+        await client.query("ROLLBACK");
+      } catch (rollbackError) {
+        console.error("[order-expiry] rollback failed:", rollbackError);
+      }
+    }
     console.error("[order-expiry] failed:", error);
   } finally {
-    client.release();
+    if (client) {
+      client.release();
+    }
     running = false;
   }
 

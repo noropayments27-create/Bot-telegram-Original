@@ -21,6 +21,20 @@ const { deliverOrderToTelegram } = require("../services/delivery");
 const { getAffiliateLevel } = require("../services/affiliateLevels");
 const env = require("../config/env");
 
+let payoutReceiptSchemaReady = false;
+async function ensurePayoutReceiptSchema(pool) {
+  if (payoutReceiptSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `ALTER TABLE payouts
+     ADD COLUMN IF NOT EXISTS receipt_path text,
+     ADD COLUMN IF NOT EXISTS receipt_filename text,
+     ADD COLUMN IF NOT EXISTS receipt_mime text`
+  );
+  payoutReceiptSchemaReady = true;
+}
+
 const MESSAGES = {
   es: {
     payment_received: "🎉 Felicidades, hemos recibido tu pago 🎉 🥳",
@@ -4022,6 +4036,29 @@ router.get("/affiliates/:id", async (req, res, next) => {
       [affiliateId]
     );
 
+    const rankRes = await pool.query(
+      `WITH sales AS (
+         SELECT a.id,
+                COALESCE(SUM(CASE WHEN c.id IS NULL THEN 0 ELSE COALESCE(oi.sale_qty, 1) END), 0)::int AS sales_count
+         FROM affiliates a
+         LEFT JOIN commissions c ON c.affiliate_id = a.id AND c.status != 'REFUNDED'
+         LEFT JOIN (
+           SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+           FROM order_items
+           GROUP BY order_id
+         ) oi ON oi.order_id = c.order_id
+         GROUP BY a.id
+       ),
+       ranked AS (
+         SELECT id,
+                sales_count,
+                RANK() OVER (ORDER BY sales_count DESC, id) AS sales_rank
+         FROM sales
+       )
+       SELECT sales_rank FROM ranked WHERE id = $1`,
+      [affiliateId]
+    );
+
     const row = affiliateRes.rows[0];
 
     const adminIds = parseAdminTelegramIds();
@@ -4033,7 +4070,10 @@ router.get("/affiliates/:id", async (req, res, next) => {
     const displayUsername = isPlaceholderAffiliate ? adminUsername : row.telegram_username;
 
     return res.json({
-      affiliate: row,
+      affiliate: {
+        ...row,
+        sales_rank: rankRes.rows[0]?.sales_rank || null,
+      },
       user: {
         telegram_id: displayTelegramId,
         telegram_username: displayUsername,
@@ -4590,6 +4630,7 @@ router.get("/payouts/:id", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    await ensurePayoutReceiptSchema(pool);
     const payoutRes = await pool.query(
       `WITH numbered AS (
          SELECT id,
@@ -4665,6 +4706,67 @@ router.get("/payouts/:id", async (req, res, next) => {
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/payouts/:id/receipt", async (req, res, next) => {
+  const payoutId = req.params.id;
+  if (!/^[0-9a-fA-F-]{36}$/.test(payoutId || "")) {
+    return res.status(400).json({ error: "INVALID_PAYOUT_ID" });
+  }
+  const pool = getPool();
+  try {
+    await ensurePayoutReceiptSchema(pool);
+    const payoutRes = await pool.query(
+      `SELECT receipt_path, receipt_filename, receipt_mime
+       FROM payouts
+       WHERE id = $1`,
+      [payoutId]
+    );
+    if (payoutRes.rowCount === 0) {
+      return res.status(404).json({ error: "PAYOUT_NOT_FOUND" });
+    }
+    const receipt = payoutRes.rows[0];
+    if (!receipt.receipt_path) {
+      return res.status(404).json({ error: "RECEIPT_NOT_FOUND" });
+    }
+    const buffer = await fs.readFile(receipt.receipt_path);
+    res.set("Content-Type", receipt.receipt_mime || "image/png");
+    res.set("Cache-Control", "private, max-age=300");
+    return res.send(buffer);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/payouts/:id/receipt/download", async (req, res, next) => {
+  const payoutId = req.params.id;
+  if (!/^[0-9a-fA-F-]{36}$/.test(payoutId || "")) {
+    return res.status(400).json({ error: "INVALID_PAYOUT_ID" });
+  }
+  const pool = getPool();
+  try {
+    await ensurePayoutReceiptSchema(pool);
+    const payoutRes = await pool.query(
+      `SELECT receipt_path, receipt_filename, receipt_mime
+       FROM payouts
+       WHERE id = $1`,
+      [payoutId]
+    );
+    if (payoutRes.rowCount === 0) {
+      return res.status(404).json({ error: "PAYOUT_NOT_FOUND" });
+    }
+    const receipt = payoutRes.rows[0];
+    if (!receipt.receipt_path) {
+      return res.status(404).json({ error: "RECEIPT_NOT_FOUND" });
+    }
+    const buffer = await fs.readFile(receipt.receipt_path);
+    const filename = receipt.receipt_filename || `recibo-retiro-${payoutId}.png`;
+    res.set("Content-Type", receipt.receipt_mime || "image/png");
+    res.set("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(buffer);
+  } catch (error) {
+    return next(error);
   }
 });
 
@@ -4953,6 +5055,7 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
   const client = await pool.connect();
 
   try {
+    await ensurePayoutReceiptSchema(pool);
     await client.query("BEGIN");
 
     const payoutRes = await client.query(
@@ -5090,8 +5193,10 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
 
     await client.query("COMMIT");
 
-    const message = "🎉 **¡Pago de comisiones realizado con éxito!** 💸\n\nHemos procesado correctamente el pago de tus comisiones. Gracias por tu trabajo y por confiar en nosotros 🙌\n\n🚀 Sigue publicando y promocionando para llegar a más clientes y aumentar tus ganancias.\n\n💼✨ ¡Vamos por más!";
+    const message = "✅💸 ¡Tu pago se ha enviado exitosamente! 🙌\n\n🧾 En breve recibirás tu recibo de pago.";
     try {
+      await sendMessage(payout.telegram_id, message);
+      await new Promise((resolve) => setTimeout(resolve, 10000));
       const affiliateNumber = payout.affiliate_number
         ? `#${payout.affiliate_number}`
         : "#-";
@@ -5124,17 +5229,25 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
         locale: "es",
       });
       try {
-        await sendPhoto(payout.telegram_id, { path: receiptPng.pngPath });
+        const receiptsDir = path.resolve(__dirname, "..", "..", "uploads", "payout-receipts");
+        await fs.mkdir(receiptsDir, { recursive: true });
+        const filename = `payout-${payout.id}.png`;
+        const storedPath = path.join(receiptsDir, filename);
+        await fs.copyFile(receiptPng.pngPath, storedPath);
+        await client.query(
+          `UPDATE payouts
+           SET receipt_path = $1,
+               receipt_filename = $2,
+               receipt_mime = $3
+           WHERE id = $4`,
+          [storedPath, filename, "image/png", payout.id]
+        );
+        await sendPhoto(payout.telegram_id, { path: storedPath });
       } finally {
         await receiptPng.cleanup();
       }
     } catch (err) {
       console.error("Telegram payout receipt failed", err);
-      try {
-        await sendMessage(payout.telegram_id, message, { parse_mode: "Markdown" });
-      } catch (fallbackError) {
-        console.error("Telegram payout receipt fallback failed", fallbackError);
-      }
     }
 
     return res.json({
@@ -5493,7 +5606,9 @@ router.post("/tickets/:id/reply", async (req, res, next) => {
         sentPhoto = await sendPhoto(ticket.telegram_id, {
           path: tempPath,
           filename,
-          caption: messageText || undefined,
+          caption: messageText
+            ? `<b>🤖 Soporte</b>\n\nRespuesta:\n\n${messageText}`
+            : undefined,
           parse_mode: "HTML",
         });
       } finally {
@@ -5507,8 +5622,8 @@ router.post("/tickets/:id/reply", async (req, res, next) => {
         telegramFileId = sentPhoto.photo[sentPhoto.photo.length - 1].file_id;
       }
     } else {
-      const text = `📩 Respuesta de soporte:\n\n${messageText}`;
-      await sendMessage(ticket.telegram_id, text);
+      const text = `<b>🤖 Soporte</b>\n\nRespuesta:\n\n${messageText}`;
+      await sendMessage(ticket.telegram_id, text, { parse_mode: "HTML" });
     }
 
     const msgRes = await client.query(

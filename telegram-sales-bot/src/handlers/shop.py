@@ -24,6 +24,15 @@ from ..config import (
     API_BASE_URL,
     API_TOKEN,
     BOT_CART_IMAGE_URL,
+    BOT_PAYMENT_BINANCE_IMAGE_URL,
+    BOT_PAYMENT_CRYPTO_IMAGE_URL,
+    BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
+    BOT_PAYMENT_NEQUI_IMAGE_URL,
+    BOT_PAYMENT_PAYPAL_IMAGE_URL,
+    BOT_CRYPTO_BTC_IMAGE_URL,
+    BOT_CRYPTO_USDT_TRON_IMAGE_URL,
+    BOT_CRYPTO_USDT_BSC_IMAGE_URL,
+    BOT_CRYPTO_LTC_IMAGE_URL,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
@@ -65,6 +74,19 @@ _CATEGORY_TITLES = {
     "metodos": "✅ Métodos",
     "vip": "💬 VIP",
     "programas": "💻 Programas y Web",
+}
+_PAYMENT_METHOD_IMAGES = {
+    "nequi": BOT_PAYMENT_NEQUI_IMAGE_URL,
+    "binance": BOT_PAYMENT_BINANCE_IMAGE_URL,
+    "crypto": BOT_PAYMENT_CRYPTO_IMAGE_URL,
+    "mp": BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
+    "paypal": BOT_PAYMENT_PAYPAL_IMAGE_URL,
+}
+_CRYPTO_ASSET_IMAGES = {
+    "btc": BOT_CRYPTO_BTC_IMAGE_URL,
+    "usdt_tron": BOT_CRYPTO_USDT_TRON_IMAGE_URL,
+    "usdt_bsc": BOT_CRYPTO_USDT_BSC_IMAGE_URL,
+    "ltc": BOT_CRYPTO_LTC_IMAGE_URL,
 }
 class PaymentStates(StatesGroup):
     waiting_photo = State()
@@ -133,6 +155,14 @@ async def _render_cart_view(
         reply_markup=reply_markup,
         parse_mode=parse_mode,
     )
+
+
+def _get_payment_method_image(method_key: str) -> str | None:
+    return _PAYMENT_METHOD_IMAGES.get(method_key)
+
+
+def _get_crypto_asset_image(asset_key: str) -> str | None:
+    return _CRYPTO_ASSET_IMAGES.get(asset_key)
 def _build_cart_text(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
@@ -1594,25 +1624,46 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
         await callback.answer()
         return
     if method_key == "crypto":
-        await render_main_view(
-            callback.message,
-            callback.from_user.id,
-            t(locale, "payment_choose_crypto"),
-            reply_markup=build_crypto_assets_keyboard(order_id, page, index, locale),
-        )
+        method_image = _get_payment_method_image(method_key)
+        if method_image:
+            await render_main_view_with_photo(
+                callback.message,
+                callback.from_user.id,
+                t(locale, "payment_choose_crypto"),
+                method_image,
+                reply_markup=build_crypto_assets_keyboard(order_id, page, index, locale),
+            )
+        else:
+            await render_main_view(
+                callback.message,
+                callback.from_user.id,
+                t(locale, "payment_choose_crypto"),
+                reply_markup=build_crypto_assets_keyboard(order_id, page, index, locale),
+            )
         await callback.answer()
         return
     data = await state.get_data()
     total = data.get("current_order_total")
     summary = data.get("current_order_summary")
     text = await _build_payment_instructions(method_key, total, summary, locale)
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        text,
-        reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
-        parse_mode=ParseMode.HTML,
-    )
+    method_image = _get_payment_method_image(method_key)
+    if method_image:
+        await render_main_view_with_photo(
+            callback.message,
+            callback.from_user.id,
+            text,
+            method_image,
+            reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            text,
+            reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
+            parse_mode=ParseMode.HTML,
+        )
     await state.update_data(
         payment_method=method_key,
         payment_method_order_id=order_id,
@@ -2012,13 +2063,24 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         f"{t(locale, 'payment_send_label_bold').format(amount=send_str)}\n\n"
         f"{t(locale, 'payment_after_pay_short')}"
     )
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        text,
-        reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
-        parse_mode=ParseMode.HTML,
-    )
+    asset_image = _get_crypto_asset_image(asset_key)
+    if asset_image:
+        await render_main_view_with_photo(
+            callback.message,
+            callback.from_user.id,
+            text,
+            asset_image,
+            reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
+            parse_mode=ParseMode.HTML,
+        )
+    else:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            text,
+            reply_markup=build_payment_prompt_keyboard(order_id, page, index, locale),
+            parse_mode=ParseMode.HTML,
+        )
     await state.update_data(
         payment_method=asset_key,
         payment_method_order_id=order_id,

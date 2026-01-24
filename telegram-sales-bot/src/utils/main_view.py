@@ -19,8 +19,10 @@ def _record_view_state(
     text: str,
     reply_markup: Optional[InlineKeyboardMarkup],
     parse_mode: Optional[ParseMode | str],
+    photo: Optional[str] = None,
     *,
     push_history: bool = True,
+    keep_photo: bool = False,
 ) -> None:
     previous = _LAST_VIEW_BY_USER.get(user_id)
     if push_history and previous:
@@ -28,10 +30,13 @@ def _record_view_state(
         history.append(previous)
         if len(history) > _MAX_HISTORY:
             history.pop(0)
+    if keep_photo and photo is None and previous:
+        photo = previous.get("photo")  # type: ignore[assignment]
     _LAST_VIEW_BY_USER[user_id] = {
         "text": text,
         "reply_markup": reply_markup,
         "parse_mode": parse_mode,
+        "photo": photo,
     }
 
 
@@ -87,7 +92,12 @@ async def try_edit_main_view(
                     parse_mode=parse_mode,
                 )
                 _record_view_state(
-                    user_id, text, reply_markup, parse_mode, push_history=push_history
+                    user_id,
+                    text,
+                    reply_markup,
+                    parse_mode,
+                    push_history=push_history,
+                    keep_photo=True,
                 )
                 return True
             except TelegramBadRequest as caption_exc:
@@ -144,6 +154,7 @@ async def render_main_view(
                         reply_markup,
                         parse_mode,
                         push_history=push_history,
+                        keep_photo=True,
                     )
                     return message
                 except TelegramBadRequest as caption_exc:
@@ -189,7 +200,12 @@ async def render_main_view_with_photo(
                 reply_markup=reply_markup,
             )
             _record_view_state(
-                user_id, text, reply_markup, parse_mode, push_history=push_history
+                user_id,
+                text,
+                reply_markup,
+                parse_mode,
+                photo,
+                push_history=push_history,
             )
             return message
         except TelegramBadRequest as exc:
@@ -206,6 +222,11 @@ async def render_main_view_with_photo(
     if sent:
         _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
         _record_view_state(
-            user_id, text, reply_markup, parse_mode, push_history=push_history
+            user_id,
+            text,
+            reply_markup,
+            parse_mode,
+            photo,
+            push_history=push_history,
         )
     return sent

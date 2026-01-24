@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
-import { apiFetch, getAuthToken } from "../../lib/api";
+import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconPayouts } from "../../components/PanelIcons";
 
 const STATUS_OPTIONS = [
@@ -85,6 +85,8 @@ export default function PayoutsPage() {
   const [detailLoading, setDetailLoading] = useState({});
   const [detailErrors, setDetailErrors] = useState({});
   const [detailMessages, setDetailMessages] = useState({});
+  const [receiptUrls, setReceiptUrls] = useState({});
+  const [previewUrl, setPreviewUrl] = useState("");
   const [reasonById, setReasonById] = useState({});
   const [markingSentById, setMarkingSentById] = useState({});
   const [toast, setToast] = useState("");
@@ -179,6 +181,14 @@ export default function PayoutsPage() {
       delete next[payoutId];
       return next;
     });
+    setReceiptUrls((prev) => {
+      const next = { ...prev };
+      if (next[payoutId]) {
+        URL.revokeObjectURL(next[payoutId]);
+      }
+      delete next[payoutId];
+      return next;
+    });
   }, []);
 
   const loadDetail = useCallback(async (payoutId) => {
@@ -190,11 +200,25 @@ export default function PayoutsPage() {
     try {
       const data = await apiFetch(`/admin/payouts/${payoutId}`);
       setDetails((prev) => ({ ...prev, [payoutId]: data }));
+      try {
+        const result = await apiFetchBinary(`/admin/payouts/${payoutId}/receipt`);
+        const blob = new Blob([result.buffer], { type: result.contentType });
+        const url = URL.createObjectURL(blob);
+        setReceiptUrls((prev) => {
+          if (prev[payoutId]) {
+            URL.revokeObjectURL(prev[payoutId]);
+          }
+          return { ...prev, [payoutId]: url };
+        });
+      } catch (err) {
+        setReceiptUrls((prev) => ({ ...prev, [payoutId]: "" }));
+      }
     } catch (err) {
       setDetailErrors((prev) => ({
         ...prev,
         [payoutId]: "No se pudo cargar el payout.",
       }));
+      setReceiptUrls((prev) => ({ ...prev, [payoutId]: "" }));
     } finally {
       setDetailLoading((prev) => ({ ...prev, [payoutId]: false }));
     }
@@ -251,6 +275,16 @@ export default function PayoutsPage() {
     });
   }, [detailLoading, details, loadDetail, selectedPayoutIds]);
 
+  useEffect(() => {
+    return () => {
+      Object.values(receiptUrls).forEach((url) => {
+        if (url) {
+          URL.revokeObjectURL(url);
+        }
+      });
+    };
+  }, [receiptUrls]);
+
   const handleMarkSent = async (payoutId) => {
     try {
       const currentScroll = window.scrollY;
@@ -297,6 +331,29 @@ export default function PayoutsPage() {
       }));
     }
   };
+
+  const handleReceiptDownload = useCallback(async (payoutId) => {
+    if (!payoutId) {
+      return;
+    }
+    try {
+      const result = await apiFetchBinary(`/admin/payouts/${payoutId}/receipt/download`);
+      const blob = new Blob([result.buffer], { type: result.contentType });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = `payout_${payoutId}_receipt.png`;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+    } catch (err) {
+      setDetailMessages((prev) => ({
+        ...prev,
+        [payoutId]: "No se pudo descargar el recibo.",
+      }));
+    }
+  }, []);
 
   const handleCopy = async (label, value) => {
     if (!value) {
@@ -426,6 +483,7 @@ export default function PayoutsPage() {
             const affiliate = detail?.affiliate;
             const user = detail?.user;
             const availableBalance = detail?.available_balance;
+            const receiptUrl = receiptUrls[payoutId];
             const availableBalanceText = Number.isFinite(Number(availableBalance))
               ? formatUsdAmount(availableBalance)
               : "-";
@@ -506,6 +564,35 @@ export default function PayoutsPage() {
                             {formatUsername(user?.telegram_username)}
                           </button>
                         </p>
+                        <div className="orders-detail-subseparator"></div>
+                        <h3>Recibo</h3>
+                        {receiptUrl ? (
+                          <div className="orders-proof orders-proof--side payouts-receipt">
+                            <div>
+                              <img
+                                src={receiptUrl}
+                                alt="Recibo de retiro"
+                                className="payment-proof payout-receipt-image"
+                                onClick={() => setPreviewUrl(receiptUrl)}
+                                role="button"
+                                tabIndex={0}
+                                onKeyDown={(event) => {
+                                  if (event.key === "Enter" || event.key === " ") {
+                                    setPreviewUrl(receiptUrl);
+                                  }
+                                }}
+                              />
+                              <button
+                                type="button"
+                                onClick={() => handleReceiptDownload(payout.id)}
+                              >
+                                Descargar
+                              </button>
+                            </div>
+                          </div>
+                        ) : (
+                          <p>Sin recibo.</p>
+                        )}
                       </div>
                     </div>
                     <div className="orders-detail-actions">
@@ -568,6 +655,23 @@ export default function PayoutsPage() {
               </section>
             );
           })}
+        </div>
+      )}
+      {previewUrl && (
+        <div
+          className="image-preview-overlay"
+          role="button"
+          tabIndex={0}
+          onClick={() => setPreviewUrl("")}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setPreviewUrl("");
+            }
+          }}
+        >
+          <div className="image-preview-dialog">
+            <img src={previewUrl} alt="Vista previa" />
+          </div>
         </div>
       )}
       {toast && (

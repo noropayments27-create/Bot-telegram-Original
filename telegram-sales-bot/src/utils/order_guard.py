@@ -4,8 +4,8 @@ from uuid import uuid4
 
 from aiogram.types import Message
 
-from ..handlers.menu import build_home_text, build_main_keyboard
 from ..utils.main_view import try_edit_main_view
+from ..utils.home_view import render_home_view
 
 _ORDER_POLLERS: Dict[int, asyncio.Task] = {}
 _ORDER_POLL_ORDER: Dict[int, str] = {}
@@ -74,23 +74,10 @@ async def show_order_not_available_and_redirect(
         data = await state.get_data()
         if data.get("order_guard_token") != current_token:
             return
-        home_text = build_home_text(locale)
-        home_keyboard = build_main_keyboard(locale)
-        menu_edited = await try_edit_main_view(
-            message.bot,
-            user_id,
-            message.chat.id,
-            home_text,
-            reply_markup=home_keyboard,
-        )
-        if not menu_edited and edited:
-            try:
-                await message.edit_text(home_text, reply_markup=home_keyboard)
-            except Exception:
-                try:
-                    await message.edit_caption(home_text, reply_markup=home_keyboard)
-                except Exception:
-                    pass
+        try:
+            await render_home_view(message, user_id, locale)
+        except Exception:
+            pass
 
     asyncio.create_task(_return_to_menu(token))
 

@@ -2,11 +2,12 @@ from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, Message, User
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message, User
 
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
+    BOT_SUPPORT_IMAGE_URL,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
@@ -16,6 +17,7 @@ from ..services.api_client import ApiClient
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from .menu import build_main_keyboard
+from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
@@ -24,6 +26,83 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
 class SupportStates(StatesGroup):
     active = State()
+
+
+def _build_support_menu_keyboard(locale: str | None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "support_subject_purchase"),
+                    callback_data="support:purchase",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "support_subject_bug"),
+                    callback_data="support:bug",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="nav:back",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_support_prompt_keyboard(locale: str | None) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="nav:back",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
+            ]
+        ]
+    )
+
+
+def _build_support_menu_text(locale: str | None) -> str:
+    return f"{t(locale, 'support_menu_title')}\n\n{t(locale, 'support_menu_body')}"
+
+
+async def _render_support_view(
+    message: Message,
+    user_id: int,
+    text: str,
+    *,
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: str | None = None,
+) -> None:
+    if BOT_SUPPORT_IMAGE_URL:
+        await render_main_view_with_photo(
+            message,
+            user_id,
+            text,
+            BOT_SUPPORT_IMAGE_URL,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return
+    await render_main_view(
+        message,
+        user_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
 
 
 @router.message(Command("cancel"))
@@ -50,7 +129,14 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
     )
 
 
-async def start_support_flow(message: Message, user: User, state: FSMContext) -> None:
+async def start_support_flow(
+    message: Message,
+    user: User,
+    state: FSMContext,
+    *,
+    subject: str | None = None,
+    prompt_text: str | None = None,
+) -> None:
     if not user:
         return
     locale = await get_user_locale(
@@ -71,23 +157,39 @@ async def start_support_flow(message: Message, user: User, state: FSMContext) ->
     payload = {
         "telegram_id": user.id,
         "telegram_username": user.username,
-        "subject": "Soporte",
+        "subject": subject or "Soporte",
     }
 
     result = await api_client.open_or_create_ticket(payload)
 
     if result.get("status_code") == 403:
         await state.clear()
-        await message.answer(t(locale, "support_banned"))
+        await _render_support_view(
+            message,
+            user.id,
+            t(locale, "support_banned"),
+            reply_markup=_build_support_prompt_keyboard(locale),
+        )
         return
 
     if result.get("status_code") == 409:
         await state.set_state(SupportStates.active)
-        await message.answer(t(locale, "support_wait_admin_reply"))
+        await _render_support_view(
+            message,
+            user.id,
+            t(locale, "support_wait_admin_reply"),
+            reply_markup=_build_support_prompt_keyboard(locale),
+        )
         return
     if result.get("status_code") == 400:
         await state.set_state(SupportStates.active)
-        await message.answer(t(locale, "support_start_prompt"))
+        await state.update_data(support_subject=subject or "Soporte")
+        await _render_support_view(
+            message,
+            user.id,
+            prompt_text or t(locale, "support_prompt_description"),
+            reply_markup=_build_support_prompt_keyboard(locale),
+        )
         return
 
     data = result.get("data", {})
@@ -95,8 +197,13 @@ async def start_support_flow(message: Message, user: User, state: FSMContext) ->
     if ticket:
         await state.update_data(ticket_id=ticket["id"])
         await state.set_state(SupportStates.active)
-
-    await message.answer(t(locale, "support_start_prompt"))
+    await state.update_data(support_subject=subject or "Soporte")
+    await _render_support_view(
+        message,
+        user.id,
+        prompt_text or t(locale, "support_prompt_description"),
+        reply_markup=_build_support_prompt_keyboard(locale),
+    )
 
 
 @router.message(Command("soporte"))
@@ -104,7 +211,15 @@ async def start_support_flow(message: Message, user: User, state: FSMContext) ->
 async def handle_support(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
-    await start_support_flow(message, message.from_user, state)
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
+    await _render_support_view(
+        message,
+        message.from_user.id,
+        _build_support_menu_text(locale),
+        reply_markup=_build_support_menu_keyboard(locale),
+    )
 
 
 @router.callback_query(F.data == "home:support")
@@ -113,7 +228,75 @@ async def handle_support_callback(callback: CallbackQuery, state: FSMContext) ->
         return
     if not callback.from_user:
         return
-    await start_support_flow(callback.message, callback.from_user, state)
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    await _render_support_view(
+        callback.message,
+        callback.from_user.id,
+        _build_support_menu_text(locale),
+        reply_markup=_build_support_menu_keyboard(locale),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "support:purchase")
+async def handle_support_purchase(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    await start_support_flow(
+        callback.message,
+        callback.from_user,
+        state,
+        subject=t(locale, "support_subject_purchase"),
+    )
+    await callback.answer()
+
+
+@router.callback_query(F.data == "support:bug")
+async def handle_support_bug(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
+        )
+        return
+    set_main_message_id(callback.from_user.id, callback.message.message_id)
+    await start_support_flow(
+        callback.message,
+        callback.from_user,
+        state,
+        subject=t(locale, "support_subject_bug"),
+        prompt_text=t(locale, "support_prompt_bug"),
+    )
     await callback.answer()
 
 
@@ -149,10 +332,11 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
     }
 
     if not ticket_id:
+        subject = data.get("support_subject") or "Soporte"
         payload.update(
             {
                 "telegram_username": message.from_user.username,
-                "subject": "Soporte",
+                "subject": subject,
             }
         )
         result = await api_client.open_or_create_ticket(payload)
@@ -169,7 +353,6 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
             await state.update_data(ticket_id=ticket["id"])
             await state.set_state(SupportStates.active)
         await message.answer(t(locale, "support_message_received"))
-        await message.answer(t(locale, "support_wait_admin_reply"))
         return
 
     result = await api_client.send_ticket_message(ticket_id, payload)
@@ -181,7 +364,6 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
         await message.answer(t(locale, "support_wait_admin_reply"))
         return
     await message.answer(t(locale, "support_message_received"))
-    await message.answer(t(locale, "support_wait_admin_reply"))
 
 
 @router.message(F.photo)

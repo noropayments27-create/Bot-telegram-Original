@@ -1,8 +1,6 @@
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.types import CallbackQuery, Message
-from aiogram.types import FSInputFile
-import os
 import re
 from aiogram.fsm.context import FSMContext
 import logging
@@ -11,7 +9,6 @@ from ..config import (
     API_BASE_URL,
     API_TOKEN,
     BOT_COMMUNITY_IMAGE_URL,
-    BOT_MAIN_IMAGE_URL,
     ADMIN_TELEGRAM_IDS,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
@@ -23,15 +20,11 @@ from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .menu import build_home_text, build_main_keyboard, build_community_text
+from .menu import build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
 from .support import start_support_flow
-from ..utils.main_view import (
-    render_main_view,
-    render_main_view_with_photo,
-    set_main_message_id,
-    pop_previous_view,
-)
+from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id, pop_previous_view
+from ..utils.home_view import render_home_view
 from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
 from ..states.access import AccessStates
@@ -39,32 +32,7 @@ from ..states.access import AccessStates
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 logger = logging.getLogger(__name__)
-
-
-def _get_home_photo():
-    if BOT_MAIN_IMAGE_URL:
-        return BOT_MAIN_IMAGE_URL
-    return FSInputFile(
-        os.path.join(os.path.dirname(__file__), "..", "..", "assets", "bot-noropayments.png")
-    )
-
-
-async def _render_home_view(
-    message: Message,
-    user_id: int,
-    locale: str | None,
-    *,
-    push_history: bool = True,
-) -> None:
-    await render_main_view_with_photo(
-        message,
-        user_id,
-        build_home_text(locale),
-        _get_home_photo(),
-        reply_markup=build_main_keyboard(locale),
-        parse_mode="HTML",
-        push_history=push_history,
-    )
+ 
 
 
 async def _assign_access_code(
@@ -169,7 +137,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
                 api_client, message.from_user.id, message.from_user.language_code
             )
             await state.clear()
-            await _render_home_view(message, message.from_user.id, locale)
+            await render_home_view(message, message.from_user.id, locale)
             return
 
         if start_payload:
@@ -181,7 +149,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
             )
             if accepted:
                 await state.clear()
-                await _render_home_view(message, message.from_user.id, locale)
+                await render_home_view(message, message.from_user.id, locale)
                 return
             await state.set_state(AccessStates.awaiting_code)
             return
@@ -197,7 +165,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         api_client, message.from_user.id, message.from_user.language_code
     )
     await state.clear()
-    await _render_home_view(message, message.from_user.id, locale)
+    await render_home_view(message, message.from_user.id, locale)
 
 
 @router.callback_query(F.data == "home:show")
@@ -221,7 +189,7 @@ async def handle_home_show(callback: CallbackQuery) -> None:
         return
     await stop_order_watch(callback.from_user.id, "home")
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    await _render_home_view(
+    await render_home_view(
         callback.message,
         callback.from_user.id,
         locale,
@@ -253,14 +221,14 @@ async def handle_access_code_message(message: Message, state: FSMContext) -> Non
     if referred:
         await message.answer(t(locale, "access_code_already_assigned"))
         await state.clear()
-        await _render_home_view(message, message.from_user.id, locale)
+        await render_home_view(message, message.from_user.id, locale)
         return
 
     accepted = await _assign_access_code(message, message.from_user.id, code, locale)
     if accepted:
         logger.info("access_code_valid user=%s", message.from_user.id)
         await state.clear()
-        await _render_home_view(message, message.from_user.id, locale)
+        await render_home_view(message, message.from_user.id, locale)
         return
     logger.info("access_code_invalid user=%s", message.from_user.id)
     await state.set_state(AccessStates.awaiting_code)
@@ -285,7 +253,7 @@ async def handle_nav_back(callback: CallbackQuery) -> None:
         locale = await get_user_locale(
             api_client, callback.from_user.id, callback.from_user.language_code
         )
-        await _render_home_view(
+        await render_home_view(
             callback.message,
             callback.from_user.id,
             locale,
@@ -293,14 +261,26 @@ async def handle_nav_back(callback: CallbackQuery) -> None:
         )
         await callback.answer()
         return
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        str(previous.get("text") or ""),
-        reply_markup=previous.get("reply_markup"),
-        parse_mode=previous.get("parse_mode"),
-        push_history=False,
-    )
+    previous_photo = previous.get("photo")
+    if previous_photo:
+        await render_main_view_with_photo(
+            callback.message,
+            callback.from_user.id,
+            str(previous.get("text") or ""),
+            previous_photo,
+            reply_markup=previous.get("reply_markup"),
+            parse_mode=previous.get("parse_mode"),
+            push_history=False,
+        )
+    else:
+        await render_main_view(
+            callback.message,
+            callback.from_user.id,
+            str(previous.get("text") or ""),
+            reply_markup=previous.get("reply_markup"),
+            parse_mode=previous.get("parse_mode"),
+            push_history=False,
+        )
     await callback.answer()
 
 

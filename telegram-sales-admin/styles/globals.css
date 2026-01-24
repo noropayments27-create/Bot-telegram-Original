@@ -699,6 +699,26 @@ body.login-success {
   margin-top: -10px;
 }
 
+.affiliate-detail-actions {
+  display: flex;
+  gap: 0.5cm;
+  align-items: center;
+}
+
+.affiliate-detail-actions .plain-button {
+  background: none;
+  border: none;
+  box-shadow: none;
+  padding: 0;
+  color: var(--scarlet-red);
+  font-weight: 600;
+  cursor: pointer;
+}
+
+.affiliate-detail-actions .plain-button:hover {
+  text-decoration: underline;
+}
+
 .orders-refund-button {
   margin-left: 1cm;
   padding: 4px 10px;
@@ -1049,6 +1069,18 @@ body.login-success {
   border-radius: 0;
 }
 
+.payouts-receipt > div {
+  width: 170px;
+}
+
+.payouts-receipt .payout-receipt-image {
+  width: 144px;
+  height: auto;
+  object-fit: contain;
+  border-radius: 6px;
+  border: 1px solid rgba(255, 255, 255, 0.2);
+}
+
 .orders-proof--side button {
   width: 100%;
 }
@@ -1072,6 +1104,7 @@ body.login-success {
   border: none;
   padding: 0;
   color: var(--scarlet-red) !important;
+  box-shadow: none;
 }
 
 .orders-detail-card .orders-copy {

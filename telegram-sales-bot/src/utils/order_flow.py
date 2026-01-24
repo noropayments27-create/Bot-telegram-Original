@@ -5,8 +5,8 @@ from uuid import uuid4
 from aiogram.types import Message
 
 from ..services.i18n import t
-from ..handlers.menu import build_home_text, build_main_keyboard
 from ..utils.main_view import render_main_view, set_main_message_id
+from ..utils.home_view import render_home_view
 
 
 def is_order_payable(order: Optional[Dict[str, Any]]) -> bool:
@@ -35,12 +35,10 @@ async def show_not_payable_and_redirect(
         if data.get("order_guard_token") != current_token:
             return
         try:
-            await render_main_view(
+            await render_home_view(
                 message,
                 user_id,
-                build_home_text(locale),
-                reply_markup=build_main_keyboard(locale),
-                parse_mode="HTML",
+                locale,
             )
         except Exception as exc:
             print("[bot/order_guard] home_edit_failed", {"error": str(exc)})

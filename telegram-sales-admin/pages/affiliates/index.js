@@ -969,13 +969,22 @@ export default function AffiliatesPage() {
                           ? ` #${formatAffiliateNumber(affiliate.affiliate_number)}`
                           : ""}
                       </h2>
-                      <button
-                        type="button"
-                        className="link-button"
-                        onClick={() => handleViewAffiliate(affiliate.id)}
-                      >
-                        Cerrar
-                      </button>
+                      <div className="affiliate-detail-actions">
+                        <button
+                          type="button"
+                          className="plain-button"
+                          onClick={() => handleViewAffiliate(affiliate.id)}
+                        >
+                          Cerrar
+                        </button>
+                        <button
+                          type="button"
+                          className="plain-button"
+                          onClick={() => handleDeleteAffiliate(affiliate.id)}
+                        >
+                          Eliminar afiliado
+                        </button>
+                      </div>
                     </div>
                     <div className="orders-detail-separator"></div>
                     <div className="affiliate-detail-table">
@@ -1112,6 +1121,12 @@ export default function AffiliatesPage() {
                             )
                           )}%`}
                         </p>
+                        <p>
+                          Posición top ventas:{" "}
+                          {detail?.affiliate?.sales_rank
+                            ? `#${detail.affiliate.sales_rank}`
+                            : "-"}
+                        </p>
                         <p className={netClassName}>
                           Saldo disponible: {formatUsdAmount(netBalance)}
                         </p>
@@ -1148,14 +1163,6 @@ export default function AffiliatesPage() {
                       <div className="orders-detail-section">
                         <div style={{ display: "flex", alignItems: "center", gap: "12px" }}>
                           <h3>Usuario</h3>
-                          <button
-                            type="button"
-                            className="link-button"
-                            style={{ marginLeft: "2cm" }}
-                            onClick={() => handleDeleteAffiliate(affiliate.id)}
-                          >
-                            Eliminar afiliado
-                          </button>
                         </div>
                         <p>
                           Telegram ID:{" "}
@@ -1175,6 +1182,16 @@ export default function AffiliatesPage() {
                             onClick={() => handleCopy("Username", user?.telegram_username)}
                           >
                             {user?.telegram_username || "-"}
+                          </button>
+                        </p>
+                        <p>
+                          ID de Afiliado:{" "}
+                          <button
+                            type="button"
+                            className="orders-copy"
+                            onClick={() => handleCopy("ID de Afiliado", affiliate?.id)}
+                          >
+                            {affiliate?.id || "-"}
                           </button>
                         </p>
                         <div className="orders-detail-subseparator"></div>
