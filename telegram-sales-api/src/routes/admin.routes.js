@@ -707,18 +707,18 @@ function parseAdminTelegramIds() {
 
 router.post("/auth/start", async (req, res) => {
   const { username, password } = req.body || {};
-  const expectedUsername = process.env.ADMIN_USERNAME;
-  const expectedPasswordHash = process.env.ADMIN_PASSWORD_HASH;
+  const expectedUsername = (process.env.ADMIN_USERNAME || "").trim();
+  const expectedPasswordHash = (process.env.ADMIN_PASSWORD_HASH || "").trim();
 
   if (!expectedUsername || !expectedPasswordHash) {
     return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
   }
 
-  if (username !== expectedUsername) {
+  if (String(username || "").trim() !== expectedUsername) {
     return res.status(401).json({ error: "INVALID_CREDENTIALS" });
   }
 
-  const passwordOk = await bcrypt.compare(password || "", expectedPasswordHash);
+  const passwordOk = await bcrypt.compare(String(password || ""), expectedPasswordHash);
   if (!passwordOk) {
     return res.status(401).json({ error: "INVALID_CREDENTIALS" });
   }
