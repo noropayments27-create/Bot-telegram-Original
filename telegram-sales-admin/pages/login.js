@@ -7,6 +7,7 @@ export default function Login() {
   const router = useRouter();
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
+  const [showPassword, setShowPassword] = useState(false);
   const [error, setError] = useState("");
   const [waiting, setWaiting] = useState(false);
   const [requestId, setRequestId] = useState("");
@@ -127,14 +128,25 @@ export default function Login() {
               disabled={waiting}
               required
             />
-            <input
-              type="password"
-              value={password}
-              onChange={(event) => setPassword(event.target.value)}
-              placeholder="CONTRASEÑA"
-              disabled={waiting}
-              required
-            />
+            <div className="login-password-field">
+              <input
+                type={showPassword ? "text" : "password"}
+                value={password}
+                onChange={(event) => setPassword(event.target.value)}
+                placeholder="CONTRASEÑA"
+                disabled={waiting}
+                required
+              />
+              <button
+                type="button"
+                className="login-password-toggle"
+                onClick={() => setShowPassword((prev) => !prev)}
+                aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
+                disabled={waiting}
+              >
+                {showPassword ? "🙈" : "👁️"}
+              </button>
+            </div>
             <label className="remember-me">
               <input
                 type="checkbox"
