@@ -144,7 +144,7 @@ export default function Login() {
                 aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
                 disabled={waiting}
               >
-                {showPassword ? "🙈" : "👁️"}
+                {showPassword ? "👁️‍🗨️" : "👁️"}
               </button>
             </div>
             <label className="remember-me">

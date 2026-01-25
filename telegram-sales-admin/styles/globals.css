@@ -2763,27 +2763,27 @@ button:disabled {
 
 .login-password-field {
   position: relative;
-  display: flex;
-  align-items: center;
+  width: 100%;
 }
 
 .login-password-field input {
-  padding-right: 44px;
+  padding-right: 42px;
   margin-bottom: 20px;
 }
 
 .login-password-toggle {
   position: absolute;
-  right: 10px;
-  top: 8px;
-  width: 32px;
-  height: 32px;
+  right: 12px;
+  top: 50%;
+  transform: translateY(-50%);
   border: none;
   background: transparent;
   box-shadow: none;
   color: var(--scarlet-red);
   cursor: pointer;
   padding: 0;
+  font-size: 16px;
+  line-height: 1;
 }
 
 .login-password-toggle:disabled {
