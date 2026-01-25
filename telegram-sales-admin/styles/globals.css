@@ -2791,9 +2791,9 @@ button:disabled {
   height: 44px;
 }
 
-.login-password-toggle {
+.login-form button.login-password-toggle {
   position: absolute;
-  right: -40px !important;
+  right: 10px !important;
   top: 50%;
   border: none !important;
   background: transparent !important;
@@ -2803,33 +2803,38 @@ button:disabled {
   cursor: pointer;
   padding: 0;
   font-size: 16px;
-  line-height: 1;
+  line-height: 0;
   display: flex;
   align-items: center;
   justify-content: center;
-  width: auto;
-  height: auto;
+  width: 18px !important;
+  height: 18px !important;
+  min-width: 0 !important;
+  min-height: 0 !important;
+  bottom: auto !important;
   transition: none !important;
 }
 
-.login-password-toggle:hover,
-.login-password-toggle:active,
-.login-password-toggle:focus,
-.login-password-toggle:focus-visible {
+.login-form button.login-password-toggle:hover,
+.login-form button.login-password-toggle:active,
+.login-form button.login-password-toggle:focus,
+.login-form button.login-password-toggle:focus-visible {
   transform: translateY(-48%) !important;
   box-shadow: none !important;
 }
 
-.login-password-toggle {
+.login-form button.login-password-toggle {
   transform: translateY(-48%) !important;
   box-shadow: none !important;
 }
 
-.login-password-toggle svg {
+.login-form button.login-password-toggle svg {
   display: block;
+  width: 18px;
+  height: 18px;
 }
 
-.login-password-toggle:disabled {
+.login-form button.login-password-toggle:disabled {
   opacity: 0.5;
   cursor: not-allowed;
 }
