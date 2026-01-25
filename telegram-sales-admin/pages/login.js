@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
+import { Eye, EyeOff } from "lucide-react";
 
 import { getApiBaseUrl, getAuthToken, setAuthToken } from "../lib/api";
 
@@ -144,7 +145,7 @@ export default function Login() {
                 aria-label={showPassword ? "Ocultar contraseña" : "Mostrar contraseña"}
                 disabled={waiting}
               >
-                {showPassword ? "👁️‍🗨️" : "👁️"}
+                {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
             <label className="remember-me">
