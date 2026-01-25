@@ -11,12 +11,21 @@ export default function Login() {
   const [waiting, setWaiting] = useState(false);
   const [requestId, setRequestId] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
+  const [toast, setToast] = useState("");
 
   useEffect(() => {
     return () => {
       document.body.classList.remove("login-success");
     };
   }, []);
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setToast(""), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   useEffect(() => {
     if (!waiting || !requestId) {
@@ -31,6 +40,7 @@ export default function Login() {
         const data = await response.json();
         if (data.status === "APPROVED" && data.token) {
           setAuthToken(data.token);
+          setToast("✅ Bienvenido al panel, acceso concedido.");
           setTimeout(() => {
             router.replace("/dashboard");
           }, 1000);
@@ -79,17 +89,21 @@ export default function Login() {
       });
       if (response.status === 401) {
         setError("Credenciales invalidas.");
+        setToast("❌ Credenciales incorrectas. Verifica usuario y contraseña.");
         return;
       }
       if (!response.ok) {
         setError("No se pudo iniciar la solicitud.");
+        setToast("❌ No se pudo iniciar la solicitud.");
         return;
       }
       const data = await response.json();
       setWaiting(true);
       setRequestId(data.request_id);
+      setToast("📩 Solicitud enviada. Revisa tu Telegram.");
     } catch (err) {
       setError("No se pudo iniciar la solicitud.");
+      setToast("❌ No se pudo iniciar la solicitud.");
     }
   };
 
@@ -134,6 +148,30 @@ export default function Login() {
           </form>
         </div>
       </main>
+      {toast && (
+        <div className="toast">
+          <span className="toast__icon" aria-hidden="true">
+            <svg viewBox="0 0 24 24">
+              <circle
+                cx="12"
+                cy="12"
+                r="9"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+              />
+              <path
+                d="M12 8v5M12 16h.01"
+                fill="none"
+                stroke="currentColor"
+                strokeWidth="2"
+                strokeLinecap="round"
+              />
+            </svg>
+          </span>
+          <span>{toast}</span>
+        </div>
+      )}
     </>
   );
 }
