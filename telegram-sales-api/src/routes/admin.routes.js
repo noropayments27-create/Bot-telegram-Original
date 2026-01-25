@@ -20,6 +20,7 @@ const { consumeStockForOrder, releaseStockForOrder } = require("../services/stoc
 const { deliverOrderToTelegram } = require("../services/delivery");
 const { getAffiliateLevel } = require("../services/affiliateLevels");
 const env = require("../config/env");
+const bcrypt = require("bcryptjs");
 
 let payoutReceiptSchemaReady = false;
 async function ensurePayoutReceiptSchema(pool) {
@@ -707,13 +708,18 @@ function parseAdminTelegramIds() {
 router.post("/auth/start", async (req, res) => {
   const { username, password } = req.body || {};
   const expectedUsername = process.env.ADMIN_USERNAME;
-  const expectedPassword = process.env.ADMIN_PASSWORD;
+  const expectedPasswordHash = process.env.ADMIN_PASSWORD_HASH;
 
-  if (!expectedUsername || !expectedPassword) {
+  if (!expectedUsername || !expectedPasswordHash) {
     return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
   }
 
-  if (username !== expectedUsername || password !== expectedPassword) {
+  if (username !== expectedUsername) {
+    return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+  }
+
+  const passwordOk = await bcrypt.compare(password || "", expectedPasswordHash);
+  if (!passwordOk) {
     return res.status(401).json({ error: "INVALID_CREDENTIALS" });
   }
 
