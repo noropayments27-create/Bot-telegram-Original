@@ -28,6 +28,15 @@ const allowedOrigins = new Set([
   "http://127.0.0.1:3000",
 ]);
 
+const extraOrigins = String(process.env.ADMIN_ORIGIN || "")
+  .split(",")
+  .map((value) => value.trim())
+  .filter(Boolean);
+
+for (const origin of extraOrigins) {
+  allowedOrigins.add(origin);
+}
+
 const corsOptions = {
   origin(origin, callback) {
     if (!origin) {
