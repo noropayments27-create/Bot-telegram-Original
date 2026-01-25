@@ -709,17 +709,35 @@ router.post("/auth/start", async (req, res) => {
   const { username, password } = req.body || {};
   const expectedUsername = (process.env.ADMIN_USERNAME || "").trim();
   const expectedPasswordHash = (process.env.ADMIN_PASSWORD_HASH || "").trim();
+  const expectedPasswordPlain = (process.env.ADMIN_PASSWORD || "").trim();
 
-  if (!expectedUsername || !expectedPasswordHash) {
+  if (!expectedUsername || (!expectedPasswordHash && !expectedPasswordPlain)) {
     return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
   }
 
-  if (String(username || "").trim() !== expectedUsername) {
+  const providedUsername = String(username || "").trim();
+  if (providedUsername !== expectedUsername) {
+    console.warn("[admin/auth] invalid username", {
+      provided: providedUsername,
+      expected: expectedUsername,
+    });
     return res.status(401).json({ error: "INVALID_CREDENTIALS" });
   }
 
-  const passwordOk = await bcrypt.compare(String(password || ""), expectedPasswordHash);
+  const providedPassword = String(password || "");
+  let passwordOk = false;
+  if (expectedPasswordHash) {
+    passwordOk = await bcrypt.compare(providedPassword, expectedPasswordHash);
+  }
+  if (!passwordOk && expectedPasswordPlain) {
+    passwordOk = providedPassword === expectedPasswordPlain;
+  }
   if (!passwordOk) {
+    console.warn("[admin/auth] invalid password", {
+      hasHash: Boolean(expectedPasswordHash),
+      hasPlain: Boolean(expectedPasswordPlain),
+      providedLength: providedPassword.length,
+    });
     return res.status(401).json({ error: "INVALID_CREDENTIALS" });
   }
 
