@@ -7,6 +7,14 @@
   --shadow-light: rgba(70, 70, 70, 0.3);
 }
 
+@font-face {
+  font-family: "JuegoDelCalamar";
+  src: url("/fonts/juego%20del%20calamar.otf") format("opentype");
+  font-weight: 400;
+  font-style: normal;
+  font-display: swap;
+}
+
 * {
   box-sizing: border-box;
 }
@@ -19,14 +27,13 @@ body {
   font-family: Arial, sans-serif;
   color: var(--text-color);
   cursor: url("https://i.ibb.co/67HTFn5q/puntero-1.png") 0 0, auto;
-  transition: all 0.5s ease;
+  transition: none;
 }
 
 body.login-success {
-  transform: scale(2);
-  opacity: 0;
-  background-color: #000000;
-  box-shadow: inset 0 0 500px #fff;
+  opacity: 1;
+  background-color: var(--primary-bg);
+  box-shadow: none;
 }
 
 .title-container {
@@ -40,13 +47,17 @@ body.login-success {
 }
 
 .title-container h1 {
+  font-family: "JuegoDelCalamar", Arial, sans-serif;
   font-size: 30px;
   margin: 0;
+  -webkit-text-stroke: 2px var(--scarlet-red);
 }
 
 .title-container p {
+  font-family: "JuegoDelCalamar", Arial, sans-serif;
   font-size: 38px;
   margin: 0;
+  -webkit-text-stroke: 3px var(--scarlet-red);
 }
 
 .page {
@@ -62,6 +73,12 @@ body.login-success {
   justify-content: center;
   align-items: center;
   flex-direction: column;
+  background-repeat: no-repeat;
+  background-position: center;
+  background-size: cover;
+  width: 100%;
+  max-width: none;
+  margin: 0;
 }
 
 .order-detail-page {
@@ -2764,18 +2781,20 @@ button:disabled {
 .login-password-field {
   position: relative;
   width: 100%;
+  margin-bottom: 20px;
+  height: 44px;
 }
 
 .login-password-field input {
   padding-right: 48px;
-  margin-bottom: 20px;
+  margin-bottom: 0;
+  height: 44px;
 }
 
 .login-password-toggle {
   position: absolute;
   right: -40px !important;
-  top: 32%;
-  transform: translateY(-48%);
+  top: 50%;
   border: none !important;
   background: transparent !important;
   box-shadow: none !important;
@@ -2790,12 +2809,24 @@ button:disabled {
   justify-content: center;
   width: auto;
   height: auto;
-  transition: none;
+  transition: none !important;
 }
 
-.login-password-toggle:hover {
-  transform: translateY(-50%);
-  box-shadow: none;
+.login-password-toggle:hover,
+.login-password-toggle:active,
+.login-password-toggle:focus,
+.login-password-toggle:focus-visible {
+  transform: translateY(-48%) !important;
+  box-shadow: none !important;
+}
+
+.login-password-toggle {
+  transform: translateY(-48%) !important;
+  box-shadow: none !important;
+}
+
+.login-password-toggle svg {
+  display: block;
 }
 
 .login-password-toggle:disabled {
@@ -2813,34 +2844,50 @@ button:disabled {
   align-items: center;
   justify-content: flex-start;
   font-size: 16px;
+  margin-top: 45px;
   margin-bottom: 20px;
+  gap: 8px;
 }
 
-.remember-me input[type="checkbox"] {
-  margin-right: 10px;
-  appearance: none;
-  width: 16px;
-  height: 16px;
-  background-color: var(--secondary-bg);
-  border-radius: 3px;
-  box-shadow: inset 2px 2px 4px var(--shadow-dark),
-              inset -2px -2px 4px var(--shadow-light);
+.remember-me__text {
+  margin-top: -15px;
+}
+
+.remember-me__toggle {
+  position: static !important;
+  bottom: auto !important;
+  border: none !important;
+  background: transparent !important;
+  padding: 0;
+  margin-top: -15px;
   cursor: pointer;
-  transition: background-color 0.3s ease, box-shadow 0.3s ease;
+  color: var(--scarlet-red);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: auto !important;
+  height: auto !important;
+  border-radius: 0 !important;
+  box-shadow: none !important;
+  transition: none !important;
+  transform: none !important;
 }
 
-.remember-me input[type="checkbox"]:checked {
-  background-color: var(--scarlet-red);
-  box-shadow: inset 2px 2px 4px rgba(255, 255, 255, 0.5),
-              inset -2px -2px 4px rgba(0, 0, 0, 0.2);
+.remember-me__toggle:hover,
+.remember-me__toggle:active,
+.remember-me__toggle:focus,
+.remember-me__toggle:focus-visible {
+  transform: none !important;
+  box-shadow: none !important;
 }
 
-.remember-me input[type="checkbox"]:checked::after {
+.remember-me__toggle svg {
   display: block;
-  color: var(--primary-bg);
-  font-size: 12px;
-  line-height: 16px;
-  text-align: center;
+  opacity: 0.55;
+}
+
+.remember-me__toggle.is-active svg {
+  opacity: 1;
 }
 
 .login-form button {

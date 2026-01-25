@@ -1,11 +1,12 @@
 import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
-import { Eye, EyeOff } from "lucide-react";
+import { Eye, EyeOff, Pin, PinOff } from "lucide-react";
 
 import { getApiBaseUrl, getAuthToken, setAuthToken } from "../lib/api";
 
 export default function Login() {
   const router = useRouter();
+  const loginBackgroundUrl = process.env.NEXT_PUBLIC_LOGIN_BG_URL;
   const [username, setUsername] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
@@ -115,7 +116,14 @@ export default function Login() {
         <h1>Admin Bot</h1>
         <p>Noropayments.shop</p>
       </div>
-      <main className="page page-login">
+      <main
+        className="page page-login"
+        style={
+          loginBackgroundUrl
+            ? { backgroundImage: `url(${loginBackgroundUrl})` }
+            : undefined
+        }
+      >
         <div className="login-container">
           <div className="user-icon-bg">
             <img src="https://i.ibb.co/356LrnLr/bot.png" alt="Icono usuario" />
@@ -148,15 +156,19 @@ export default function Login() {
                 {showPassword ? <EyeOff size={18} /> : <Eye size={18} />}
               </button>
             </div>
-            <label className="remember-me">
-              <input
-                type="checkbox"
-                checked={rememberMe}
-                onChange={(event) => setRememberMe(event.target.checked)}
+            <div className="remember-me">
+              <button
+                type="button"
+                className={`remember-me__toggle${rememberMe ? " is-active" : ""}`}
+                onClick={() => setRememberMe((prev) => !prev)}
                 disabled={waiting}
-              />
-              Recuerdame
-            </label>
+                aria-pressed={rememberMe}
+                aria-label={rememberMe ? "Recordar activado" : "Recordar desactivado"}
+              >
+                {rememberMe ? <Pin size={18} /> : <PinOff size={18} />}
+              </button>
+              <span className="remember-me__text">Recuerdame</span>
+            </div>
             <button type="submit" disabled={waiting}>Inicio</button>
           </form>
         </div>
