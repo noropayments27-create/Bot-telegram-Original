@@ -2767,15 +2767,15 @@ button:disabled {
 }
 
 .login-password-field input {
-  padding-right: 42px;
+  padding-right: 48px;
   margin-bottom: 20px;
 }
 
 .login-password-toggle {
   position: absolute;
-  right: 12px;
-  top: 50%;
-  transform: translateY(-50%);
+  right: -40px !important;
+  top: 32%;
+  transform: translateY(-48%);
   border: none !important;
   background: transparent !important;
   box-shadow: none !important;
@@ -2790,6 +2790,12 @@ button:disabled {
   justify-content: center;
   width: auto;
   height: auto;
+  transition: none;
+}
+
+.login-password-toggle:hover {
+  transform: translateY(-50%);
+  box-shadow: none;
 }
 
 .login-password-toggle:disabled {
