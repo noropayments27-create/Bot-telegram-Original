@@ -2758,7 +2758,7 @@ button:disabled {
   color: var(--text-color);
   outline: none;
   box-sizing: border-box;
-  text-transform: uppercase;
+  text-transform: none !important;
 }
 
 .login-form input::placeholder {
