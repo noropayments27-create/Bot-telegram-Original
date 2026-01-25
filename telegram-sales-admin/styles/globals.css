@@ -2776,9 +2776,10 @@ button:disabled {
   right: 12px;
   top: 50%;
   transform: translateY(-50%);
-  border: none;
-  background: transparent;
-  box-shadow: none;
+  border: none !important;
+  background: transparent !important;
+  box-shadow: none !important;
+  border-radius: 0 !important;
   color: var(--scarlet-red);
   cursor: pointer;
   padding: 0;
@@ -2787,6 +2788,8 @@ button:disabled {
   display: flex;
   align-items: center;
   justify-content: center;
+  width: auto;
+  height: auto;
 }
 
 .login-password-toggle:disabled {
