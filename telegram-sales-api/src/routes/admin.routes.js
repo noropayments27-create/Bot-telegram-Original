@@ -3039,6 +3039,32 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         );
         if (affiliateUserRes.rowCount > 0) {
           const affiliateTelegramId = affiliateUserRes.rows[0].telegram_id;
+          try {
+            const commissionRes = await pool.query(
+              `SELECT amount
+               FROM commissions
+               WHERE order_id = $1
+                 AND affiliate_id = $2`,
+              [orderId, order.affiliate_id]
+            );
+            if (commissionRes.rowCount > 0) {
+              const commissionAmount = Number(commissionRes.rows[0].amount || 0);
+              if (commissionAmount > 0) {
+                const orderNumberText = updatedOrderRes.rows[0]?.order_number
+                  ? String(updatedOrderRes.rows[0].order_number).padStart(5, "0")
+                  : "-";
+                const commissionMessage =
+                  "🎉 ¡Nueva comisión generada!\n\n" +
+                  "Un cliente realizó una compra usando tu enlace de afiliado y ha sido aprobada ✅\n\n" +
+                  `💵 Comisión obtenida: $${commissionAmount.toFixed(2)} USD\n` +
+                  `🆔 ID de orden: ${orderNumberText}\n\n` +
+                  "Sigue compartiendo tu enlace y aumenta tus ganancias 🚀";
+                await sendMessage(affiliateTelegramId, commissionMessage);
+              }
+            }
+          } catch (err) {
+            console.error("Affiliate commission notification failed", err);
+          }
           const salesRes = await pool.query(
             `SELECT COUNT(*)::int AS count
              FROM commissions
