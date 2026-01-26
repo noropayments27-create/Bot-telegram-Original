@@ -270,7 +270,10 @@ async function recalcProductCodes(client, options = {}) {
        SELECT
          id,
          CASE
-           WHEN code ~ '^[TMVW][0-9]{5}$' THEN substring(code FROM 1 FOR 1)
+           WHEN sku_key LIKE 'shop_%' THEN 'T'
+           WHEN sku_key LIKE 'metodos_%' THEN 'M'
+           WHEN sku_key LIKE 'vip_%' THEN 'V'
+           WHEN sku_key LIKE 'web_%' THEN 'W'
            ELSE NULL
          END AS prefix,
          created_at
