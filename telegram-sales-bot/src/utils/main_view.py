@@ -53,6 +53,10 @@ def get_main_message_id(user_id: int) -> Optional[int]:
     return _MAIN_MESSAGE_BY_USER.get(user_id)
 
 
+def clear_main_message_id(user_id: int) -> None:
+    _MAIN_MESSAGE_BY_USER.pop(user_id, None)
+
+
 async def try_edit_main_view(
     bot,
     user_id: int,

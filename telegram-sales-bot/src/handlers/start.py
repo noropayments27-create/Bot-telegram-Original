@@ -23,7 +23,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .menu import build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
 from .support import start_support_flow
-from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id, pop_previous_view
+from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id, pop_previous_view, clear_main_message_id
 from ..utils.home_view import render_home_view
 from ..utils.order_watch import stop_order_watch
 from ..utils.rate_limit import check_global_rate_limit
@@ -68,6 +68,7 @@ async def _assign_access_code(
 async def handle_start(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
+    clear_main_message_id(message.from_user.id)
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
