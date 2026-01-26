@@ -14,6 +14,7 @@ const {
   downloadFile,
   sendMessage,
   sendPhoto,
+  sendDocument,
 } = require("../services/telegram");
 const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
@@ -3203,7 +3204,12 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       });
 
       try {
-        await sendPhoto(telegramId, { path: receiptPng.pngPath });
+        try {
+          await sendPhoto(telegramId, { path: receiptPng.pngPath });
+        } catch (photoError) {
+          console.error("Telegram receipt photo failed", photoError);
+          await sendDocument(telegramId, { path: receiptPng.pngPath });
+        }
       } finally {
         await receiptPng.cleanup();
       }
@@ -5269,7 +5275,12 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
            WHERE id = $4`,
           [storedPath, filename, "image/png", payout.id]
         );
-        await sendPhoto(payout.telegram_id, { path: storedPath });
+        try {
+          await sendPhoto(payout.telegram_id, { path: storedPath });
+        } catch (photoError) {
+          console.error("Telegram payout receipt photo failed", photoError);
+          await sendDocument(payout.telegram_id, { path: storedPath });
+        }
       } finally {
         await receiptPng.cleanup();
       }
