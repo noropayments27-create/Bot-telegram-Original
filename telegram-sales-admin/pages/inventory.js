@@ -890,6 +890,13 @@ export default function InventoryPage() {
     && String(manualUnit.duration_unit || "").trim()
     && String(manualUnit.notes || "").trim()
   );
+  const simpleAvailable = products
+    .filter((item) => item.stock_mode === "SIMPLE")
+    .reduce((sum, item) => sum + Number(item.available_stock || 0), 0);
+  const unitsAvailable = products
+    .filter((item) => item.stock_mode === "UNITS")
+    .reduce((sum, item) => sum + Number(item.available_stock || 0), 0);
+  const formatAvailableLabel = (value) => (value === 0 || value === 1 ? "Disponible" : "Disponibles");
 
   return (
     <>
@@ -910,12 +917,9 @@ export default function InventoryPage() {
             disabled={productsLoading}
           >
             <div className="mode-title">SIMPLE</div>
-            <div className="mode-value">
-              {products
-                .filter((item) => item.stock_mode === "SIMPLE")
-                .reduce((sum, item) => sum + Number(item.available_stock || 0), 0)}
-            </div>
-            <div className="mode-subtitle">Disponibles</div>
+            <div className="mode-value">{simpleAvailable}</div>
+            <div className="mode-subtitle">En Stock</div>
+            <div className="mode-subtitle">{formatAvailableLabel(simpleAvailable)}</div>
           </button>
           <button
             type="button"
@@ -928,12 +932,9 @@ export default function InventoryPage() {
             disabled={productsLoading}
           >
             <div className="mode-title">UNITS</div>
-            <div className="mode-value">
-              {products
-                .filter((item) => item.stock_mode === "UNITS")
-                .reduce((sum, item) => sum + Number(item.available_stock || 0), 0)}
-            </div>
-            <div className="mode-subtitle">Disponibles</div>
+            <div className="mode-value">{unitsAvailable}</div>
+            <div className="mode-subtitle">En Stock</div>
+            <div className="mode-subtitle">{formatAvailableLabel(unitsAvailable)}</div>
           </button>
         </div>
       </section>

@@ -212,6 +212,8 @@ async def render_main_view_with_photo(
             error_text = str(exc).lower()
             if "message is not modified" in error_text:
                 return message
+            if "message to edit not found" in error_text or "message can't be edited" in error_text:
+                _MAIN_MESSAGE_BY_USER.pop(user_id, None)
 
     sent = await message.answer_photo(
         photo=photo,
