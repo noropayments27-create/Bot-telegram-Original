@@ -207,11 +207,19 @@ async function renderReceiptPng(data) {
   let browser;
   try {
     browser = await playwright.chromium.launch({
-      args: ["--no-sandbox", "--disable-setuid-sandbox"],
+      headless: true,
+      args: [
+        "--no-sandbox",
+        "--disable-setuid-sandbox",
+        "--disable-dev-shm-usage",
+        "--disable-gpu",
+        "--single-process",
+        "--no-zygote",
+      ],
     });
     const page = await browser.newPage({
       viewport: { width: 420, height: 800 },
-      deviceScaleFactor: 2,
+      deviceScaleFactor: 1,
     });
 
     await page.setContent(html, { waitUntil: "load" });
