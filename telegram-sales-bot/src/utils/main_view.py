@@ -215,20 +215,37 @@ async def render_main_view_with_photo(
             if "message to edit not found" in error_text or "message can't be edited" in error_text:
                 _MAIN_MESSAGE_BY_USER.pop(user_id, None)
 
-    sent = await message.answer_photo(
-        photo=photo,
-        caption=text,
-        reply_markup=reply_markup,
-        parse_mode=parse_mode,
-    )
-    if sent:
-        _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
-        _record_view_state(
-            user_id,
-            text,
-            reply_markup,
-            parse_mode,
-            photo,
-            push_history=push_history,
+    try:
+        sent = await message.answer_photo(
+            photo=photo,
+            caption=text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
         )
-    return sent
+        if sent:
+            _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
+            _record_view_state(
+                user_id,
+                text,
+                reply_markup,
+                parse_mode,
+                photo,
+                push_history=push_history,
+            )
+        return sent
+    except TelegramBadRequest:
+        sent = await message.answer(
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        if sent:
+            _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
+            _record_view_state(
+                user_id,
+                text,
+                reply_markup,
+                parse_mode,
+                push_history=push_history,
+            )
+        return sent
