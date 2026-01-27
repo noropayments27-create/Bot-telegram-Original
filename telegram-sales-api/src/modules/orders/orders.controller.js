@@ -707,6 +707,7 @@ async function rejectPayment(req, res, next) {
 module.exports = {
   createOrder,
   getOrderById,
+  getPaymentMethods,
   submitPaymentProof,
   markOrderPaid,
   rejectPayment,
