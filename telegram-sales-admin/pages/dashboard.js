@@ -311,6 +311,7 @@ export default function Dashboard() {
                 type="button"
                 onClick={handleResetStats}
                 disabled={resetStatus === "processing"}
+                title="Reinicia las estadísticas del panel"
               >
                 Reiniciar
               </button>
@@ -410,6 +411,7 @@ export default function Dashboard() {
         </div>
       </section>
       <div className="payment-methods-panel">
+        <h3 className="payment-methods-title">Bloqueo de metodos de pago</h3>
         {paymentMethodsError && <p className="error">{paymentMethodsError}</p>}
         <div className="payment-methods-row">
           {paymentMethodLabels.map((method) => {

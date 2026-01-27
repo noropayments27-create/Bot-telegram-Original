@@ -396,7 +396,7 @@ body.login-success {
 }
 
 .dashboard-page {
-  margin-top: -1cm;
+  margin-top: -2cm;
 }
 
 .dashboard-grid {
@@ -552,6 +552,15 @@ body.login-success {
 
 .payment-methods-panel {
   margin: 18px auto 0;
+}
+
+.payment-methods-title {
+  text-align: center;
+  margin: 0 0 10px;
+  font-size: 14px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #cfcfcf;
 }
 
 .payment-methods-row {
