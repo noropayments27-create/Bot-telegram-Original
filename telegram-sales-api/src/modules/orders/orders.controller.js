@@ -2,6 +2,7 @@ const { getPool } = require("../../db");
 const { consumeStockForOrder, releaseStockForOrder } = require("../../services/stock");
 const { deliverOrderToTelegram } = require("../../services/delivery");
 const { getAffiliateLevel } = require("../../services/affiliateLevels");
+const { listPaymentMethods } = require("../../services/paymentMethods");
 
 const ORDER_STATUS_PENDING = "CREATED"; // maps to PENDING_PAYMENT
 const ORDER_STATUS_WAITING_CONFIRMATION = "WAITING_PAYMENT"; // maps to WAITING_CONFIRMATION
@@ -375,6 +376,16 @@ async function getOrderById(req, res, next) {
       order: orderRes.rows[0],
       payment: paymentRes.rows[0] || null,
     });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getPaymentMethods(req, res, next) {
+  try {
+    const pool = getPool();
+    const methods = await listPaymentMethods(pool);
+    return res.json({ methods });
   } catch (error) {
     return next(error);
   }

@@ -106,6 +106,13 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def get_payment_methods(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/orders/payment-methods"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=5)
+            response.raise_for_status()
+            return response.json()
+
     async def get_user(self, telegram_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/users/{telegram_id}"
 

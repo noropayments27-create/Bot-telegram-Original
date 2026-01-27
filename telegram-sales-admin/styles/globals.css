@@ -546,6 +546,44 @@ body.login-success {
   letter-spacing: 0.08em;
 }
 
+.payment-methods-panel {
+  margin-top: 18px;
+}
+
+.payment-methods-row {
+  display: flex;
+  justify-content: center;
+  align-items: center;
+  gap: 0.5cm;
+  flex-wrap: nowrap;
+}
+
+.payment-method-toggle {
+  border-radius: 999px;
+  border: 1px solid rgba(255, 36, 0, 0.4);
+  background: rgba(26, 26, 26, 0.8);
+  color: #f2f2f2;
+  padding: 10px 16px;
+  font-weight: 700;
+  letter-spacing: 0.02em;
+  cursor: pointer;
+  transition: transform 0.2s ease, box-shadow 0.2s ease, background 0.2s ease;
+  box-shadow:
+    6px 6px 14px var(--shadow-dark),
+    -4px -4px 10px var(--shadow-light);
+}
+
+.payment-method-toggle:hover {
+  transform: translateY(-2px);
+  color: var(--scarlet-red);
+}
+
+.payment-method-toggle.is-disabled {
+  background: rgba(120, 20, 20, 0.7);
+  border-color: rgba(255, 80, 80, 0.6);
+  color: #ffd6d6;
+}
+
 .orders-placeholder {
   opacity: 0.18;
 }

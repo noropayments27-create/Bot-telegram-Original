@@ -163,6 +163,30 @@ def _get_payment_method_image(method_key: str) -> str | None:
 
 def _get_crypto_asset_image(asset_key: str) -> str | None:
     return _CRYPTO_ASSET_IMAGES.get(asset_key)
+
+
+async def _is_payment_method_enabled(method_key: str) -> bool:
+    mapping = {
+        "nequi": "NEQUI",
+        "binance": "BINANCE_ID",
+        "crypto": "CRYPTO",
+        "mp": "MERCADOPAGO",
+        "paypal": "PAYPAL",
+    }
+    api_key = mapping.get(method_key)
+    if not api_key:
+        return True
+    try:
+        response = await api_client.get_payment_methods()
+        methods = response.get("methods") if isinstance(response, dict) else []
+        if not isinstance(methods, list):
+            return True
+        for item in methods:
+            if item.get("key") == api_key:
+                return bool(item.get("enabled"))
+    except Exception:
+        return True
+    return True
 def _build_cart_text(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
@@ -1622,6 +1646,12 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
         api_client, order_id, callback.message, state, locale
     ):
         await callback.answer()
+        return
+    if not await _is_payment_method_enabled(method_key):
+        await callback.answer(
+            t(locale, "payment_method_unavailable"),
+            show_alert=True,
+        )
         return
     if method_key == "crypto":
         method_image = _get_payment_method_image(method_key)

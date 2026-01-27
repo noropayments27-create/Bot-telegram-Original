@@ -16,6 +16,11 @@ const {
   sendPhoto,
   sendDocument,
 } = require("../services/telegram");
+const {
+  listPaymentMethods,
+  normalizeMethodKey,
+  togglePaymentMethod,
+} = require("../services/paymentMethods");
 const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
 const { deliverOrderToTelegram } = require("../services/delivery");
@@ -828,6 +833,30 @@ router.post("/auth/decision", (req, res) => {
 });
 
 router.use(requireAdmin);
+
+router.get("/payment-methods", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const methods = await listPaymentMethods(pool);
+    return res.json({ methods });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/payment-methods/:key/toggle", async (req, res, next) => {
+  const pool = getPool();
+  const key = normalizeMethodKey(req.params.key);
+  if (!key) {
+    return res.status(400).json({ error: "PAYMENT_METHOD_INVALID" });
+  }
+  try {
+    const methods = await togglePaymentMethod(pool, key);
+    return res.json({ methods });
+  } catch (error) {
+    return next(error);
+  }
+});
 
 router.post("/products/:id/name", async (req, res, next) => {
   const productId = req.params.id;

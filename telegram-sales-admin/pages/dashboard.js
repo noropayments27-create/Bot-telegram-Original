@@ -158,10 +158,19 @@ export default function Dashboard() {
   const [seenAffiliatesCount, setSeenAffiliatesCount] = useState(0);
   const [resetText, setResetText] = useState("");
   const [resetStatus, setResetStatus] = useState("");
+  const [paymentMethods, setPaymentMethods] = useState([]);
+  const [paymentMethodsError, setPaymentMethodsError] = useState("");
   const customersCounter = useCountUp(stats.customers);
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
   const affiliatesCounter = useCountUp(stats.affiliates);
+  const paymentMethodLabels = [
+    { key: "NEQUI", label: "Nequi" },
+    { key: "BINANCE_ID", label: "Binance ID" },
+    { key: "CRYPTO", label: "Cripto" },
+    { key: "MERCADOPAGO", label: "Mercado pago" },
+    { key: "PAYPAL", label: "Paypal" },
+  ];
 
   const loadSummary = useCallback(async () => {
     try {
@@ -192,13 +201,40 @@ export default function Dashboard() {
     }
   }, []);
 
+  const loadPaymentMethods = useCallback(async () => {
+    try {
+      const data = await apiFetch("/admin/payment-methods");
+      setPaymentMethods(Array.isArray(data?.methods) ? data.methods : []);
+      setPaymentMethodsError("");
+    } catch (error) {
+      setPaymentMethodsError("No se pudieron cargar los metodos de pago.");
+    }
+  }, []);
+
+  const handleTogglePaymentMethod = async (methodKey) => {
+    try {
+      const data = await apiFetch(`/admin/payment-methods/${methodKey}/toggle`, {
+        method: "POST",
+      });
+      if (Array.isArray(data?.methods)) {
+        setPaymentMethods(data.methods);
+        setPaymentMethodsError("");
+      } else {
+        await loadPaymentMethods();
+      }
+    } catch (error) {
+      setPaymentMethodsError("No se pudo actualizar el metodo de pago.");
+    }
+  };
+
   useEffect(() => {
     loadSummary();
+    loadPaymentMethods();
     const interval = setInterval(() => {
       loadSummary();
     }, 20000);
     return () => clearInterval(interval);
-  }, [loadSummary]);
+  }, [loadPaymentMethods, loadSummary]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -370,6 +406,27 @@ export default function Dashboard() {
               {affiliatesCounter.value}
             </div>
             <div className="stat-label">Afiliados</div>
+          </div>
+        </div>
+        <div className="payment-methods-panel">
+          {paymentMethodsError && <p className="error">{paymentMethodsError}</p>}
+          <div className="payment-methods-row">
+            {paymentMethodLabels.map((method) => {
+              const current = paymentMethods.find((item) => item.key === method.key);
+              const enabled = current ? current.enabled : true;
+              return (
+                <button
+                  key={method.key}
+                  type="button"
+                  className={`payment-method-toggle${enabled ? "" : " is-disabled"}`}
+                  onClick={() => handleTogglePaymentMethod(method.key)}
+                  aria-pressed={!enabled}
+                  title={enabled ? "Deshabilitar metodo" : "Habilitar metodo"}
+                >
+                  {method.label}
+                </button>
+              );
+            })}
           </div>
         </div>
       </section>

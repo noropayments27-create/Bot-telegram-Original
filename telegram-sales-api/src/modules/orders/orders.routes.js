@@ -2,6 +2,7 @@ const express = require("express");
 const {
   createOrder,
   getOrderById,
+  getPaymentMethods,
   submitPaymentProof,
   markOrderPaid,
   rejectPayment,
@@ -10,6 +11,7 @@ const {
 const router = express.Router();
 
 router.post("/", createOrder);
+router.get("/payment-methods", getPaymentMethods);
 router.get("/:id", getOrderById);
 router.post("/:id/payment-proof", submitPaymentProof);
 router.post("/:id/mark-paid", markOrderPaid);
