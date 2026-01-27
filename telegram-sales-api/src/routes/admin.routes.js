@@ -1227,6 +1227,7 @@ router.post("/products/:id/deactivate", async (req, res, next) => {
         `UPDATE products
          SET is_active = false,
              code = NULL,
+             sku_key = NULL,
              updated_at = now()
          WHERE id = $1
          RETURNING *`,
