@@ -339,6 +339,27 @@ async function recalcProductCodes(client, options = {}) {
   );
 }
 
+async function recalcSkuKeys(client) {
+  await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
+  await client.query(
+    `WITH ordered AS (
+       SELECT
+         id,
+         row_number() OVER (ORDER BY created_at, id) AS rn
+       FROM products
+       WHERE is_active = true
+     ),
+     updated AS (
+       UPDATE products p
+       SET sku_key = lpad(ordered.rn::text, 6, '0')
+       FROM ordered
+       WHERE p.id = ordered.id
+       RETURNING ordered.rn
+     )
+     SELECT setval('products_sku_key_seq', COALESCE((SELECT max(rn) FROM ordered), 0))`
+  );
+}
+
 async function getNextSkuKey(client) {
   await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
   await client.query(
@@ -1240,6 +1261,7 @@ router.post("/products/:id/deactivate", async (req, res, next) => {
       }
 
       await recalcProductCodes(client);
+      await recalcSkuKeys(client);
       await client.query(
         `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
          VALUES ($1, $2, $3, $4::jsonb)`,
