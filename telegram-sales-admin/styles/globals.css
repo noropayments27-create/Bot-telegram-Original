@@ -396,7 +396,7 @@ body.login-success {
 }
 
 .dashboard-page {
-  margin-top: 1cm;
+  margin-top: -1cm;
 }
 
 .dashboard-grid {
