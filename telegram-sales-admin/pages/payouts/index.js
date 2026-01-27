@@ -153,6 +153,8 @@ export default function PayoutsPage() {
 
   useEffect(() => {
     loadPayouts();
+    const interval = setInterval(loadPayouts, 20000);
+    return () => clearInterval(interval);
   }, [loadPayouts]);
 
   const handleStatusChange = (event) => {

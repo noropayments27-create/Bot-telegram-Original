@@ -281,6 +281,8 @@ export default function AffiliatesPage() {
     };
 
     loadAffiliates();
+    const interval = setInterval(loadAffiliates, 20000);
+    return () => clearInterval(interval);
   }, [page, status]);
 
   useEffect(() => {

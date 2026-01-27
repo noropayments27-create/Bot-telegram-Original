@@ -191,7 +191,7 @@ async function renderReceiptPng(data) {
       data.botUsername
         || process.env.BOT_USERNAME
         || process.env.NEXT_PUBLIC_BOT_USERNAME
-        || "Noropayments_bot"
+        || "noropayments_shop_bot"
     ),
     ADMIN_TELEGRAM: escapeHtml(
       data.adminTelegram

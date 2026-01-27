@@ -207,9 +207,6 @@ export default function OrdersPage() {
 
   useEffect(() => {
     loadOrders();
-    if (status !== "RECENT") {
-      return undefined;
-    }
     const interval = setInterval(loadOrders, 20 * 1000);
     return () => clearInterval(interval);
   }, [loadOrders, status]);

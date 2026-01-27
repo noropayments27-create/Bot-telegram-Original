@@ -85,6 +85,8 @@ export default function TicketsPage() {
     };
 
     loadTickets();
+    const interval = setInterval(loadTickets, 20000);
+    return () => clearInterval(interval);
   }, [status]);
 
   useEffect(() => {
