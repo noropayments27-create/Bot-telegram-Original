@@ -322,7 +322,7 @@ async function recalcProductCodes(client, options = {}) {
      reset AS (
        UPDATE products
        SET code = NULL
-       WHERE code ~ '^[TMVW][0-9]{5}$'
+       WHERE code IS NOT NULL
        RETURNING id
      )
      UPDATE products p
