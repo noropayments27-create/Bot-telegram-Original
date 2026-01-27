@@ -288,7 +288,7 @@ export default function Dashboard() {
   };
 
   return (
-    <main className="page">
+    <main className="page dashboard-page">
       <section className="card">
         <div className="dashboard-header">
           <div>
@@ -408,28 +408,28 @@ export default function Dashboard() {
             <div className="stat-label">Afiliados</div>
           </div>
         </div>
-        <div className="payment-methods-panel">
-          {paymentMethodsError && <p className="error">{paymentMethodsError}</p>}
-          <div className="payment-methods-row">
-            {paymentMethodLabels.map((method) => {
-              const current = paymentMethods.find((item) => item.key === method.key);
-              const enabled = current ? current.enabled : true;
-              return (
-                <button
-                  key={method.key}
-                  type="button"
-                  className={`payment-method-toggle${enabled ? "" : " is-disabled"}`}
-                  onClick={() => handleTogglePaymentMethod(method.key)}
-                  aria-pressed={!enabled}
-                  title={enabled ? "Deshabilitar metodo" : "Habilitar metodo"}
-                >
-                  {method.label}
-                </button>
-              );
-            })}
-          </div>
-        </div>
       </section>
+      <div className="payment-methods-panel">
+        {paymentMethodsError && <p className="error">{paymentMethodsError}</p>}
+        <div className="payment-methods-row">
+          {paymentMethodLabels.map((method) => {
+            const current = paymentMethods.find((item) => item.key === method.key);
+            const enabled = current ? current.enabled : true;
+            return (
+              <button
+                key={method.key}
+                type="button"
+                className={`payment-method-toggle${enabled ? "" : " is-disabled"}`}
+                onClick={() => handleTogglePaymentMethod(method.key)}
+                aria-pressed={!enabled}
+                title={enabled ? "Deshabilitar metodo" : "Habilitar metodo"}
+              >
+                {method.label}
+              </button>
+            );
+          })}
+        </div>
+      </div>
     </main>
   );
 }
