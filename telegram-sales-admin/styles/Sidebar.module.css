@@ -112,6 +112,30 @@
   font-size: 12px;
 }
 
+.usersCounter {
+  margin-top: 16px;
+  padding: 12px 14px;
+  border-radius: 16px;
+  border: 1px solid rgba(255, 36, 0, 0.35);
+  background: rgba(26, 26, 26, 0.6);
+  display: grid;
+  gap: 6px;
+  text-align: center;
+}
+
+.usersCounterLabel {
+  font-size: 11px;
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: #cfcfcf;
+}
+
+.usersCounterValue {
+  font-size: 20px;
+  font-weight: 800;
+  color: var(--scarlet-red);
+}
+
 .logoutButton {
   border: 1px solid var(--scarlet-red);
   background: #0b0b0b;

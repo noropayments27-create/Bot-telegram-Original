@@ -1,8 +1,9 @@
+import { useEffect, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
 import styles from "../styles/Sidebar.module.css";
-import { clearAuthToken } from "../lib/api";
+import { apiFetch, clearAuthToken } from "../lib/api";
 import NotificationsBell from "./NotificationsBell";
 
 const NAV_ITEMS = [
@@ -252,6 +253,29 @@ const NAV_ITEMS = [
 
 export default function Sidebar({ open, onClose }) {
   const router = useRouter();
+  const [totalUsers, setTotalUsers] = useState(null);
+
+  useEffect(() => {
+    let active = true;
+    const loadTotalUsers = async () => {
+      try {
+        const data = await apiFetch("/admin/users/total");
+        if (!active) {
+          return;
+        }
+        const nextValue = Number(data?.total || 0);
+        setTotalUsers(Number.isNaN(nextValue) ? 0 : nextValue);
+      } catch (error) {
+        if (active) {
+          setTotalUsers(null);
+        }
+      }
+    };
+    loadTotalUsers();
+    return () => {
+      active = false;
+    };
+  }, []);
 
   return (
     <aside className={`${styles.sidebar} ${open ? styles.open : ""}`}>
@@ -290,6 +314,13 @@ export default function Sidebar({ open, onClose }) {
           );
         })}
       </nav>
+
+      <div className={styles.usersCounter}>
+        <span className={styles.usersCounterLabel}>Usuarios Totales</span>
+        <span className={styles.usersCounterValue}>
+          {totalUsers === null ? "—" : totalUsers}
+        </span>
+      </div>
 
       <div className={styles.footer}>
         <button

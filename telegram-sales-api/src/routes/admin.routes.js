@@ -834,6 +834,19 @@ router.post("/auth/decision", (req, res) => {
 
 router.use(requireAdmin);
 
+router.get("/users/total", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const result = await pool.query(
+      "SELECT COUNT(DISTINCT telegram_id)::int AS total FROM users"
+    );
+    const total = result.rows[0]?.total || 0;
+    return res.json({ total });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/payment-methods", async (req, res, next) => {
   const pool = getPool();
   try {
