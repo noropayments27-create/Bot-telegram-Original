@@ -517,6 +517,15 @@ export default function InventoryPage() {
     if (!trimmedName) {
       return trimmedName;
     }
+    const original = String(originalName || "").trim();
+    const upper = original.toUpperCase();
+    const prefixes = ["SHOP", "METODOS", "VIP", "WEB"];
+    for (const base of prefixes) {
+      const basePrefix = `${base} `;
+      if (upper.startsWith(basePrefix)) {
+        return `${basePrefix}${trimmedName}`;
+      }
+    }
     return trimmedName;
   }
 

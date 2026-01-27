@@ -280,6 +280,14 @@ async function recalcProductCodes(client, options = {}) {
            WHEN sku_key LIKE 'metodos_%' THEN 'M'
            WHEN sku_key LIKE 'vip_%' THEN 'V'
            WHEN sku_key LIKE 'web_%' THEN 'W'
+           WHEN code LIKE 'T%' THEN 'T'
+           WHEN code LIKE 'M%' THEN 'M'
+           WHEN code LIKE 'V%' THEN 'V'
+           WHEN code LIKE 'W%' THEN 'W'
+           WHEN upper(name) LIKE 'SHOP %' THEN 'T'
+           WHEN upper(name) LIKE 'METODOS %' THEN 'M'
+           WHEN upper(name) LIKE 'VIP %' THEN 'V'
+           WHEN upper(name) LIKE 'WEB %' THEN 'W'
            ELSE NULL
          END AS prefix,
          created_at
@@ -1420,6 +1428,8 @@ router.get("/stock/inspect", async (req, res, next) => {
         stock_mode: product.stock_mode,
         stock_qty: product.stock_qty,
         unique_purchase: product.unique_purchase,
+        delivery_type: product.delivery_type,
+        delivery_payload: product.delivery_payload,
         delivery_template: product.delivery_template,
       },
       available_stock: availableStock,
