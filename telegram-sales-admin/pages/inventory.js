@@ -685,7 +685,7 @@ export default function InventoryPage() {
       await loadProducts({ silent: true });
       notifyMessage("Códigos y SKU recalculados.");
     } catch (err) {
-      notifyError("No se pudo recalcular.");
+      notifyError(resolveErrorMessage(err, "No se pudo recalcular."));
     } finally {
       setIsSubmitting(false);
     }

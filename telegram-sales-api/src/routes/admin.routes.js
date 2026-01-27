@@ -952,6 +952,7 @@ router.post("/products/recalculate", async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
+      await client.query("LOCK TABLE products IN EXCLUSIVE MODE");
       await recalcProductCodes(client);
       await recalcSkuKeys(client);
       await client.query("COMMIT");
