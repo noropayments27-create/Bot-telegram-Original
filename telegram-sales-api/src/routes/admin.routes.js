@@ -330,6 +330,7 @@ async function recalcProductCodes(client, options = {}) {
 
 async function recalcSkuKeys(client) {
   await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
+  await client.query("UPDATE products SET sku_key = NULL WHERE sku_key IS NOT NULL");
   await client.query(
     `WITH ordered AS (
        SELECT
