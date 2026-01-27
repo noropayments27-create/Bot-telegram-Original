@@ -1347,7 +1347,7 @@ export default function InventoryPage() {
                               {stripCategoryPrefix(item.name)}
                             </div>
                             <div className="muted">
-                              SKU: {item.code || item.sku_key || "-"}
+                              SKU: {item.sku_key || "-"}
                             </div>
                           </div>
                           <div className="product-stock">
@@ -1636,10 +1636,10 @@ export default function InventoryPage() {
                     <button type="button" onClick={() => copyText(detail.product.id, "ID")}>
                       Copiar ID
                     </button>
-                    {(detail.product.code || detail.product.sku_key) && (
+                    {detail.product.sku_key && (
                       <button
                         type="button"
-                        onClick={() => copyText(detail.product.code || detail.product.sku_key, "SKU")}
+                        onClick={() => copyText(detail.product.sku_key, "SKU")}
                       >
                         Copiar SKU
                       </button>
@@ -1648,7 +1648,7 @@ export default function InventoryPage() {
                 </div>
                 <div className="product-grid">
                   <div>
-                    <p><strong>SKU:</strong> {detail.product.code || detail.product.sku_key || "-"}</p>
+                    <p><strong>SKU:</strong> {detail.product.sku_key || "-"}</p>
                     <p><strong>ID:</strong> {detail.product.id}</p>
                   </div>
                 </div>
