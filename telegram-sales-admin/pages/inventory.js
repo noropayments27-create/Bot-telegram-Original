@@ -674,6 +674,23 @@ export default function InventoryPage() {
     }
   };
 
+  const handleRecalculateProducts = async () => {
+    if (!window.confirm("¿Recalcular códigos y SKU de todos los productos activos?")) {
+      return;
+    }
+    setIsSubmitting(true);
+    setError("");
+    try {
+      await apiFetch("/admin/products/recalculate", { method: "POST" });
+      await loadProducts({ silent: true });
+      notifyMessage("Códigos y SKU recalculados.");
+    } catch (err) {
+      notifyError("No se pudo recalcular.");
+    } finally {
+      setIsSubmitting(false);
+    }
+  };
+
   const getCategoryKey = (product) => {
     const code = String(product?.code || "").toUpperCase();
     if (code.startsWith("T")) return "tienda";
@@ -955,9 +972,14 @@ export default function InventoryPage() {
               <h2 className="icon-inline"><IconInventory className="panel-icon" /> Categorías</h2>
               <p className="muted">Selecciona una categoría o crea un producto nuevo.</p>
             </div>
-            <button type="button" onClick={() => setCreateOpen((prev) => !prev)}>
-              {createOpen ? "Cerrar" : "Agregar producto"}
-            </button>
+            <div className="inventory-actions">
+              <button type="button" onClick={() => setCreateOpen((prev) => !prev)}>
+                {createOpen ? "Cerrar" : "Agregar producto"}
+              </button>
+              <button type="button" onClick={handleRecalculateProducts}>
+                Recalcular códigos
+              </button>
+            </div>
           </div>
           {createOpen && (
             <div className="create-product">

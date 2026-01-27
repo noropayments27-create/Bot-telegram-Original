@@ -170,7 +170,10 @@ async function renderReceiptPng(data) {
     USERNAME: escapeHtml(data.username || "N/A"),
     WHATSAPP_LABEL: labels.whatsapp,
     DATE_LABEL: labels.date,
-    DATE_TIME: escapeHtml(data.dateTime || new Date().toLocaleString()),
+    DATE_TIME: escapeHtml(
+      data.dateTime
+        || new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" })
+    ),
     DESCRIPTION_LABEL: labels.description,
     VALUE_LABEL: data.valueLabel || labels.value,
     ITEM_ROWS_HTML: buildItemRowsHtml(data.items || []),

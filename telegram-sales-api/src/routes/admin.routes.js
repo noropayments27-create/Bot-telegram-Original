@@ -271,6 +271,7 @@ const CODE_PREFIX_MAP = {
 
 async function recalcProductCodes(client, options = {}) {
   const { lastId = null, lastPrefix = null } = options;
+  await client.query("UPDATE products SET code = NULL WHERE code IS NOT NULL");
   await client.query(
     `WITH base AS (
        SELECT
@@ -318,22 +319,10 @@ async function recalcProductCodes(client, options = {}) {
          ) AS rn
        FROM categorized
        WHERE prefix IS NOT NULL
-     ),
-     reset AS (
-       UPDATE products
-       SET code = NULL
-       WHERE code IS NOT NULL
-       RETURNING id
-     ),
-     reset_done AS (
-       SELECT 1 AS ok FROM reset
-       UNION ALL
-       SELECT 1 AS ok
-       LIMIT 1
      )
      UPDATE products p
      SET code = ranked.prefix || lpad(ranked.rn::text, 5, '0')
-     FROM ranked, reset_done
+     FROM ranked
      WHERE p.id = ranked.id`,
     [lastId, lastPrefix]
   );
@@ -540,6 +529,14 @@ const RECEIPT_TRANSLATIONS = {
   },
 };
 
+function formatBogotaDate(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return new Date().toLocaleString("es-CO", { timeZone: "America/Bogota" });
+  }
+  return date.toLocaleString("es-CO", { timeZone: "America/Bogota" });
+}
+
 function buildReceiptMessage(
   order,
   paymentProof,
@@ -554,8 +551,7 @@ function buildReceiptMessage(
     subtotalUsd !== undefined && subtotalUsd !== null
       ? subtotalUsd
       : order.unit_price_at_purchase || order.product_price;
-  const createdAt = order.paid_at || new Date();
-  const createdAtText = new Date(createdAt).toLocaleString();
+  const createdAtText = formatBogotaDate(order.paid_at || new Date());
   const orderNumberText = order.order_number
     ? String(order.order_number).padStart(5, "0")
     : "-";
@@ -945,6 +941,27 @@ router.post("/products/:id/name", async (req, res, next) => {
     );
 
     return res.json({ product: updateRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/products/recalculate", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const client = await pool.connect();
+    try {
+      await client.query("BEGIN");
+      await recalcProductCodes(client);
+      await recalcSkuKeys(client);
+      await client.query("COMMIT");
+      return res.json({ status: "ok" });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      throw error;
+    } finally {
+      client.release();
+    }
   } catch (error) {
     return next(error);
   }
@@ -2543,7 +2560,7 @@ router.get("/orders/:id/receipt", async (req, res, next) => {
       orderNumber: orderNumberText,
       telegramId: order.telegram_id,
       username: order.telegram_username,
-      dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
+      dateTime: formatBogotaDate(order.paid_at || new Date()),
       items,
       subtotal,
       commission: commissionAmount,
@@ -2705,7 +2722,7 @@ router.get("/orders/:id/receipt/download", async (req, res, next) => {
       orderNumber: orderNumberText,
       telegramId: order.telegram_id,
       username: order.telegram_username,
-      dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
+      dateTime: formatBogotaDate(order.paid_at || new Date()),
       items,
       subtotal,
       commission: commissionAmount,
@@ -3300,7 +3317,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         orderNumber: orderNumberText,
         telegramId,
         username: order.telegram_username,
-        dateTime: new Date(order.paid_at || new Date()).toLocaleString(),
+        dateTime: formatBogotaDate(order.paid_at || new Date()),
         items,
         subtotal,
         commission: commissionAmount,
@@ -5353,7 +5370,7 @@ router.post("/payouts/:id/mark-sent", async (req, res, next) => {
         receiptTitle: "RECIBO DE RETIRO",
         telegramId: payout.telegram_id,
         username: payout.telegram_username,
-        dateTime: new Date(payout.sent_at || new Date()).toLocaleString(),
+        dateTime: formatBogotaDate(payout.sent_at || new Date()),
         items: [{ name: "Retiro", price: payout.amount }],
         subtotal: payout.amount,
         commission: 0,

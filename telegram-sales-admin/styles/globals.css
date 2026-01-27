@@ -1912,6 +1912,13 @@ body.login-success {
   gap: 16px;
 }
 
+.inventory-actions {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.5cm;
+  flex-wrap: wrap;
+}
+
 .icon-inline {
   display: inline-flex;
   align-items: center;
