@@ -324,10 +324,16 @@ async function recalcProductCodes(client, options = {}) {
        SET code = NULL
        WHERE code IS NOT NULL
        RETURNING id
+     ),
+     reset_done AS (
+       SELECT 1 AS ok FROM reset
+       UNION ALL
+       SELECT 1 AS ok
+       LIMIT 1
      )
      UPDATE products p
      SET code = ranked.prefix || lpad(ranked.rn::text, 5, '0')
-     FROM ranked
+     FROM ranked, reset_done
      WHERE p.id = ranked.id`,
     [lastId, lastPrefix]
   );
