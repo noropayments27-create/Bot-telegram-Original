@@ -933,7 +933,7 @@ export default function OrdersPage() {
                           </button>
                         </p>
                         <div className="orders-detail-subseparator"></div>
-                        <div className="orders-detail-section">
+                        <div className="orders-detail-section orders-detail-products">
                           <h3>Productos</h3>
                           {(detail.items || []).length > 0 ? (
                             <>

@@ -837,6 +837,10 @@ body.login-success {
   line-height: 0.7;
 }
 
+.orders-detail-products p {
+  line-height: 1.1;
+}
+
 .payouts-detail-grid p {
   margin: 0;
   line-height: 1;
