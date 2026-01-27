@@ -21,6 +21,7 @@ const {
   normalizeMethodKey,
   togglePaymentMethod,
 } = require("../services/paymentMethods");
+const { ensureProductCategorySchema } = require("../services/productSchema");
 const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
 const { deliverOrderToTelegram } = require("../services/delivery");
@@ -260,72 +261,6 @@ function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const pageSize = Math.min(Math.max(parseInt(query.page_size, 10) || 20, 1), 100);
   return { page, pageSize, offset: (page - 1) * pageSize };
-}
-
-const CODE_PREFIX_MAP = {
-  TIENDA: "T",
-  METODOS: "M",
-  VIP: "V",
-  PROGRAMAS: "W",
-};
-
-async function recalcProductCodes(client, options = {}) {
-  const { lastId = null, lastPrefix = null } = options;
-  await client.query("UPDATE products SET code = NULL WHERE code IS NOT NULL");
-  await client.query(
-    `WITH base AS (
-       SELECT
-         id,
-         CASE
-           WHEN sku_key LIKE 'shop_%' THEN 'T'
-           WHEN sku_key LIKE 'metodos_%' THEN 'M'
-           WHEN sku_key LIKE 'vip_%' THEN 'V'
-           WHEN sku_key LIKE 'web_%' THEN 'W'
-           WHEN code LIKE 'T%' THEN 'T'
-           WHEN code LIKE 'M%' THEN 'M'
-           WHEN code LIKE 'V%' THEN 'V'
-           WHEN code LIKE 'W%' THEN 'W'
-           WHEN upper(name) LIKE 'SHOP %' THEN 'T'
-           WHEN upper(name) LIKE 'METODOS %' THEN 'M'
-           WHEN upper(name) LIKE 'VIP %' THEN 'V'
-           WHEN upper(name) LIKE 'WEB %' THEN 'W'
-           ELSE NULL
-         END AS prefix,
-         created_at
-       FROM products
-       WHERE is_active = true
-     ),
-     categorized AS (
-       SELECT
-         id,
-         CASE
-           WHEN $1::uuid IS NOT NULL AND id = $1 THEN $2
-           ELSE prefix
-         END AS prefix,
-         created_at,
-         CASE
-           WHEN $1::uuid IS NOT NULL AND id = $1 THEN 1
-           ELSE 0
-         END AS is_last
-       FROM base
-     ),
-     ranked AS (
-       SELECT
-         id,
-         prefix,
-         row_number() OVER (
-           PARTITION BY prefix
-           ORDER BY is_last ASC, created_at, id
-         ) AS rn
-       FROM categorized
-       WHERE prefix IS NOT NULL
-     )
-     UPDATE products p
-     SET code = ranked.prefix || lpad(ranked.rn::text, 5, '0')
-     FROM ranked
-     WHERE p.id = ranked.id`,
-    [lastId, lastPrefix]
-  );
 }
 
 async function recalcSkuKeys(client) {
@@ -950,11 +885,11 @@ router.post("/products/:id/name", async (req, res, next) => {
 router.post("/products/recalculate", async (req, res, next) => {
   const pool = getPool();
   try {
+    await ensureProductCategorySchema(pool);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
       await client.query("LOCK TABLE products IN EXCLUSIVE MODE");
-      await recalcProductCodes(client);
       await recalcSkuKeys(client);
       await client.query("COMMIT");
       return res.json({ status: "ok" });
@@ -1042,6 +977,7 @@ router.post("/products", async (req, res, next) => {
     : {};
 
   try {
+    await ensureProductCategorySchema(pool);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -1051,8 +987,8 @@ router.post("/products", async (req, res, next) => {
       const insertRes = await client.query(
         `INSERT INTO products
           (sku_key, name, description, price, is_active, delivery_type, delivery_payload,
-           stock_mode, stock_qty, show_stock, unique_purchase)
-         VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10)
+           stock_mode, stock_qty, show_stock, unique_purchase, category_key)
+         VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11)
          RETURNING *`,
         [
           skuKey,
@@ -1065,14 +1001,11 @@ router.post("/products", async (req, res, next) => {
           stockQty,
           showStock,
           uniquePurchase,
+          categoryKey || "TIENDA",
         ]
       );
 
       const created = insertRes.rows[0];
-      const lastPrefix = CODE_PREFIX_MAP[categoryKey] || null;
-      if (lastPrefix) {
-        await recalcProductCodes(client, { lastId: created.id, lastPrefix });
-      }
       await client.query(
         `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
          VALUES ($1, $2, $3, $4::jsonb)`,
@@ -1154,6 +1087,7 @@ router.post("/products/:id/update", async (req, res, next) => {
   }
 
   try {
+    await ensureProductCategorySchema(pool);
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
@@ -1165,18 +1099,6 @@ router.post("/products/:id/update", async (req, res, next) => {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
       }
-      const currentCode = String(currentRes.rows[0].code || "").toUpperCase();
-      const currentPrefix = currentCode.startsWith("T")
-        ? "TIENDA"
-        : currentCode.startsWith("M")
-          ? "METODOS"
-          : currentCode.startsWith("V")
-            ? "VIP"
-            : currentCode.startsWith("W")
-              ? "PROGRAMAS"
-              : null;
-      const categoryChanged = Boolean(categoryKey) && categoryKey !== currentPrefix;
-
       const updateRes = await client.query(
         `UPDATE products
          SET name = $2,
@@ -1188,6 +1110,7 @@ router.post("/products/:id/update", async (req, res, next) => {
              stock_qty = CASE WHEN $7::stock_mode_enum = 'UNITS' THEN NULL ELSE stock_qty END,
              delivery_type = COALESCE($8, delivery_type),
              delivery_payload = COALESCE($9::jsonb, delivery_payload),
+             category_key = COALESCE($10, category_key),
              updated_at = now()
          WHERE id = $1
          RETURNING *`,
@@ -1201,17 +1124,13 @@ router.post("/products/:id/update", async (req, res, next) => {
           stockMode,
           deliveryType,
           deliveryPayload ? JSON.stringify(deliveryPayload) : null,
+          categoryKey || null,
         ]
       );
 
       if (updateRes.rowCount === 0) {
         await client.query("ROLLBACK");
         return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
-      }
-
-      if (categoryChanged && ["TIENDA", "METODOS", "VIP", "PROGRAMAS"].includes(categoryKey)) {
-        const lastPrefix = CODE_PREFIX_MAP[categoryKey] || null;
-        await recalcProductCodes(client, { lastId: productId, lastPrefix });
       }
 
       try {
@@ -1279,7 +1198,6 @@ router.post("/products/:id/deactivate", async (req, res, next) => {
         return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
       }
 
-      await recalcProductCodes(client);
       await recalcSkuKeys(client);
       await client.query(
         `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
@@ -1400,6 +1318,7 @@ router.get("/stock/inspect", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    await ensureProductCategorySchema(pool);
     const product = await resolveProductByIdentifier(pool, productId, skuKey);
     if (!product) {
       return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
@@ -1469,6 +1388,7 @@ router.get("/stock/inspect", async (req, res, next) => {
         id: product.id,
         code: product.code,
         sku_key: product.sku_key,
+        category_key: product.category_key,
         name: product.name,
         description: product.description,
         price: product.price,

@@ -61,14 +61,11 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 _PAGE_SIZE = 9
-_PREFIX_SHOP = "T"
-_PREFIX_METODOS = "M"
-_PREFIX_VIP = "V"
-_PREFIX_WEB = "W"
-_CATEGORY_PREFIXES = {
-    "metodos": _PREFIX_METODOS,
-    "vip": _PREFIX_VIP,
-    "programas": _PREFIX_WEB,
+_CATEGORY_KEYS = {
+    "tienda": "TIENDA",
+    "metodos": "METODOS",
+    "vip": "VIP",
+    "programas": "PROGRAMAS",
 }
 _CATEGORY_TITLES = {
     "metodos": "✅ Métodos",
@@ -641,11 +638,13 @@ def _strip_category_prefix(name: str) -> str:
             if maybe_code.isdigit():
                 return rest.strip()
     return cleaned
-def _normalize_product(product: Dict[str, Any], prefix: str) -> Dict[str, Any]:
+def _normalize_product(product: Dict[str, Any]) -> Dict[str, Any]:
     name = str(product.get("name") or "")
     return {
         "id": product.get("id"),
         "code": product.get("code"),
+        "sku_key": product.get("sku_key"),
+        "category_key": product.get("category_key"),
         "name": name,
         "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "",
@@ -706,17 +705,17 @@ def _format_description(raw: Optional[str], locale: str | None = None) -> str:
             continue
         lines.append(f"⌾ {clean}")
     return "\n".join(lines)
-async def _get_products_by_prefix(
-    prefix: str, telegram_id: int | None = None
+async def _get_products_by_category(
+    category_key: str, telegram_id: int | None = None
 ) -> List[Dict[str, Any]]:
     products = await _fetch_active_products(telegram_id)
     filtered = [
-        _normalize_product(product, prefix)
+        _normalize_product(product)
         for product in products
-        if str(product.get("code") or "").startswith(prefix)
+        if str(product.get("category_key") or "").upper() == category_key
     ]
     filtered.sort(
-        key=lambda item: item.get("code") or item.get("created_at") or ""
+        key=lambda item: item.get("sku_key") or item.get("created_at") or ""
     )
     return filtered
 def _paginate(items: List[Dict[str, Any]], page: int) -> List[Dict[str, Any]]:
@@ -726,7 +725,7 @@ def _paginate(items: List[Dict[str, Any]], page: int) -> List[Dict[str, Any]]:
 async def _get_shop_page_items(
     page: int, telegram_id: int | None = None
 ) -> Dict[str, Any]:
-    products = await _get_products_by_prefix(_PREFIX_SHOP, telegram_id)
+    products = await _get_products_by_category(_CATEGORY_KEYS["tienda"], telegram_id)
     total_pages = max((len(products) + _PAGE_SIZE - 1) // _PAGE_SIZE, 1)
     return {
         "items": _paginate(products, page),
@@ -735,10 +734,10 @@ async def _get_shop_page_items(
 async def _get_category_items(
     category_key: str, telegram_id: int | None = None
 ) -> List[Dict[str, Any]]:
-    prefix = _CATEGORY_PREFIXES.get(category_key)
-    if not prefix:
+    category_value = _CATEGORY_KEYS.get(category_key)
+    if not category_value:
         return []
-    products = await _get_products_by_prefix(prefix, telegram_id)
+    products = await _get_products_by_category(category_value, telegram_id)
     return _paginate(products, 1)
 def build_payment_methods_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None

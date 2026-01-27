@@ -550,12 +550,11 @@ export default function InventoryPage() {
 
 
   const getSkuOrder = (item) => {
-    const code = String(item?.code || "").toUpperCase();
-    const match = code.match(/^([A-Z])([0-9]{5})$/);
-    if (!match) {
+    const sku = String(item?.sku_key || "").trim();
+    if (!/^\d+$/.test(sku)) {
       return null;
     }
-    return Number(match[2]);
+    return Number(sku);
   };
 
   const handleCreateProduct = async () => {
@@ -675,7 +674,7 @@ export default function InventoryPage() {
   };
 
   const handleRecalculateProducts = async () => {
-    if (!window.confirm("¿Recalcular códigos y SKU de todos los productos activos?")) {
+    if (!window.confirm("¿Recalcular SKU de todos los productos activos?")) {
       return;
     }
     setIsSubmitting(true);
@@ -683,7 +682,7 @@ export default function InventoryPage() {
     try {
       await apiFetch("/admin/products/recalculate", { method: "POST" });
       await loadProducts({ silent: true });
-      notifyMessage("Códigos y SKU recalculados.");
+      notifyMessage("SKU recalculados.");
     } catch (err) {
       notifyError(resolveErrorMessage(err, "No se pudo recalcular."));
     } finally {
@@ -692,6 +691,11 @@ export default function InventoryPage() {
   };
 
   const getCategoryKey = (product) => {
+    const storedCategory = String(product?.category_key || "").toUpperCase();
+    if (storedCategory === "TIENDA") return "tienda";
+    if (storedCategory === "METODOS") return "metodos";
+    if (storedCategory === "VIP") return "vip";
+    if (storedCategory === "PROGRAMAS") return "programas";
     const code = String(product?.code || "").toUpperCase();
     if (code.startsWith("T")) return "tienda";
     if (code.startsWith("M")) return "metodos";
@@ -977,7 +981,7 @@ export default function InventoryPage() {
                 {createOpen ? "Cerrar" : "Agregar producto"}
               </button>
               <button type="button" onClick={handleRecalculateProducts}>
-                Recalcular códigos
+                Recalcular SKU
               </button>
             </div>
           </div>

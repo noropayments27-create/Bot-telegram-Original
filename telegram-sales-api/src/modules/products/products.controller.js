@@ -1,4 +1,5 @@
 const { getPool } = require("../../db");
+const { ensureProductCategorySchema } = require("../../services/productSchema");
 
 function parseBoolean(value) {
   if (value === undefined) return undefined;
@@ -32,6 +33,7 @@ async function listProducts(req, res, next) {
     : "";
 
   try {
+    await ensureProductCategorySchema(pool);
     if (Number.isFinite(telegramId)) {
       const userRes = await pool.query(
         "SELECT id FROM users WHERE telegram_id = $1",
@@ -52,6 +54,8 @@ async function listProducts(req, res, next) {
     const itemsRes = await pool.query(
       `SELECT p.id,
               p.code,
+              p.sku_key,
+              p.category_key,
               p.name,
               p.description,
               p.price,
