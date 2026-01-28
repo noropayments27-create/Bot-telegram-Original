@@ -3,11 +3,176 @@ const { consumeStockForOrder, releaseStockForOrder } = require("../../services/s
 const { deliverOrderToTelegram } = require("../../services/delivery");
 const { getAffiliateLevel } = require("../../services/affiliateLevels");
 const { listPaymentMethods } = require("../../services/paymentMethods");
+const { sendPhoto } = require("../../services/telegram");
 
 const ORDER_STATUS_PENDING = "CREATED"; // maps to PENDING_PAYMENT
 const ORDER_STATUS_WAITING_CONFIRMATION = "WAITING_PAYMENT"; // maps to WAITING_CONFIRMATION
 const ORDER_STATUS_PAID = "PAID";
 const ORDER_STATUS_REJECTED = "CANCELLED"; // maps to REJECTED
+
+const ADMIN_PANEL_URL =
+  "https://fierce-elke-1noropayments-f3bf4dd6.koyeb.app/login";
+
+function parseAdminTelegramIds() {
+  const value = process.env.ADMIN_TELEGRAM_IDS || "";
+  return value
+    .split(",")
+    .map((item) => item.trim())
+    .filter((item) => item && /^[0-9]+$/.test(item))
+    .map((item) => Number(item));
+}
+
+function formatOrderNumber(orderNumber) {
+  if (!orderNumber) {
+    return "-";
+  }
+  return String(orderNumber).padStart(5, "0");
+}
+
+function formatUsdAmount(amount) {
+  const numeric = Number(amount || 0);
+  const formatted = Number.isInteger(numeric)
+    ? numeric.toLocaleString("en-US", { maximumFractionDigits: 0 })
+    : numeric.toLocaleString("en-US", { minimumFractionDigits: 2, maximumFractionDigits: 2 });
+  return `$${formatted}`;
+}
+
+function formatLocalAmount(amount, currency) {
+  const numeric = Number(amount || 0);
+  if (currency === "BTC" || currency === "LTC") {
+    return numeric.toFixed(8);
+  }
+  if (currency === "USDT") {
+    return numeric.toFixed(2);
+  }
+  return Math.floor(numeric).toLocaleString("es-CO");
+}
+
+function formatBogotaDateTime(value) {
+  const date = value ? new Date(value) : new Date();
+  if (Number.isNaN(date.getTime())) {
+    return "-";
+  }
+  const text = date.toLocaleString("es-CO", {
+    timeZone: "America/Bogota",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "numeric",
+    minute: "2-digit",
+    hour12: true,
+  });
+  return text.replace(", ", " · ");
+}
+
+function formatPaymentMethod(method) {
+  if (!method) {
+    return "NO ESPECIFICADO";
+  }
+  const key = String(method).toUpperCase();
+  const map = {
+    BTC: "Bitcoin",
+    LTC: "Litecoin",
+    MP: "Mercado Pago",
+    NEQUI: "Nequi",
+    BINANCE: "Binance",
+    BINANCE_ID: "Binance ID",
+    USDT: "USDT",
+    USDT_BSC: "USDT BSC",
+    USDT_TRON: "USDT Tron",
+    PAYPAL: "PayPal",
+  };
+  return map[key] || key;
+}
+
+function formatPaymentStatus(status) {
+  const key = String(status || "").toUpperCase();
+  if (key === "APPROVED") return "✅ Aprobado";
+  if (key === "REJECTED") return "❌ Rechazado";
+  if (key === "PENDING") return "⏳ Pendiente";
+  return status || "-";
+}
+
+async function getFiatRate(currency) {
+  try {
+    const response = await fetch("https://open.er-api.com/v6/latest/USD");
+    const data = await response.json();
+    if (data.result === "success") {
+      return data.rates[currency] || null;
+    }
+  } catch (err) {
+    console.error("Failed to get fiat rate", err);
+  }
+  return null;
+}
+
+async function getCryptoRate(symbol) {
+  try {
+    const response = await fetch(
+      `https://api.coingecko.com/api/v3/simple/price?ids=${symbol}&vs_currencies=usd`
+    );
+    const data = await response.json();
+    return data[symbol]?.usd || null;
+  } catch (err) {
+    console.error("Failed to get crypto rate", err);
+  }
+  return null;
+}
+
+function normalizePaymentMethod(paymentMethod) {
+  const raw = String(paymentMethod || "").trim().toUpperCase();
+  if (!raw) {
+    return "";
+  }
+  if (raw === "MP") {
+    return "MERCADO_PAGO";
+  }
+  if (raw === "BTC") {
+    return "BITCOIN";
+  }
+  if (raw === "USDT_BSC" || raw === "USDT_TRON") {
+    return "USDT";
+  }
+  return raw;
+}
+
+async function calculateLocalAmount(usdAmount, paymentMethod) {
+  const method = normalizePaymentMethod(paymentMethod);
+  const usdBase = Number(usdAmount) || 0;
+  let currency = null;
+  let rate = null;
+
+  if (method === "NEQUI") {
+    currency = "COP";
+    rate = await getFiatRate("COP");
+    if (rate) {
+      return { currency, amount: usdBase * rate };
+    }
+  } else if (method === "MERCADO_PAGO") {
+    currency = "MXN";
+    rate = await getFiatRate("MXN");
+    if (rate) {
+      return { currency, amount: usdBase * rate };
+    }
+  } else if (method === "BITCOIN") {
+    currency = "BTC";
+    rate = await getCryptoRate("bitcoin");
+    if (rate) {
+      return { currency, amount: usdBase / rate };
+    }
+  } else if (method === "USDT") {
+    currency = "USDT";
+    return { currency, amount: usdBase };
+  } else if (method === "LTC") {
+    currency = "LTC";
+    rate = await getCryptoRate("litecoin");
+    if (rate) {
+      return { currency, amount: usdBase / rate };
+    }
+  }
+
+  return null;
+}
 
 async function ensureUser(client, telegramId, username) {
   const userRes = await client.query(
@@ -413,9 +578,11 @@ async function submitPaymentProof(req, res, next) {
     await client.query("BEGIN");
 
     const orderRes = await client.query(
-      `SELECT o.*, u.telegram_id AS owner_telegram_id
+      `SELECT o.*, u.telegram_id AS owner_telegram_id, u.telegram_username,
+              p.name AS product_name, p.price AS product_price
        FROM orders o
        JOIN users u ON u.id = o.user_id
+       JOIN products p ON p.id = o.product_id
        WHERE o.id = $1
        FOR UPDATE`,
       [orderId]
@@ -490,6 +657,123 @@ async function submitPaymentProof(req, res, next) {
     );
 
     await client.query("COMMIT");
+
+    const adminIds = parseAdminTelegramIds();
+    if (adminIds.length > 0) {
+      const orderRow = updatedOrderRes.rows[0];
+      const paymentRow = paymentRes.rows[0];
+      const itemsRes = await pool.query(
+        `SELECT oi.qty, oi.unit_price_usd, oi.line_total_usd, p.name
+         FROM order_items oi
+         JOIN products p ON p.id = oi.product_id
+         WHERE oi.order_id = $1
+         ORDER BY oi.created_at ASC`,
+        [orderId]
+      );
+      const items = itemsRes.rows || [];
+      let subtotalUsd = 0;
+      if (items.length > 0) {
+        subtotalUsd = items.reduce((sum, item) => {
+          const lineTotal =
+            item.line_total_usd != null
+              ? Number(item.line_total_usd)
+              : Number(item.unit_price_usd || 0) * Number(item.qty || 0);
+          return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
+        }, 0);
+        subtotalUsd = Number(subtotalUsd.toFixed(2));
+      } else {
+        subtotalUsd = Number(orderRow.unit_price_at_purchase || orderRow.product_price || 0);
+      }
+
+      const paymentMethod =
+        paymentRow?.payment_method || orderRow.payment_method || null;
+      let localTotal = null;
+      if (paymentMethod) {
+        try {
+          localTotal = await calculateLocalAmount(subtotalUsd, paymentMethod);
+        } catch (error) {
+          console.error("Failed to calculate local total", error);
+        }
+      }
+
+      const orderNumberText = formatOrderNumber(orderRow.order_number);
+      const usernameText = orderRow.telegram_username
+        ? `@${String(orderRow.telegram_username).replace(/^@/, "")}`
+        : "-";
+      const productName =
+        items.length > 0
+          ? items
+              .map((item) => {
+                const qty = Number(item.qty || 0);
+                const name = String(item.name || "Item");
+                return qty > 1 ? `${name} x${qty}` : name;
+              })
+              .join(", ")
+          : String(orderRow.product_name || "-");
+
+      const lines = [
+        "🧾 Detalle de la Orden",
+        `🆔 Orden: ${orderNumberText}`,
+        "",
+        "👤 Usuario",
+        `🆔 Telegram ID: ${orderRow.owner_telegram_id}`,
+        `👤 Username: ${usernameText}`,
+        "",
+        "📦 Producto",
+        `🛒 Método: ${productName}`,
+        `💵 Precio: ${formatUsdAmount(subtotalUsd)} USD`,
+        "",
+        "💰 Totales",
+        `💲 Total USD: ${formatUsdAmount(subtotalUsd)}`,
+      ];
+
+      if (localTotal && localTotal.currency) {
+        const emoji = localTotal.currency === "COP" ? "🇨🇴" : "💱";
+        lines.push(
+          `${emoji} Total ${localTotal.currency}: ${formatLocalAmount(
+            localTotal.amount,
+            localTotal.currency
+          )} ${localTotal.currency}`
+        );
+      }
+
+      lines.push(
+        "",
+        "💳 Pago",
+        `🏦 Método: ${formatPaymentMethod(paymentMethod)}`,
+        `📉 Estado del pago: ${formatPaymentStatus(paymentRow?.review_status)}`,
+        `⏰ Enviado: ${formatBogotaDateTime(paymentRow?.submitted_at)}`,
+        "",
+        "🗓️ Información adicional",
+        `📆 Orden creada: ${formatBogotaDateTime(orderRow.created_at)}`
+      );
+
+      const caption = lines.join("\n");
+      const replyMarkup = {
+        inline_keyboard: [
+          [
+            { text: "Panel Admin", url: ADMIN_PANEL_URL },
+            {
+              text: "Banear Usuario",
+              callback_data: `admin_ban:${orderRow.owner_telegram_id}:${orderRow.id}`,
+            },
+          ],
+        ],
+      };
+
+      setImmediate(() => {
+        adminIds.forEach((adminId) => {
+          sendPhoto(adminId, {
+            file_id: paymentRow.screenshot_file_id,
+            caption,
+            reply_markup: replyMarkup,
+          }).catch((error) => {
+            console.error("Admin payment proof notify failed", error);
+          });
+        });
+      });
+    }
+
     return res.json({
       order: updatedOrderRes.rows[0],
       payment: paymentRes.rows[0],

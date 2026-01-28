@@ -372,3 +372,20 @@ class ApiClient:
                 except ValueError:
                     return {"status_code": response.status_code, "data": {}}
             return response.json()
+
+    async def ban_user(
+        self, telegram_id: int, payload: Dict[str, Any], bot_secret: Optional[str]
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/{telegram_id}/ban"
+        headers = {"x-bot-secret": bot_secret} if bot_secret else {}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, headers=headers, timeout=5)
+            if response.status_code >= 400:
+                try:
+                    return {
+                        "status_code": response.status_code,
+                        "data": response.json(),
+                    }
+                except ValueError:
+                    return {"status_code": response.status_code, "data": {}}
+            return response.json()

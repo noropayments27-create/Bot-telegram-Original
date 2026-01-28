@@ -4,6 +4,7 @@ const {
   getUserByTelegramId,
   updateUserLocale,
   getUserBanStatus,
+  banUserFromBot,
   getAffiliateStatus,
   getAffiliateTop,
   applyAffiliate,
@@ -31,6 +32,7 @@ router.post("/affiliates/code/assign", requireBotSecret, assignAffiliateCode);
 router.post("/affiliates/withdraw", requireBotSecret, requestAffiliatePayout);
 router.post("/affiliates/invoices/decision", requireBotSecret, decideAffiliateInvoice);
 router.post("/affiliates/:id/decision", requireBotSecret, decideAffiliateStatus);
+router.post("/:telegram_id/ban", requireBotSecret, banUserFromBot);
 router.post("/telegram/upsert", upsertTelegramUser);
 router.get("/:telegram_id", getUserByTelegramId);
 router.get("/:telegram_id/ban", getUserBanStatus);

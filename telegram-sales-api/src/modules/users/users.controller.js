@@ -1256,6 +1256,57 @@ async function getUserBanStatus(req, res, next) {
   }
 }
 
+async function banUserFromBot(req, res, next) {
+  const telegramId = Number(req.params.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  const reason = String(req.body?.reason || "Banned via Telegram admin").trim();
+  const adminTelegramId = Number(req.body?.admin_telegram_id);
+  const pool = getPool();
+
+  try {
+    const existingRes = await pool.query(
+      "SELECT 1 FROM user_bans WHERE telegram_id = $1 LIMIT 1",
+      [telegramId]
+    );
+    if (existingRes.rowCount === 0) {
+      await pool.query(
+        "INSERT INTO user_bans (telegram_id, reason) VALUES ($1, $2) ON CONFLICT (telegram_id) DO NOTHING",
+        [telegramId, reason || null]
+      );
+    }
+
+    try {
+      await pool.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "USER_BAN_TELEGRAM",
+          "user",
+          null,
+          JSON.stringify({
+            telegram_id: telegramId,
+            reason: reason || null,
+            admin_telegram_id: Number.isFinite(adminTelegramId) ? adminTelegramId : null,
+            source: "telegram",
+          }),
+        ]
+      );
+    } catch (error) {
+      console.error("Failed to insert ban audit log", error);
+    }
+
+    return res.json({
+      ok: true,
+      banned: true,
+      already_banned: existingRes.rowCount > 0,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
 const { buildAffiliateInvoiceMessage } = require("../../services/affiliateInvoiceMessage");
 
 async function decideAffiliateInvoice(req, res, next) {
@@ -1436,6 +1487,7 @@ module.exports = {
   getUserByTelegramId,
   updateUserLocale,
   getUserBanStatus,
+  banUserFromBot,
   getAffiliateStatus,
   getAffiliateTop,
   applyAffiliate,
