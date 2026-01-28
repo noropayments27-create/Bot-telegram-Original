@@ -4,16 +4,14 @@ from uuid import uuid4
 
 from aiogram.types import Message
 
+from ..services.i18n import t
 from ..utils.main_view import try_edit_main_view
 from ..utils.home_view import render_home_view
 
 _ORDER_POLLERS: Dict[int, asyncio.Task] = {}
 _ORDER_POLL_ORDER: Dict[int, str] = {}
 
-_NOTICE_TEXT = (
-    "⛔️ La orden actual ya no está disponible (expiró o fue cancelada) "
-    "te redirijo al menú principal ⏳"
-)
+_NOTICE_TEXT = t("es", "order_expired_notice")
 
 
 def is_order_payable(order: Optional[Dict[str, Any]]) -> bool:
@@ -49,20 +47,21 @@ async def show_order_not_available_and_redirect(
     )
     await state.set_state(None)
 
+    notice_text = t(locale, "order_expired_notice") if locale else _NOTICE_TEXT
     edited = await try_edit_main_view(
         message.bot,
         user_id,
         message.chat.id,
-        _NOTICE_TEXT,
+        notice_text,
         reply_markup=None,
     )
     if not edited:
         try:
-            await message.edit_text(_NOTICE_TEXT)
+            await message.edit_text(notice_text)
             edited = True
         except Exception:
             try:
-                await message.edit_caption(_NOTICE_TEXT)
+                await message.edit_caption(notice_text)
                 edited = True
             except Exception:
                 edited = False

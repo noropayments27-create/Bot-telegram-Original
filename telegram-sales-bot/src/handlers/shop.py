@@ -1297,8 +1297,10 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     total_line = ""
     if total_qty:
         total_qty_int = int(total_qty)
-        suffix = "añadido" if total_qty_int == 1 else "añadidos"
-        total_line = f"🧺 {total_qty_int} {suffix} al carrito"
+        if total_qty_int == 1:
+            total_line = t(locale, "cart_added_single").format(qty=total_qty_int)
+        else:
+            total_line = t(locale, "cart_added_plural").format(qty=total_qty_int)
     text = (
         f"{product['display_name']}\n\n"
         f"{_format_code_line(product, locale)}"
@@ -1390,8 +1392,10 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     total_line = ""
     if total_qty:
         total_qty_int = int(total_qty)
-        suffix = "añadido" if total_qty_int == 1 else "añadidos"
-        total_line = f"🧺 {total_qty_int} {suffix} al carrito"
+        if total_qty_int == 1:
+            total_line = t(locale, "cart_added_single").format(qty=total_qty_int)
+        else:
+            total_line = t(locale, "cart_added_plural").format(qty=total_qty_int)
     text = (
         f"{item['display_name']}\n\n"
         f"{_format_code_line(item, locale)}"

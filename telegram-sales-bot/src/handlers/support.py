@@ -157,7 +157,7 @@ async def start_support_flow(
     payload = {
         "telegram_id": user.id,
         "telegram_username": user.username,
-        "subject": subject or "Soporte",
+        "subject": subject or t(locale, "support_subject_default"),
     }
 
     result = await api_client.open_or_create_ticket(payload)
@@ -183,7 +183,7 @@ async def start_support_flow(
         return
     if result.get("status_code") == 400:
         await state.set_state(SupportStates.active)
-        await state.update_data(support_subject=subject or "Soporte")
+        await state.update_data(support_subject=subject or t(locale, "support_subject_default"))
         await _render_support_view(
             message,
             user.id,
@@ -197,7 +197,7 @@ async def start_support_flow(
     if ticket:
         await state.update_data(ticket_id=ticket["id"])
         await state.set_state(SupportStates.active)
-    await state.update_data(support_subject=subject or "Soporte")
+    await state.update_data(support_subject=subject or t(locale, "support_subject_default"))
     await _render_support_view(
         message,
         user.id,
@@ -207,7 +207,8 @@ async def start_support_flow(
 
 
 @router.message(Command("soporte"))
-@router.message(F.text == "🆘 Soporte")
+@router.message(Command("support"))
+@router.message(F.text.in_({"🆘 Soporte", "🆘 Support"}))
 async def handle_support(message: Message, state: FSMContext) -> None:
     if not message.from_user:
         return
@@ -332,7 +333,7 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
     }
 
     if not ticket_id:
-        subject = data.get("support_subject") or "Soporte"
+        subject = data.get("support_subject") or t(locale, "support_subject_default")
         payload.update(
             {
                 "telegram_username": message.from_user.username,

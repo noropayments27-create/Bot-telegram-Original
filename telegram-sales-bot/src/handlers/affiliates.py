@@ -322,11 +322,11 @@ def _format_affiliate_status(locale: str | None, status: str | None) -> str:
     return normalized
 
 
-def _compute_rank(
+def _compute_rank_index(
     sales_total: int,
     earnings_total: float,
     days_since_last_sale: int | None,
-) -> str:
+) -> int:
     if sales_total >= 200 and earnings_total >= 800:
         base_index = 5
     elif sales_total >= 100 and earnings_total >= 500:
@@ -345,52 +345,40 @@ def _compute_rank(
         downgrade_steps = days_since_last_sale // 30
 
     final_index = max(0, base_index - downgrade_steps)
-    labels = [
-        "Novato 🎖️",
-        "Bronce 🥉",
-        "Plata 🥈",
-        "Oro 🥇",
-        "Diamante 💎",
-        "Élite 👑",
-    ]
-    return labels[final_index]
+    return final_index
 
 
 def _get_level_details(
     sales_total: int,
     earnings_total: float,
     days_since_last_sale: int | None,
+    locale: str | None = None,
 ) -> dict:
-    rank = _compute_rank(sales_total, earnings_total, days_since_last_sale)
-    base_rates = {
-        "Novato 🎖️": 0.05,
-        "Bronce 🥉": 0.08,
-        "Plata 🥈": 0.12,
-        "Oro 🥇": 0.15,
-        "Diamante 💎": 0.2,
-        "Élite 👑": 0.3,
-    }
-    min_withdraw = {
-        "Novato 🎖️": "$25 USD",
-        "Bronce 🥉": "$20 USD",
-        "Plata 🥈": "$15 USD",
-        "Oro 🥇": "$10 USD",
-        "Diamante 💎": "No aplica",
-        "Élite 👑": "No aplica",
-    }
-    min_values = {
-        "Novato 🎖️": 25,
-        "Bronce 🥉": 20,
-        "Plata 🥈": 15,
-        "Oro 🥇": 10,
-        "Diamante 💎": 0,
-        "Élite 👑": 0,
-    }
+    rank_index = _compute_rank_index(sales_total, earnings_total, days_since_last_sale)
+    labels = [
+        t(locale, "affiliate_rank_novato"),
+        t(locale, "affiliate_rank_bronce"),
+        t(locale, "affiliate_rank_plata"),
+        t(locale, "affiliate_rank_oro"),
+        t(locale, "affiliate_rank_diamante"),
+        t(locale, "affiliate_rank_elite"),
+    ]
+    base_rates = [0.05, 0.08, 0.12, 0.15, 0.2, 0.3]
+    min_withdraw = [
+        "$25 USD",
+        "$20 USD",
+        "$15 USD",
+        "$10 USD",
+        t(locale, "affiliate_not_applicable"),
+        t(locale, "affiliate_not_applicable"),
+    ]
+    min_values = [25, 20, 15, 10, 0, 0]
+    rank = labels[rank_index]
     return {
         "rank": rank,
-        "base_rate": base_rates.get(rank, 0),
-        "min_withdraw": min_withdraw.get(rank, "No aplica"),
-        "min_withdraw_value": min_values.get(rank, 0),
+        "base_rate": base_rates[rank_index],
+        "min_withdraw": min_withdraw[rank_index],
+        "min_withdraw_value": min_values[rank_index],
     }
 
 
@@ -584,7 +572,7 @@ async def _render_affiliates_home(
             days_since_last_sale = _days_since_date(last_sale_raw)
         except Exception:
             days_since_last_sale = None
-        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale, locale)
         rank_text = level["rank"]
         boost_rate = float(affiliate.get("commission_rate") or 0)
         base_percent = int(round(level["base_rate"] * 100))
@@ -615,20 +603,25 @@ async def _render_affiliates_home(
             inactivity_days = (
                 inactivity_fallback if inactivity_fallback is not None else "-"
             )
+        username_text = (
+            f"@{callback.from_user.username}"
+            if callback.from_user.username
+            else "-"
+        )
         text = (
-            "🌟 ¡BIENVENIDO AL EQUIPO! 🌟\n\n"
-            f"🆔 ID: {callback.from_user.id}\n"
-            f"👤 Usuario: {'@' + callback.from_user.username if callback.from_user.username else '-'}\n"
+            f"{t(locale, 'affiliate_team_welcome_title')}\n\n"
+            f"{t(locale, 'affiliate_team_id_line').format(id=callback.from_user.id)}\n"
+            f"{t(locale, 'affiliate_team_user_line').format(username=username_text)}\n"
             f"{t(locale, 'affiliate_top_separator')}\n"
-            f"🏅 Tu Rango: {rank_text}\n"
-            f"💸 Comisión base: {commission_text}\n"
-            f"📅 Antigüedad: {approval_date} [{days_active} dias]\n"
-            f"💵 Mínimo retiro: {level['min_withdraw']}\n"
-            f"⏳ Conteo de inactividad: {inactivity_days}\n"
+            f"{t(locale, 'affiliate_team_rank_line').format(rank=rank_text)}\n"
+            f"{t(locale, 'affiliate_team_commission_line').format(commission=commission_text)}\n"
+            f"{t(locale, 'affiliate_team_seniority_line').format(date=approval_date, days=days_active)}\n"
+            f"{t(locale, 'affiliate_team_min_withdraw_line').format(amount=level['min_withdraw'])}\n"
+            f"{t(locale, 'affiliate_team_inactivity_line').format(days=inactivity_days)}\n"
             f"{t(locale, 'affiliate_top_separator')}\n"
-            f"🧾 ID Afiliado: {_format_affiliate_code(affiliate_code)}\n\n"
-            f"🔗 Link de referido: {referral_link}\n\n"
-            "¿Qué te gustaría hacer hoy? 🚀"
+            f"{t(locale, 'affiliate_team_affiliate_id_line').format(code=_format_affiliate_code(affiliate_code))}\n\n"
+            f"{t(locale, 'affiliate_team_referral_link_line').format(link=referral_link)}\n\n"
+            f"{t(locale, 'affiliate_team_question')}"
         )
     else:
         text = (
@@ -1016,7 +1009,7 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
                 days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
         except Exception:
             days_since_last_sale = None
-        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale, locale)
         min_required = float(level.get("min_withdraw_value") or 0)
         allow_withdraw = (min_required <= 0 or balance_value >= min_required) and debt_value <= 0
         allow_min_withdraw = min_required > 0 and balance_value >= min_required and debt_value <= 0
@@ -1033,9 +1026,9 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
             pending_amount = _format_money(pending_payout.get("amount"))
             pending_date = _format_date(pending_payout.get("created_at"))
             pending_lines = (
-                f"💸 Su solicitud de retiro por: {pending_amount}\n"
-                "Esta en proceso... 🕑\n\n"
-                f"Fecha de retiro: {pending_date}\n"
+                f"{t(locale, 'affiliate_withdraw_pending_amount_line').format(amount=pending_amount)}\n"
+                f"{t(locale, 'affiliate_withdraw_pending_status_line')}\n\n"
+                f"{t(locale, 'affiliate_withdraw_pending_date_line').format(date=pending_date)}\n"
                 f"{separator}\n"
             )
         text = (
@@ -1092,7 +1085,7 @@ async def handle_affiliate_withdraw_all(callback: CallbackQuery, state: FSMConte
                 days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
         except Exception:
             days_since_last_sale = None
-        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale, locale)
         min_required = float(level.get("min_withdraw_value") or 0)
         if destination == "-":
             await callback.answer(
@@ -1163,7 +1156,7 @@ async def handle_affiliate_withdraw_min(callback: CallbackQuery, state: FSMConte
                 days_since_last_sale = max((datetime.utcnow() - last_sale_dt).days, 0)
         except Exception:
             days_since_last_sale = None
-        level = _get_level_details(sales_count, earnings_total, days_since_last_sale)
+        level = _get_level_details(sales_count, earnings_total, days_since_last_sale, locale)
         min_required = float(level.get("min_withdraw_value") or 0)
         if destination == "-":
             await callback.answer(
