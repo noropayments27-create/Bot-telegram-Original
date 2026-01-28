@@ -1079,12 +1079,6 @@ router.post("/products", async (req, res, next) => {
   const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
     ? String(req.body?.description_en || "").trim()
     : null;
-  const nameEn = Object.prototype.hasOwnProperty.call(req.body || {}, "name_en")
-    ? String(req.body?.name_en || "").trim()
-    : null;
-  const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
-    ? String(req.body?.description_en || "").trim()
-    : null;
   const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
     ? req.body.delivery_payload
     : {};
