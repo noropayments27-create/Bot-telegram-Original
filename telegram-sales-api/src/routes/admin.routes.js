@@ -1179,6 +1179,12 @@ router.post("/products/:id/update", async (req, res, next) => {
   const description = typeof req.body?.description === "string"
     ? req.body.description.trim()
     : "";
+  const nameEn = Object.prototype.hasOwnProperty.call(req.body || {}, "name_en")
+    ? String(req.body?.name_en || "").trim()
+    : null;
+  const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
+    ? String(req.body?.description_en || "").trim()
+    : null;
 
   const showStock = req.body?.show_stock === undefined
     ? true
