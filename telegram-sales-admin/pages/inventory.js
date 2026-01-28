@@ -89,7 +89,9 @@ export default function InventoryPage() {
   const [editDeliveryTextEn, setEditDeliveryTextEn] = useState("");
   const [toast, setToast] = useState("");
   const createDescRefs = useRef([]);
+  const createDescEnRefs = useRef([]);
   const editDescRefs = useRef([]);
+  const editDescEnRefs = useRef([]);
   const [manualUnit, setManualUnit] = useState({
     username: "",
     password: "",
@@ -374,7 +376,9 @@ export default function InventoryPage() {
       ensureDescriptionTemplate(data?.product?.description || "")
     );
     setEditDescriptionEn(
-      String(data?.product?.description_en || data?.product?.description || "")
+      ensureDescriptionTemplate(
+        data?.product?.description_en || data?.product?.description || ""
+      )
     );
     setEditShowStock(
       data?.product?.show_stock === undefined ? true : Boolean(data.product.show_stock)
@@ -948,7 +952,9 @@ export default function InventoryPage() {
   };
 
   const createDescriptionLines = getDescriptionLines(createDescription);
+  const createDescriptionEnLines = getDescriptionLines(createDescriptionEn);
   const editDescriptionLines = getDescriptionLines(editDescription);
+  const editDescriptionEnLines = getDescriptionLines(editDescriptionEn);
   const manualUnitComplete = Boolean(
     String(manualUnit.username || "").trim()
     && String(manualUnit.password || "").trim()
@@ -1267,15 +1273,34 @@ export default function InventoryPage() {
                         </div>
                       ))}
                     </div>
-                    <label className="description-translation">
-                      Descripción (Ingles)
-                      <textarea
-                        rows={6}
-                        value={createDescriptionEn}
-                        onChange={(event) => setCreateDescriptionEn(event.target.value)}
-                        placeholder="Descripción en ingles (opcional)"
-                      />
-                    </label>
+                    <div className="description-translation">
+                      <span>Descripción (Ingles)</span>
+                      <div className="description-editor" role="textbox">
+                        {createDescriptionEnLines.map((line, index) => (
+                          <div key={`create-line-en-${index}`} className="description-line">
+                            <span className="description-bullet" aria-hidden="true">⌾</span>
+                            <input
+                              ref={(el) => {
+                                createDescEnRefs.current[index] = el;
+                              }}
+                              type="text"
+                              value={line}
+                              onChange={(event) =>
+                                updateDescriptionLine(
+                                  createDescriptionEn,
+                                  setCreateDescriptionEn,
+                                  index,
+                                  event.target.value
+                                )
+                              }
+                              onKeyDown={(event) =>
+                                handleDescriptionLineKeyDown(event, createDescEnRefs, index)
+                              }
+                            />
+                          </div>
+                        ))}
+                      </div>
+                    </div>
                   </div>
                 )}
               </div>
@@ -2104,15 +2129,34 @@ export default function InventoryPage() {
                           </div>
                         ))}
                       </div>
-                      <label className="description-translation">
-                        Descripción (Ingles)
-                        <textarea
-                          rows={6}
-                          value={editDescriptionEn}
-                          onChange={(event) => setEditDescriptionEn(event.target.value)}
-                          placeholder="Descripción en ingles (opcional)"
-                        />
-                      </label>
+                      <div className="description-translation">
+                        <span>Descripción (Ingles)</span>
+                        <div className="description-editor" role="textbox">
+                          {editDescriptionEnLines.map((line, index) => (
+                            <div key={`edit-line-en-${index}`} className="description-line">
+                              <span className="description-bullet" aria-hidden="true">⌾</span>
+                              <input
+                                ref={(el) => {
+                                  editDescEnRefs.current[index] = el;
+                                }}
+                                type="text"
+                                value={line}
+                                onChange={(event) =>
+                                  updateDescriptionLine(
+                                    editDescriptionEn,
+                                    setEditDescriptionEn,
+                                    index,
+                                    event.target.value
+                                  )
+                                }
+                                onKeyDown={(event) =>
+                                  handleDescriptionLineKeyDown(event, editDescEnRefs, index)
+                                }
+                              />
+                            </div>
+                          ))}
+                        </div>
+                      </div>
                     </div>
                   )}
                   <div className="product-edit__actions">
