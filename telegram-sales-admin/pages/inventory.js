@@ -373,7 +373,9 @@ export default function InventoryPage() {
     setEditDescription(
       ensureDescriptionTemplate(data?.product?.description || "")
     );
-    setEditDescriptionEn(String(data?.product?.description_en || ""));
+    setEditDescriptionEn(
+      String(data?.product?.description_en || data?.product?.description || "")
+    );
     setEditShowStock(
       data?.product?.show_stock === undefined ? true : Boolean(data.product.show_stock)
     );
@@ -589,7 +591,8 @@ export default function InventoryPage() {
     setError("");
     try {
       const trimmedNameEn = createNameEn.trim();
-      const descriptionEn = buildDescriptionPayload(createDescriptionEn);
+      const descriptionEnRaw = buildDescriptionPayload(createDescriptionEn);
+      const descriptionEn = descriptionEnRaw || buildDescriptionPayload(createDescription);
       const deliveryPayloadEn = createDeliveryTextEn.trim()
         ? { text: createDeliveryTextEn.trim() }
         : null;
@@ -827,7 +830,8 @@ export default function InventoryPage() {
         ? "0"
         : simpleStock;
     const trimmedNameEn = editNameEn.trim();
-    const descriptionEn = buildDescriptionPayload(editDescriptionEn);
+    const descriptionEnRaw = buildDescriptionPayload(editDescriptionEn);
+    const descriptionEn = descriptionEnRaw || buildDescriptionPayload(editDescription);
     const deliveryPayloadEn = editDeliveryTextEn.trim()
       ? { text: editDeliveryTextEn.trim() }
       : null;
@@ -1030,12 +1034,12 @@ export default function InventoryPage() {
                   />
                 </label>
                 <label>
-                  Nombre (EN)
+                  Nombre (Ingles)
                   <input
                     type="text"
                     value={createNameEn}
                     onChange={(event) => setCreateNameEn(event.target.value)}
-                    placeholder="Optional English name"
+                    placeholder="Nombre en ingles (opcional)"
                   />
                 </label>
                 <label>
@@ -1134,12 +1138,12 @@ export default function InventoryPage() {
                       )}
                       {createDeliveryType === "TEXT" && (
                         <label>
-                          Texto de entrega (EN)
+                          Texto de entrega (Ingles)
                           <textarea
                             rows={6}
                             value={createDeliveryTextEn}
                             onChange={(event) => setCreateDeliveryTextEn(event.target.value)}
-                            placeholder="Optional English delivery text"
+                            placeholder="Texto en ingles (opcional)"
                           />
                         </label>
                       )}
@@ -1264,12 +1268,12 @@ export default function InventoryPage() {
                       ))}
                     </div>
                     <label className="description-translation">
-                      Descripción (EN)
+                      Descripción (Ingles)
                       <textarea
                         rows={6}
                         value={createDescriptionEn}
                         onChange={(event) => setCreateDescriptionEn(event.target.value)}
-                        placeholder="Optional English description"
+                        placeholder="Descripción en ingles (opcional)"
                       />
                     </label>
                   </div>
@@ -1729,7 +1733,7 @@ export default function InventoryPage() {
                       />
                     </label>
                     <label>
-                      Nombre (EN)
+                      Nombre (Ingles)
                       <input
                         type="text"
                         value={editNameEn}
@@ -1879,12 +1883,12 @@ export default function InventoryPage() {
                         )}
                         {editDeliveryType === "TEXT" && (
                           <label>
-                            Texto de entrega (EN)
+                            Texto de entrega (Ingles)
                             <textarea
                               rows={6}
                               value={editDeliveryTextEn}
                               onChange={(event) => setEditDeliveryTextEn(event.target.value)}
-                              placeholder="Optional English delivery text"
+                              placeholder="Texto en ingles (opcional)"
                             />
                           </label>
                         )}
@@ -2101,12 +2105,12 @@ export default function InventoryPage() {
                         ))}
                       </div>
                       <label className="description-translation">
-                        Descripción (EN)
+                        Descripción (Ingles)
                         <textarea
                           rows={6}
                           value={editDescriptionEn}
                           onChange={(event) => setEditDescriptionEn(event.target.value)}
-                          placeholder="Optional English description"
+                          placeholder="Descripción en ingles (opcional)"
                         />
                       </label>
                     </div>
