@@ -15,7 +15,14 @@ const {
   sendMessage,
   sendPhoto,
   sendDocument,
+  editMessageCaption,
 } = require("../services/telegram");
+const {
+  listAdminOrderNotifications,
+  buildOrderNotificationCaption,
+  buildOrderNotificationKeyboard,
+  calculateLocalAmount: calculateLocalAmountForAdminNotify,
+} = require("../services/adminOrderNotification");
 const {
   listPaymentMethods,
   normalizeMethodKey,
@@ -255,6 +262,100 @@ async function calculateLocalAmount(usdAmount, paymentMethod) {
   }
 
   return null;
+}
+
+async function updateAdminOrderNotifications(pool, orderId) {
+  try {
+    const notifications = await listAdminOrderNotifications(pool, orderId);
+    if (!notifications.length) {
+      return;
+    }
+
+    const orderRes = await pool.query(
+      `SELECT o.*, u.telegram_id, u.telegram_username,
+              p.name AS product_name, p.price AS product_price
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       JOIN products p ON p.id = o.product_id
+       WHERE o.id = $1`,
+      [orderId]
+    );
+    if (orderRes.rowCount === 0) {
+      return;
+    }
+    const order = orderRes.rows[0];
+
+    const paymentRes = await pool.query(
+      "SELECT * FROM order_payments WHERE order_id = $1",
+      [orderId]
+    );
+    const payment = paymentRes.rows[0] || null;
+
+    const itemsRes = await pool.query(
+      `SELECT oi.qty, oi.unit_price_usd, oi.line_total_usd, p.name
+       FROM order_items oi
+       JOIN products p ON p.id = oi.product_id
+       WHERE oi.order_id = $1
+       ORDER BY oi.created_at ASC`,
+      [orderId]
+    );
+    const items = itemsRes.rows || [];
+
+    let subtotalUsd = 0;
+    if (items.length > 0) {
+      subtotalUsd = items.reduce((sum, item) => {
+        const lineTotal =
+          item.line_total_usd != null
+            ? Number(item.line_total_usd)
+            : Number(item.unit_price_usd || 0) * Number(item.qty || 0);
+        return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
+      }, 0);
+      subtotalUsd = Number(subtotalUsd.toFixed(2));
+    } else {
+      subtotalUsd = Number(order.unit_price_at_purchase || order.product_price || 0);
+    }
+
+    const paymentMethod = payment?.payment_method || order.payment_method;
+    let localTotal = null;
+    if (paymentMethod) {
+      try {
+        localTotal = await calculateLocalAmountForAdminNotify(subtotalUsd, paymentMethod);
+      } catch (error) {
+        console.error("Failed to calculate local total", error);
+      }
+    }
+
+    const caption = buildOrderNotificationCaption({
+      order,
+      user: {
+        telegram_id: order.telegram_id,
+        telegram_username: order.telegram_username,
+      },
+      items,
+      payment,
+      subtotalUsd,
+      localTotal,
+    });
+    const replyMarkup = buildOrderNotificationKeyboard({
+      id: order.id,
+      telegram_id: order.telegram_id,
+    });
+
+    await Promise.all(
+      notifications.map((row) =>
+        editMessageCaption(
+          row.admin_telegram_id,
+          row.message_id,
+          caption,
+          { reply_markup: replyMarkup }
+        ).catch((error) => {
+          console.error("Admin order notify update failed", error);
+        })
+      )
+    );
+  } catch (error) {
+    console.error("Admin order notify update failed", error);
+  }
 }
 
 function parsePagination(query) {
@@ -3022,6 +3123,8 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
     await client.query("COMMIT");
 
+    await updateAdminOrderNotifications(pool, orderId);
+
     const telegramId = order.telegram_id;
     order.paid_at = updatedOrderRes.rows[0].paid_at;
 
@@ -3607,6 +3710,8 @@ router.post("/orders/:id/reject", async (req, res, next) => {
     );
 
     await client.query("COMMIT");
+
+    await updateAdminOrderNotifications(pool, orderId);
 
     const telegramId = orderRes.rows[0].telegram_id;
     const reasonText = reason ? `\nMotivo: ${reason}` : "";

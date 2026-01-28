@@ -208,6 +208,37 @@ async function sendVideo(telegramId, payload) {
   return sendMedia(telegramId, "sendVideo", "video", payload);
 }
 
+async function editMessageCaption(telegramId, messageId, caption, options = {}) {
+  const token = getToken();
+  const url = `${TELEGRAM_API_BASE}/bot${token}/editMessageCaption`;
+  const body = {
+    chat_id: telegramId,
+    message_id: messageId,
+    caption,
+  };
+  if (options.parse_mode) {
+    body.parse_mode = options.parse_mode;
+  }
+  if (options.reply_markup) {
+    body.reply_markup = options.reply_markup;
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error("TELEGRAM_EDIT_FAILED");
+  }
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error("TELEGRAM_EDIT_FAILED");
+  }
+  return data.result;
+}
+
 module.exports = {
   getFilePath,
   downloadFile,
@@ -215,4 +246,5 @@ module.exports = {
   sendDocument,
   sendPhoto,
   sendVideo,
+  editMessageCaption,
 };
