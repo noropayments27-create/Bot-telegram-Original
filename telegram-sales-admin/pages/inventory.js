@@ -40,6 +40,7 @@ export default function InventoryPage() {
   const [editingName, setEditingName] = useState("");
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
+  const [createNameEn, setCreateNameEn] = useState("");
   const [createCategory, setCreateCategory] = useState("tienda");
   const [createPrice, setCreatePrice] = useState("0");
   const [createIsFree, setCreateIsFree] = useState(false);
@@ -58,10 +59,13 @@ export default function InventoryPage() {
     telegram_file_id: "",
     filename: "",
   });
+  const [createDeliveryTextEn, setCreateDeliveryTextEn] = useState("");
   const [createDescription, setCreateDescription] = useState(
     Array.from({ length: 8 }, () => "⌾ ").join("\n")
   );
+  const [createDescriptionEn, setCreateDescriptionEn] = useState("");
   const [editProductName, setEditProductName] = useState("");
+  const [editNameEn, setEditNameEn] = useState("");
   const [editCategory, setEditCategory] = useState("tienda");
   const [editPrice, setEditPrice] = useState("0");
   const [editIsFree, setEditIsFree] = useState(false);
@@ -69,6 +73,7 @@ export default function InventoryPage() {
   const [editDescription, setEditDescription] = useState(
     Array.from({ length: 8 }, () => "⌾ ").join("\n")
   );
+  const [editDescriptionEn, setEditDescriptionEn] = useState("");
   const [editShowStock, setEditShowStock] = useState(true);
   const [editUnique, setEditUnique] = useState(false);
   const [editStockMode, setEditStockMode] = useState("SIMPLE");
@@ -81,6 +86,7 @@ export default function InventoryPage() {
     telegram_file_id: "",
     filename: "",
   });
+  const [editDeliveryTextEn, setEditDeliveryTextEn] = useState("");
   const [toast, setToast] = useState("");
   const createDescRefs = useRef([]);
   const editDescRefs = useRef([]);
@@ -351,6 +357,7 @@ export default function InventoryPage() {
       data?.product?.stock_qty === null || data?.product?.stock_qty === undefined
     );
     setEditProductName(stripCategoryPrefix(data?.product?.name || ""));
+    setEditNameEn(String(data?.product?.name_en || ""));
     setEditCategory(getCategoryKey(data?.product));
     setEditPrice(
       data?.product?.price === null || data?.product?.price === undefined
@@ -366,6 +373,7 @@ export default function InventoryPage() {
     setEditDescription(
       ensureDescriptionTemplate(data?.product?.description || "")
     );
+    setEditDescriptionEn(String(data?.product?.description_en || ""));
     setEditShowStock(
       data?.product?.show_stock === undefined ? true : Boolean(data.product.show_stock)
     );
@@ -385,6 +393,11 @@ export default function InventoryPage() {
         || "",
       filename: data?.product?.delivery_payload?.filename || "",
     });
+    setEditDeliveryTextEn(
+      data?.product?.delivery_payload_en?.text
+        || data?.product?.delivery_payload_en?.message
+        || ""
+    );
     if (data?.product?.stock_mode === "SIMPLE" && data?.product?.unique_purchase) {
       setSimpleStock("");
       setSimpleUnlimited(false);
@@ -575,10 +588,16 @@ export default function InventoryPage() {
     setIsSubmitting(true);
     setError("");
     try {
+      const trimmedNameEn = createNameEn.trim();
+      const descriptionEn = buildDescriptionPayload(createDescriptionEn);
+      const deliveryPayloadEn = createDeliveryTextEn.trim()
+        ? { text: createDeliveryTextEn.trim() }
+        : null;
       const data = await apiFetch("/admin/products", {
         method: "POST",
         body: JSON.stringify({
           display_name: trimmedName,
+          name_en: trimmedNameEn,
           category_key: createCategory,
           price: normalizedPrice,
           stock_mode: createMode,
@@ -586,12 +605,15 @@ export default function InventoryPage() {
           unique_purchase: createUnique,
           delivery_type: createDeliveryType,
           delivery_payload: createDeliveryPayload,
+          delivery_payload_en: deliveryPayloadEn,
           description: buildDescriptionPayload(createDescription),
+          description_en: descriptionEn,
         }),
       });
       const created = data.product;
       await loadProducts({ silent: true });
       setCreateName("");
+      setCreateNameEn("");
       setCreatePrice("0");
       setCreateIsFree(false);
       setCreateLastPrice("0");
@@ -601,6 +623,7 @@ export default function InventoryPage() {
       setCreateSimpleStock("");
       setCreateSimpleUnlimited(false);
       setCreateDescription(Array.from({ length: 8 }, () => "⌾ ").join("\n"));
+      setCreateDescriptionEn("");
       setCreateDeliveryType("TEXT");
       setCreateDeliveryPayload({
         text: "",
@@ -609,6 +632,7 @@ export default function InventoryPage() {
         telegram_file_id: "",
         filename: "",
       });
+      setCreateDeliveryTextEn("");
       setCreateStep("details");
       setCreateOpen(false);
       notifyMessage("Producto creado");
@@ -802,20 +826,28 @@ export default function InventoryPage() {
       : simpleStock === ""
         ? "0"
         : simpleStock;
+    const trimmedNameEn = editNameEn.trim();
+    const descriptionEn = buildDescriptionPayload(editDescriptionEn);
+    const deliveryPayloadEn = editDeliveryTextEn.trim()
+      ? { text: editDeliveryTextEn.trim() }
+      : null;
     setEditIsFree(Number(normalizedPrice || 0) <= 0);
     try {
       const data = await apiFetch(`/admin/products/${detail.product.id}/update`, {
         method: "POST",
         body: JSON.stringify({
           display_name: trimmedName,
+          name_en: trimmedNameEn,
           category_key: editCategory,
           price: normalizedPrice,
           description: buildDescriptionPayload(editDescription),
+          description_en: descriptionEn,
           show_stock: editShowStock,
           unique_purchase: editUnique,
           stock_mode: editStockMode,
           delivery_type: editDeliveryType,
           delivery_payload: editDeliveryPayload,
+          delivery_payload_en: deliveryPayloadEn,
         }),
       });
       const updated = data.product;
@@ -998,6 +1030,15 @@ export default function InventoryPage() {
                   />
                 </label>
                 <label>
+                  Nombre (EN)
+                  <input
+                    type="text"
+                    value={createNameEn}
+                    onChange={(event) => setCreateNameEn(event.target.value)}
+                    placeholder="Optional English name"
+                  />
+                </label>
+                <label>
                   Categoría
                   <select
                     value={createCategory}
@@ -1088,6 +1129,17 @@ export default function InventoryPage() {
                                 text: event.target.value,
                               }))
                             }
+                          />
+                        </label>
+                      )}
+                      {createDeliveryType === "TEXT" && (
+                        <label>
+                          Texto de entrega (EN)
+                          <textarea
+                            rows={6}
+                            value={createDeliveryTextEn}
+                            onChange={(event) => setCreateDeliveryTextEn(event.target.value)}
+                            placeholder="Optional English delivery text"
                           />
                         </label>
                       )}
@@ -1211,6 +1263,15 @@ export default function InventoryPage() {
                         </div>
                       ))}
                     </div>
+                    <label className="description-translation">
+                      Descripción (EN)
+                      <textarea
+                        rows={6}
+                        value={createDescriptionEn}
+                        onChange={(event) => setCreateDescriptionEn(event.target.value)}
+                        placeholder="Optional English description"
+                      />
+                    </label>
                   </div>
                 )}
               </div>
@@ -1668,6 +1729,14 @@ export default function InventoryPage() {
                       />
                     </label>
                     <label>
+                      Nombre (EN)
+                      <input
+                        type="text"
+                        value={editNameEn}
+                        onChange={(event) => setEditNameEn(event.target.value)}
+                      />
+                    </label>
+                    <label>
                       Categoría
                       <select
                         value={editCategory}
@@ -1805,6 +1874,17 @@ export default function InventoryPage() {
                                   text: event.target.value,
                                 }))
                               }
+                            />
+                          </label>
+                        )}
+                        {editDeliveryType === "TEXT" && (
+                          <label>
+                            Texto de entrega (EN)
+                            <textarea
+                              rows={6}
+                              value={editDeliveryTextEn}
+                              onChange={(event) => setEditDeliveryTextEn(event.target.value)}
+                              placeholder="Optional English delivery text"
                             />
                           </label>
                         )}
@@ -2020,6 +2100,15 @@ export default function InventoryPage() {
                           </div>
                         ))}
                       </div>
+                      <label className="description-translation">
+                        Descripción (EN)
+                        <textarea
+                          rows={6}
+                          value={editDescriptionEn}
+                          onChange={(event) => setEditDescriptionEn(event.target.value)}
+                          placeholder="Optional English description"
+                        />
+                      </label>
                     </div>
                   )}
                   <div className="product-edit__actions">

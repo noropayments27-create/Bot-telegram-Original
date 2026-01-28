@@ -6,7 +6,11 @@ async function ensureProductCategorySchema(pool) {
   }
   await pool.query(
     `ALTER TABLE products
-     ADD COLUMN IF NOT EXISTS category_key text`
+     ADD COLUMN IF NOT EXISTS category_key text,
+     ADD COLUMN IF NOT EXISTS name_en text,
+     ADD COLUMN IF NOT EXISTS description_en text,
+     ADD COLUMN IF NOT EXISTS delivery_payload_en jsonb,
+     ADD COLUMN IF NOT EXISTS delivery_template_en text`
   );
   await pool.query(
     `UPDATE products

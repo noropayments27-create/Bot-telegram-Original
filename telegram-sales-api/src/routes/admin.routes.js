@@ -1073,9 +1073,24 @@ router.post("/products", async (req, res, next) => {
   const description = typeof req.body?.description === "string"
     ? req.body.description.trim()
     : "";
+  const nameEn = Object.prototype.hasOwnProperty.call(req.body || {}, "name_en")
+    ? String(req.body?.name_en || "").trim()
+    : null;
+  const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
+    ? String(req.body?.description_en || "").trim()
+    : null;
+  const nameEn = Object.prototype.hasOwnProperty.call(req.body || {}, "name_en")
+    ? String(req.body?.name_en || "").trim()
+    : null;
+  const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
+    ? String(req.body?.description_en || "").trim()
+    : null;
   const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
     ? req.body.delivery_payload
     : {};
+  const deliveryPayloadEn = req.body?.delivery_payload_en && typeof req.body.delivery_payload_en === "object"
+    ? req.body.delivery_payload_en
+    : null;
 
   try {
     await ensureProductCategorySchema(pool);
@@ -1087,17 +1102,21 @@ router.post("/products", async (req, res, next) => {
       }
       const insertRes = await client.query(
         `INSERT INTO products
-          (sku_key, name, description, price, is_active, delivery_type, delivery_payload,
-           stock_mode, stock_qty, show_stock, unique_purchase, category_key)
-         VALUES ($1, $2, $3, $4, true, $5, $6, $7, $8, $9, $10, $11)
+          (sku_key, name, description, name_en, description_en, price, is_active, delivery_type,
+           delivery_payload, delivery_payload_en, stock_mode, stock_qty, show_stock,
+           unique_purchase, category_key)
+         VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11, $12, $13, $14)
          RETURNING *`,
         [
           skuKey,
           name,
           description,
+          nameEn,
+          descriptionEn,
           parsedPrice,
           deliveryType,
           deliveryPayload,
+          deliveryPayloadEn,
           stockMode,
           stockQty,
           showStock,
@@ -1183,6 +1202,9 @@ router.post("/products/:id/update", async (req, res, next) => {
   const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
     ? req.body.delivery_payload
     : null;
+  const deliveryPayloadEn = req.body?.delivery_payload_en && typeof req.body.delivery_payload_en === "object"
+    ? req.body.delivery_payload_en
+    : null;
   if (deliveryType && !allowedDeliveryTypes.includes(deliveryType)) {
     return res.status(400).json({ error: "DELIVERY_TYPE_INVALID" });
   }
@@ -1204,14 +1226,17 @@ router.post("/products/:id/update", async (req, res, next) => {
         `UPDATE products
          SET name = $2,
              description = $3,
-             price = $4,
-             show_stock = $5,
-             unique_purchase = $6,
-             stock_mode = $7::stock_mode_enum,
-             stock_qty = CASE WHEN $7::stock_mode_enum = 'UNITS' THEN NULL ELSE stock_qty END,
-             delivery_type = COALESCE($8, delivery_type),
-             delivery_payload = COALESCE($9::jsonb, delivery_payload),
-             category_key = COALESCE($10, category_key),
+             name_en = COALESCE($4, name_en),
+             description_en = COALESCE($5, description_en),
+             price = $6,
+             show_stock = $7,
+             unique_purchase = $8,
+             stock_mode = $9::stock_mode_enum,
+             stock_qty = CASE WHEN $9::stock_mode_enum = 'UNITS' THEN NULL ELSE stock_qty END,
+             delivery_type = COALESCE($10, delivery_type),
+             delivery_payload = COALESCE($11::jsonb, delivery_payload),
+             delivery_payload_en = COALESCE($12::jsonb, delivery_payload_en),
+             category_key = COALESCE($13, category_key),
              updated_at = now()
          WHERE id = $1
          RETURNING *`,
@@ -1219,12 +1244,15 @@ router.post("/products/:id/update", async (req, res, next) => {
           productId,
           name,
           description,
+          nameEn,
+          descriptionEn,
           parsedPrice,
           showStock,
           uniquePurchase,
           stockMode,
           deliveryType,
           deliveryPayload ? JSON.stringify(deliveryPayload) : null,
+          deliveryPayloadEn ? JSON.stringify(deliveryPayloadEn) : null,
           categoryKey || null,
         ]
       );
@@ -1491,7 +1519,9 @@ router.get("/stock/inspect", async (req, res, next) => {
         sku_key: product.sku_key,
         category_key: product.category_key,
         name: product.name,
+        name_en: product.name_en,
         description: product.description,
+        description_en: product.description_en,
         price: product.price,
         show_stock: product.show_stock,
         stock_mode: product.stock_mode,
@@ -1499,7 +1529,9 @@ router.get("/stock/inspect", async (req, res, next) => {
         unique_purchase: product.unique_purchase,
         delivery_type: product.delivery_type,
         delivery_payload: product.delivery_payload,
+        delivery_payload_en: product.delivery_payload_en,
         delivery_template: product.delivery_template,
+        delivery_template_en: product.delivery_template_en,
       },
       available_stock: availableStock,
       held_qty: activeHolds.heldQty,

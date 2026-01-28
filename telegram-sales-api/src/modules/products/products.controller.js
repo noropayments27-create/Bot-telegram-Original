@@ -22,6 +22,7 @@ async function listProducts(req, res, next) {
   const filters = [];
   const values = [];
   let userId = null;
+  let userLocale = "es";
 
   if (active !== undefined) {
     values.push(active);
@@ -36,11 +37,14 @@ async function listProducts(req, res, next) {
     await ensureProductCategorySchema(pool);
     if (Number.isFinite(telegramId)) {
       const userRes = await pool.query(
-        "SELECT id FROM users WHERE telegram_id = $1",
+        "SELECT id, locale FROM users WHERE telegram_id = $1",
         [telegramId]
       );
       if (userRes.rowCount > 0) {
         userId = userRes.rows[0].id;
+        if (userRes.rows[0].locale === "en") {
+          userLocale = "en";
+        }
       }
     }
 
@@ -57,7 +61,9 @@ async function listProducts(req, res, next) {
               p.sku_key,
               p.category_key,
               p.name,
+              p.name_en,
               p.description,
+              p.description_en,
               p.price,
               p.is_active,
               p.delivery_type,
@@ -111,10 +117,21 @@ async function listProducts(req, res, next) {
       [...values, userId, pageSize, offset]
     );
 
+    const items = itemsRes.rows.map((row) => {
+      if (userLocale !== "en") {
+        return row;
+      }
+      return {
+        ...row,
+        name: row.name_en || row.name,
+        description: row.description_en || row.description,
+      };
+    });
+
     const totalPages = Math.ceil(total / pageSize) || 1;
 
     res.json({
-      items: itemsRes.rows,
+      items,
       page,
       page_size: pageSize,
       total,

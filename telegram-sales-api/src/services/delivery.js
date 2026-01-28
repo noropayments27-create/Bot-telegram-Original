@@ -21,6 +21,27 @@ const DEFAULT_UNITS_TEMPLATE = `━━━━━━━━━━━━━━━━
 <code>{{buyer_telegram_id}}</code>
 ━━━━━━━━━━━━━━━━━━`;
 
+const DEFAULT_UNITS_TEMPLATE_EN = `━━━━━━━━━━━━━━━━━━
+🔐 <b>{{title}}</b>
+━━━━━━━━━━━━━━━━━━
+
+👤 <b>User:</b>
+<code>{{username}}</code>
+
+🔑 <b>Password:</b>
+<code>{{password}}</code>
+
+🗓 <b>Start:</b> <code>{{start_at}}</code>
+⏳ <b>Expires:</b> <code>{{expires_at}}</code>
+
+📝 <b>Notes:</b>
+{{notes}}
+
+━━━━━━━━━━━━━━━━━━
+👤 <b>Buyer:</b>
+<code>{{buyer_telegram_id}}</code>
+━━━━━━━━━━━━━━━━━━`;
+
 function normalizeDelay(value, fallbackMs) {
   if (value === undefined || value === null || value === "") {
     return fallbackMs;
@@ -78,7 +99,7 @@ function normalizePayload(payload) {
   return payload;
 }
 
-function buildUnitsMessage(product, unit, telegramId) {
+function buildUnitsMessage(product, unit, telegramId, locale = "es") {
   const payload = normalizePayload(unit.payload);
   const now = new Date();
   const normalizeUnit = (value) => {
@@ -143,7 +164,14 @@ function buildUnitsMessage(product, unit, telegramId) {
     buyer_username: cleanedBuyerUsername,
     buyer_username_line: buyerUsernameLine,
   };
-  const template = product.delivery_template || DEFAULT_UNITS_TEMPLATE;
+  let template = product.delivery_template || DEFAULT_UNITS_TEMPLATE;
+  if (locale === "en") {
+    if (product.delivery_template_en) {
+      template = product.delivery_template_en;
+    } else if (!product.delivery_template) {
+      template = DEFAULT_UNITS_TEMPLATE_EN;
+    }
+  }
   return renderTemplate(template, data);
 }
 
@@ -159,16 +187,17 @@ function resolveMediaPayload(payload) {
   };
 }
 
-async function deliverProductToTelegram({ telegramId, product, quantity, units }) {
+async function deliverProductToTelegram({ telegramId, product, quantity, units, locale = "es" }) {
   let deliveriesCount = 0;
   const payload = normalizePayload(product.delivery_payload);
+  const payloadEn = normalizePayload(product.delivery_payload_en);
 
   if (product.stock_mode === "UNITS") {
     if (!Array.isArray(units) || units.length < quantity) {
       throw new Error("UNITS_NOT_AVAILABLE");
     }
     for (const unit of units.slice(0, quantity)) {
-      const text = buildUnitsMessage(product, unit, telegramId);
+      const text = buildUnitsMessage(product, unit, telegramId, locale);
       await sendMessage(telegramId, text, { parse_mode: "HTML" });
       deliveriesCount += 1;
       await sleep(DELIVERY_MESSAGE_INTERVAL_MS);
@@ -178,7 +207,10 @@ async function deliverProductToTelegram({ telegramId, product, quantity, units }
 
   if (product.delivery_type === "TEXT") {
     const text =
-      payload.text || payload.message || payload.content || payload.body || "";
+      (locale === "en"
+        ? payloadEn.text || payloadEn.message || payloadEn.content || payloadEn.body
+        : null)
+      || payload.text || payload.message || payload.content || payload.body || "";
     if (!text) {
       throw new Error("DELIVERY_TEXT_EMPTY");
     }
@@ -209,7 +241,8 @@ async function deliverProductToTelegram({ telegramId, product, quantity, units }
     if (!url) {
       throw new Error("DELIVERY_LINK_EMPTY");
     }
-    const note = expiresAt ? `\n\nExpira: ${expiresAt}` : "";
+    const noteLabel = locale === "en" ? "Expires" : "Expira";
+    const note = expiresAt ? `\n\n${noteLabel}: ${expiresAt}` : "";
     const message =
       quantity > 1 ? `x${quantity}\n\n${url}${note}` : `${url}${note}`;
     await sendMessage(telegramId, message, { parse_mode: "HTML" });
@@ -219,7 +252,8 @@ async function deliverProductToTelegram({ telegramId, product, quantity, units }
   }
 
   if (quantity > 1) {
-    await sendMessage(telegramId, `Cantidad: x${quantity}`, {
+    const quantityLabel = locale === "en" ? "Quantity" : "Cantidad";
+    await sendMessage(telegramId, `${quantityLabel}: x${quantity}`, {
       parse_mode: "HTML",
     });
     deliveriesCount += 1;
@@ -251,6 +285,19 @@ async function deliverProductToTelegram({ telegramId, product, quantity, units }
 
 async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
   try {
+    let userLocale = "es";
+    try {
+      const userRes = await dbClient.query(
+        "SELECT locale FROM users WHERE telegram_id = $1",
+        [telegramId]
+      );
+      if (userRes.rowCount > 0 && userRes.rows[0].locale === "en") {
+        userLocale = "en";
+      }
+    } catch (error) {
+      // ignore locale errors
+    }
+
     const itemsRes = await dbClient.query(
       `SELECT oi.product_id, oi.qty
        FROM order_items oi
@@ -297,7 +344,11 @@ async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
 
     const productIds = items.map((row) => row.product_id);
     const productsRes = await dbClient.query(
-      `SELECT id, name, delivery_type, delivery_payload, delivery_template, stock_mode
+      `SELECT id, name, name_en,
+              delivery_type,
+              delivery_payload, delivery_payload_en,
+              delivery_template, delivery_template_en,
+              stock_mode
        FROM products
        WHERE id = ANY($1)`,
       [productIds]
@@ -316,6 +367,13 @@ async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
       if (!product) {
         return { delivered: false, error: "PRODUCT_NOT_FOUND" };
       }
+      const localizedProduct = userLocale === "en"
+        ? {
+            ...product,
+            name: product.name_en || product.name,
+            delivery_payload: product.delivery_payload_en || product.delivery_payload,
+          }
+        : product;
       const qty = Number(item.qty);
       if (!Number.isFinite(qty) || qty <= 0) {
         continue;
@@ -340,9 +398,10 @@ async function deliverOrderToTelegram({ dbClient, orderId, telegramId }) {
 
       deliveriesCount += await deliverProductToTelegram({
         telegramId,
-        product,
+        product: localizedProduct,
         quantity: qty,
         units,
+        locale: userLocale,
       });
     }
 

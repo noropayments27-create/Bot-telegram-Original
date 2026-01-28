@@ -111,6 +111,18 @@ async function getCart(req, res, next) {
   try {
     const pool = getPool();
     const cart = await getActiveCart(telegramId, pool);
+    let userLocale = "es";
+    try {
+      const userRes = await pool.query(
+        "SELECT locale FROM users WHERE telegram_id = $1",
+        [telegramId]
+      );
+      if (userRes.rowCount > 0 && userRes.rows[0].locale === "en") {
+        userLocale = "en";
+      }
+    } catch (error) {
+      // ignore locale lookup
+    }
 
     if (!cart) {
       return res.json({ items: [], total_usd: 0 });
@@ -119,6 +131,7 @@ async function getCart(req, res, next) {
     const itemsRes = await pool.query(
       `SELECT ci.product_id,
               p.name,
+              p.name_en,
               ci.unit_price_usd,
               ci.qty,
               ci.total_price_usd
@@ -138,7 +151,7 @@ async function getCart(req, res, next) {
           : Number(item.total_price_usd);
       return {
         product_id: item.product_id,
-        name: item.name,
+        name: userLocale === "en" ? item.name_en || item.name : item.name,
         unit_price_usd: unitPrice,
         qty,
         total_price_usd: totalPrice,
