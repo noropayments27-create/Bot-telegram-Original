@@ -26,8 +26,11 @@ function buildAffiliateInvoiceMessage({ affiliate, invoice }) {
   const affiliateId = affiliate?.id ? String(affiliate.id) : "-";
   const invoiceReason = invoice?.reason ? String(invoice.reason) : "-";
   const invoiceDate = new Date(invoice?.created_at || new Date());
-  const dateText = invoiceDate.toLocaleDateString("es-ES");
+  const dateText = invoiceDate.toLocaleDateString("es-CO", {
+    timeZone: "America/Bogota",
+  });
   const timeText = invoiceDate.toLocaleTimeString("en-US", {
+    timeZone: "America/Bogota",
     hour: "numeric",
     minute: "2-digit",
     hour12: true,
@@ -41,7 +44,7 @@ function buildAffiliateInvoiceMessage({ affiliate, invoice }) {
     + `🆔 ID Afiliado: <code>${escapeHtml(affiliateId)}</code>\n\n`
     + `💵 Se te Descontara: ${formatUsdAmount(invoice?.amount)}\n\n`
     + `📝 Nota: ${escapeHtml(invoiceReason)}\n\n`
-    + `📅 ${dateText} — ⏰ ${timeText}\n\n`
+    + `📅 ${dateText} — ⏰ ${timeText} (Hora COL)\n\n`
     + "⚠️ Importante\n"
     + "• Este pago es interno y se descuenta del saldo disponible.\n"
     + "• Una vez confirmado, no es reversible."

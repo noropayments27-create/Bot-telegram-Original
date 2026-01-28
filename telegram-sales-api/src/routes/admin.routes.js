@@ -437,7 +437,7 @@ const RECEIPT_TRANSLATIONS = {
     order_number: "🧾 Número de orden",
     product: "📦 Producto",
     price: "💰 Precio",
-    date: "📅 Fecha",
+    date: "📅 Fecha (Hora COL)",
     status: "📊 Estado",
     paid: "✅ PAGADO",
     reference: "🔗 Referencia",
@@ -453,7 +453,7 @@ const RECEIPT_TRANSLATIONS = {
     order_number: "🧾 Order number",
     product: "📦 Product",
     price: "💰 Price",
-    date: "📅 Date",
+    date: "📅 Date (Hora COL)",
     status: "📊 Status",
     paid: "✅ PAID",
     reference: "🔗 Reference",
@@ -3573,11 +3573,12 @@ router.post("/orders/:id/reject", async (req, res, next) => {
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
-       SET status = $2,
-           cancelled_at = CASE WHEN $2 = 'CANCELLED' THEN now() ELSE cancelled_at END,
-           cancel_source = CASE WHEN $2 = 'CANCELLED' THEN 'ADMIN' ELSE cancel_source END,
+       SET status = $2::order_status,
+           cancelled_at = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN now() ELSE cancelled_at END,
+           cancel_source = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN 'ADMIN' ELSE cancel_source END,
            order_number = CASE
-             WHEN $2 = 'CANCELLED' THEN COALESCE(order_number, nextval('orders_order_number_seq'))
+             WHEN $2::order_status = 'CANCELLED'::order_status
+             THEN COALESCE(order_number, nextval('orders_order_number_seq'))
              ELSE order_number
            END
        WHERE id = $1
