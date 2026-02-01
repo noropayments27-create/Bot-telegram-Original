@@ -210,6 +210,17 @@ export default function AffiliatesPage() {
     return 0;
   };
 
+  const getSalesRankLabel = (rank) => {
+    const numeric = Number(rank);
+    if (!Number.isFinite(numeric) || numeric <= 0) {
+      return "🎖️ Novato -";
+    }
+    if (numeric === 1) return "🥇 Oro #1";
+    if (numeric === 2) return "🥈 Plata #2";
+    if (numeric === 3) return "🥉 Bronce #3";
+    return `🎖️ Novato #${numeric}`;
+  };
+
   const loadAffiliatePhoto = async (telegramId) => {
     if (!telegramId || photoUrls[telegramId]) {
       return;
@@ -955,6 +966,14 @@ export default function AffiliatesPage() {
             )
               ? Number(detail?.affiliate?.referrals_total)
               : null;
+            const commissionText =
+              salesCount < 1 ? "20% (primera venta)" : `${levelBaseRate}%`;
+            const statusEmoji =
+              affiliate?.status === "APPROVED"
+                ? "✅"
+                : affiliate?.status === "REJECTED"
+                ? "⛔️"
+                : "";
             const availableBalance = Number(detail?.available_balance || 0);
             const affiliateDebt = Number(detail?.affiliate?.affiliate_debt || 0);
             const netBalanceRaw = Number(availableBalance - affiliateDebt);
@@ -1155,32 +1174,31 @@ export default function AffiliatesPage() {
                     <div className="orders-detail-grid">
                       <div className="orders-detail-section">
                         <h3>Detalle</h3>
-                        <p>Estado: {formatStatus(affiliate.status)}</p>
                         <p>
-                          Comisión:{" "}
-                          {`${levelBaseRate}%`}
+                          📊 Estado: {formatStatus(affiliate.status)} {statusEmoji}
                         </p>
                         <p>
-                          Posición top ventas:{" "}
-                          {detail?.affiliate?.sales_rank
-                            ? `#${detail.affiliate.sales_rank}`
-                            : "-"}
+                          💸 Comisión: {commissionText}
                         </p>
                         <p>
-                          Referidos totales:{" "}
+                          🏆 Posición top ventas:{" "}
+                          {getSalesRankLabel(detail?.affiliate?.sales_rank)}
+                        </p>
+                        <p>
+                          👥 Referidos totales:{" "}
                           {referralsTotal !== null ? referralsTotal : "-"}
                         </p>
                         <p>
-                          Conteo de inactividad:{" "}
+                          ⏳ Conteo de inactividad:{" "}
                           {inactivityDays !== null ? `${inactivityDays} días` : "-"}
                         </p>
                         <p>
-                          Racha activa:{" "}
+                          🔥 Racha activa:{" "}
                           {dailyStreakValue !== null ? `${dailyStreakValue} días` : "-"}
                         </p>
-                        <p>Minimo de retiro: {minWithdrawText}</p>
+                        <p>💵 Mínimo de retiro: {minWithdrawText}</p>
                         <p className={netClassName}>
-                          Saldo disponible: {formatUsdAmount(netBalance)}
+                          💰 Saldo disponible: {formatUsdAmount(netBalance)}
                         </p>
                         {netBalanceRaw < 0 && (
                           <p className="error">
@@ -1188,15 +1206,15 @@ export default function AffiliatesPage() {
                           </p>
                         )}
                         <p className={debtClassName}>
-                          Deuda pendiente: {formatUsdAmount(-debtRemaining)}
+                          📉 Deuda pendiente: {formatUsdAmount(-debtRemaining)}
                         </p>
                         <p>
-                          Ingreso:{" "}
+                          📅 Ingreso:{" "}
                           {formatApprovedAt(affiliate.approved_at)}
                           {approvedDays !== null ? ` (${approvedDays} días)` : ""}
                         </p>
                         <p>
-                          Link de afiliado:{" "}
+                          🔗 Link de afiliado:{" "}
                           <button
                             type="button"
                             className="orders-copy"
