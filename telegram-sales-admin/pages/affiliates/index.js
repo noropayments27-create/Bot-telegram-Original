@@ -153,6 +153,22 @@ export default function AffiliatesPage() {
     return new Date(value).toLocaleString();
   };
 
+  const getDaysSince = (value) => {
+    if (!value) {
+      return null;
+    }
+    const parsed = new Date(value);
+    if (Number.isNaN(parsed.getTime())) {
+      return null;
+    }
+    const start = new Date(parsed);
+    start.setHours(0, 0, 0, 0);
+    const today = new Date();
+    today.setHours(0, 0, 0, 0);
+    const diffDays = Math.floor((today - start) / (24 * 60 * 60 * 1000));
+    return Math.max(diffDays, 0);
+  };
+
   const getAffiliateLevel = (salesTotal, earningsTotal, lastSaleAt) => {
     let baseIndex = 0;
     if (salesTotal >= 100 && earningsTotal >= 600) baseIndex = 5;
@@ -182,6 +198,16 @@ export default function AffiliatesPage() {
       "Élite 👑",
     ];
     return labels[finalIndex];
+  };
+
+  const getLevelMinWithdraw = (levelLabel) => {
+    if (levelLabel.includes("Novato")) return 25;
+    if (levelLabel.includes("Bronce")) return 20;
+    if (levelLabel.includes("Plata")) return 15;
+    if (levelLabel.includes("Oro")) return 10;
+    if (levelLabel.includes("Diamante")) return 0;
+    if (levelLabel.includes("Élite")) return 0;
+    return 0;
   };
 
   const loadAffiliatePhoto = async (telegramId) => {
@@ -908,6 +934,27 @@ export default function AffiliatesPage() {
             const affiliate = detail?.affiliate;
             const user = detail?.user;
             const commissions = detail?.commissions || [];
+            const salesCount = detail?.affiliate?.sales_count || 0;
+            const earningsTotal = Number(detail?.affiliate?.earnings_total || 0);
+            const lastSaleAt = detail?.affiliate?.last_sale_at;
+            const levelLabel = getAffiliateLevel(salesCount, earningsTotal, lastSaleAt);
+            const levelBaseRate = getLevelBaseRate(levelLabel);
+            const minWithdrawValue = getLevelMinWithdraw(levelLabel);
+            const minWithdrawText =
+              minWithdrawValue > 0 ? formatUsdAmount(minWithdrawValue) : "No aplica";
+            const approvedDays = getDaysSince(affiliate?.approved_at);
+            const inactivityBase = lastSaleAt || affiliate?.approved_at || affiliate?.created_at;
+            const inactivityDays = getDaysSince(inactivityBase);
+            const dailyStreakValue = Number.isFinite(
+              Number(detail?.affiliate?.daily_streak)
+            )
+              ? Number(detail?.affiliate?.daily_streak)
+              : null;
+            const referralsTotal = Number.isFinite(
+              Number(detail?.affiliate?.referrals_total)
+            )
+              ? Number(detail?.affiliate?.referrals_total)
+              : null;
             const availableBalance = Number(detail?.available_balance || 0);
             const affiliateDebt = Number(detail?.affiliate?.affiliate_debt || 0);
             const netBalanceRaw = Number(availableBalance - affiliateDebt);
@@ -1098,11 +1145,7 @@ export default function AffiliatesPage() {
                           </button>
                         </div>
                         <div className="affiliate-center">
-                          {getAffiliateLevel(
-                            detail?.affiliate?.sales_count || 0,
-                            Number(detail?.affiliate?.earnings_total || 0),
-                            detail?.affiliate?.last_sale_at
-                          )}
+                          {levelLabel}
                         </div>
                       </div>
                     </div>
@@ -1115,13 +1158,7 @@ export default function AffiliatesPage() {
                         <p>Estado: {formatStatus(affiliate.status)}</p>
                         <p>
                           Comisión:{" "}
-                          {`${getLevelBaseRate(
-                            getAffiliateLevel(
-                              detail?.affiliate?.sales_count || 0,
-                              Number(detail?.affiliate?.earnings_total || 0),
-                              detail?.affiliate?.last_sale_at
-                            )
-                          )}%`}
+                          {`${levelBaseRate}%`}
                         </p>
                         <p>
                           Posición top ventas:{" "}
@@ -1129,6 +1166,19 @@ export default function AffiliatesPage() {
                             ? `#${detail.affiliate.sales_rank}`
                             : "-"}
                         </p>
+                        <p>
+                          Referidos totales:{" "}
+                          {referralsTotal !== null ? referralsTotal : "-"}
+                        </p>
+                        <p>
+                          Conteo de inactividad:{" "}
+                          {inactivityDays !== null ? `${inactivityDays} días` : "-"}
+                        </p>
+                        <p>
+                          Racha activa:{" "}
+                          {dailyStreakValue !== null ? `${dailyStreakValue} días` : "-"}
+                        </p>
+                        <p>Minimo de retiro: {minWithdrawText}</p>
                         <p className={netClassName}>
                           Saldo disponible: {formatUsdAmount(netBalance)}
                         </p>
@@ -1142,9 +1192,8 @@ export default function AffiliatesPage() {
                         </p>
                         <p>
                           Ingreso:{" "}
-                          {affiliate.approved_at
-                            ? new Date(affiliate.approved_at).toLocaleString()
-                            : "-"}
+                          {formatApprovedAt(affiliate.approved_at)}
+                          {approvedDays !== null ? ` (${approvedDays} días)` : ""}
                         </p>
                         <p>
                           Link de afiliado:{" "}

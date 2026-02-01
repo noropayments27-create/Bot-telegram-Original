@@ -1,0 +1,144 @@
+SISTEMA DE VENTAS AUTOMATIZADO EN TELEGRAM
+SOLUCIÓN PROFESIONAL LISTA PARA USO COMERCIAL
+================================================
+
+DESCRIPCIÓN GENERAL
+-------------------
+Este proyecto es un sistema completo de ventas automatizadas en Telegram, diseñado para vender productos y servicios digitales de forma segura, organizada y escalable, sin necesidad de intervención manual constante.
+
+La solución incluye:
+- Un bot de Telegram para clientes y afiliados
+- Un panel administrativo web
+- Un sistema central que gestiona pedidos, pagos, stock y entregas
+
+Todo el sistema está preparado para funcionar 24/7.
+
+
+¿QUÉ PROBLEMA SOLUCIONA?
+-----------------------
+Permite vender productos digitales en Telegram de forma profesional, evitando:
+- Ventas manuales
+- Errores humanos
+- Pérdida de pagos
+- Desorden en pedidos
+- Falta de control de stock
+- Gestión manual de afiliados
+
+El bot automatiza todo el proceso desde que el cliente entra hasta que recibe su producto.
+
+
+FUNCIONALIDADES PRINCIPALES
+----------------------------
+
+1. BOT DE TELEGRAM PARA VENTAS
+-----------------------------
+- Atención automática 24/7
+- Catálogo de productos integrado
+- Carrito de compras
+- Múltiples métodos de pago
+- Confirmación de pago con comprobantes
+- Entrega automática de productos
+- Soporte integrado por tickets
+- Sistema multilenguaje
+- Flujo guiado y fácil para el cliente
+
+El cliente solo interactúa con Telegram, sin páginas externas.
+
+
+2. SISTEMA DE PAGOS FLEXIBLE
+----------------------------
+- Pagos en moneda local y criptomonedas
+- Conversión automática de precios
+- Activación/desactivación de métodos de pago
+- Recepción de comprobantes
+- Aprobación manual o automática según configuración
+
+Diseñado para mercados digitales y ventas internacionales.
+
+
+3. GESTIÓN DE PRODUCTOS Y STOCK
+-------------------------------
+- Control de inventario
+- Stock simple o por unidades
+- Bloqueo de stock durante el pago
+- Liberación automática si el pago no se completa
+- Prevención de sobreventa
+
+Ideal para productos digitales, cuentas, accesos o licencias.
+
+
+4. ENTREGA AUTOMÁTICA DE PRODUCTOS
+----------------------------------
+- Entrega inmediata tras aprobación del pago
+- Contenido dinámico (texto, enlaces, archivos)
+- Entregas seguras y organizadas
+- Historial de entregas por pedido
+
+
+5. PANEL ADMINISTRATIVO WEB
+---------------------------
+- Acceso seguro para el administrador
+- Dashboard con métricas
+- Gestión de pedidos y clientes
+- Control total del inventario
+- Gestión de afiliados
+- Envío de anuncios masivos (broadcasts)
+- Gestión de soporte y tickets
+
+Todo desde una interfaz web simple e intuitiva.
+
+
+6. SISTEMA DE AFILIADOS
+----------------------
+- Registro automático de afiliados
+- Links y códigos de referencia
+- Comisiones por ventas
+- Control de ganancias
+- Solicitudes de retiro
+- Historial de pagos
+- Facturación interna
+
+Permite escalar ventas sin inversión en publicidad.
+
+
+7. SEGURIDAD Y CONTROL
+---------------------
+- Acceso por códigos únicos
+- Protección contra spam
+- Control de usuarios bloqueados
+- Registros de actividad
+- Flujo de aprobación administrativa
+
+Pensado para uso comercial real.
+
+
+8. ESCALABILIDAD Y PERSONALIZACIÓN
+---------------------------------
+- Personalizable con su marca
+- Adaptable a diferentes tipos de negocio
+- Preparado para crecer en volumen de ventas
+- Arquitectura modular
+
+Puede adaptarse a:
+- Tiendas digitales
+- Venta de servicios
+- Comunidades privadas
+- Afiliación y referidos
+- Suscripciones (fase futura)
+
+
+¿QUÉ RECIBE EL CLIENTE?
+----------------------
+- Sistema completo listo para usar
+- Bot de Telegram funcional
+- Panel admin web
+- Base para crecimiento y personalización
+- Documentación básica de uso
+- Posibilidad de soporte o ajustes (según acuerdo)
+
+
+RESUMEN FINAL
+-------------
+Este sistema convierte Telegram en una plataforma de ventas profesional, automatizando todo el proceso comercial y permitiendo escalar ingresos de forma ordenada, segura y eficiente.
+
+Ideal para negocios digitales que quieren vender 24/7 sin depender de gestión manual.

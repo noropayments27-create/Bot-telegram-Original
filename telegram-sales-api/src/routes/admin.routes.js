@@ -4263,9 +4263,9 @@ router.get("/affiliates/:id", async (req, res, next) => {
            SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
            FROM order_items
            GROUP BY order_id
-         ) oi ON oi.order_id = c.order_id
-         GROUP BY a.id
-       ),
+       ) oi ON oi.order_id = c.order_id
+       GROUP BY a.id
+      ),
        ranked AS (
          SELECT id,
                 sales_count,
@@ -4276,7 +4276,43 @@ router.get("/affiliates/:id", async (req, res, next) => {
       [affiliateId]
     );
 
+    const streakRes = await pool.query(
+      `SELECT DISTINCT date_trunc('day', earned_at)::date AS day
+       FROM commissions
+       WHERE affiliate_id = $1
+         AND status != 'REFUNDED'
+       ORDER BY day DESC`,
+      [affiliateId]
+    );
+
+    const referralsRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM users
+       WHERE referred_by_affiliate_id = $1`,
+      [affiliateId]
+    );
+
     const row = affiliateRes.rows[0];
+
+    const streakDays = [];
+    for (const streakRow of streakRes.rows) {
+      if (streakRow.day) {
+        streakDays.push(streakRow.day);
+      }
+    }
+    let streakCount = 0;
+    try {
+      const today = new Date();
+      today.setHours(0, 0, 0, 0);
+      const daySet = new Set(streakDays.map((day) => new Date(day).getTime()));
+      let cursor = today;
+      while (daySet.has(cursor.getTime())) {
+        streakCount += 1;
+        cursor = new Date(cursor.getTime() - 24 * 60 * 60 * 1000);
+      }
+    } catch (err) {
+      streakCount = 0;
+    }
 
     const adminIds = parseAdminTelegramIds();
     const adminId = adminIds.length > 0 ? adminIds[0] : null;
@@ -4290,6 +4326,8 @@ router.get("/affiliates/:id", async (req, res, next) => {
       affiliate: {
         ...row,
         sales_rank: rankRes.rows[0]?.sales_rank || null,
+        daily_streak: streakCount,
+        referrals_total: referralsRes.rows[0]?.count || 0,
       },
       user: {
         telegram_id: displayTelegramId,
