@@ -40,6 +40,7 @@ export default function AffiliatesPage() {
   const [invoiceStatusById, setInvoiceStatusById] = useState({});
   const [invoiceErrorById, setInvoiceErrorById] = useState({});
   const [invoiceWatchById, setInvoiceWatchById] = useState({});
+  const [deleteOpenById, setDeleteOpenById] = useState({});
   const hasPending = items.some((item) => item.status === "PENDING");
   const invoiceWatchRef = useRef({});
 
@@ -460,6 +461,13 @@ export default function AffiliatesPage() {
     }
   };
 
+  const toggleDeleteAffiliate = (affiliateId) => {
+    setDeleteOpenById((prev) => ({
+      ...prev,
+      [affiliateId]: !prev[affiliateId],
+    }));
+  };
+
   const handleCopy = async (label, value) => {
     try {
       await navigator.clipboard.writeText(String(value ?? ""));
@@ -489,6 +497,11 @@ export default function AffiliatesPage() {
       return next;
     });
     setDetailMessages((prev) => {
+      const next = { ...prev };
+      delete next[affiliateId];
+      return next;
+    });
+    setDeleteOpenById((prev) => {
       const next = { ...prev };
       delete next[affiliateId];
       return next;
@@ -953,6 +966,12 @@ export default function AffiliatesPage() {
             const minWithdrawValue = getLevelMinWithdraw(levelLabel);
             const minWithdrawText =
               minWithdrawValue > 0 ? formatUsdAmount(minWithdrawValue) : "No aplica";
+            const salesTodayValue = Number(detail?.affiliate?.sales_today);
+            const salesWeekValue = Number(detail?.affiliate?.sales_week);
+            const salesMonthValue = Number(detail?.affiliate?.sales_month);
+            const salesTodayLabel = Number.isFinite(salesTodayValue) ? salesTodayValue : "-";
+            const salesWeekLabel = Number.isFinite(salesWeekValue) ? salesWeekValue : "-";
+            const salesMonthLabel = Number.isFinite(salesMonthValue) ? salesMonthValue : "-";
             const approvedDays = getDaysSince(affiliate?.approved_at);
             const inactivityBase = lastSaleAt || affiliate?.approved_at || affiliate?.created_at;
             const inactivityDays = getDaysSince(inactivityBase);
@@ -974,6 +993,7 @@ export default function AffiliatesPage() {
                 : affiliate?.status === "REJECTED"
                 ? "⛔️"
                 : "";
+            const isDeleteOpen = Boolean(deleteOpenById[affiliateId]);
             const availableBalance = Number(detail?.available_balance || 0);
             const affiliateDebt = Number(detail?.affiliate?.affiliate_debt || 0);
             const netBalanceRaw = Number(availableBalance - affiliateDebt);
@@ -1048,10 +1068,20 @@ export default function AffiliatesPage() {
                         <button
                           type="button"
                           className="plain-button"
-                          onClick={() => handleDeleteAffiliate(affiliate.id)}
+                          onClick={() => toggleDeleteAffiliate(affiliate.id)}
+                          title="Mostrar opciones"
                         >
-                          Eliminar afiliado
+                          ⬅️
                         </button>
+                        {isDeleteOpen && (
+                          <button
+                            type="button"
+                            className="plain-button"
+                            onClick={() => handleDeleteAffiliate(affiliate.id)}
+                          >
+                            Eliminar afiliado
+                          </button>
+                        )}
                       </div>
                     </div>
                     <div className="orders-detail-separator"></div>
@@ -1264,7 +1294,7 @@ export default function AffiliatesPage() {
                           </button>
                         </p>
                         <div className="orders-detail-subseparator"></div>
-                        <h3>Pagos</h3>
+                        <h3>Metodos de retiro</h3>
                         <p>
                           Metodo:{" "}
                           {affiliate.wallet_usdt_bsc
@@ -1295,6 +1325,12 @@ export default function AffiliatesPage() {
                               || "-"}
                           </button>
                         </p>
+                        <div className="orders-detail-subseparator"></div>
+                        <h3>Ventas Globales</h3>
+                        <p>📦 Ventas totales: {salesCount}</p>
+                        <p>📅 Ventas del día: {salesTodayLabel}</p>
+                        <p>📆 Ventas de la semana: {salesWeekLabel}</p>
+                        <p>🗓️ Ventas del mes: {salesMonthLabel}</p>
                       </div>
                     </div>
                     <div className="orders-detail-separator"></div>

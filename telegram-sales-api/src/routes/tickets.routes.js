@@ -15,6 +15,18 @@ async function ensureTicketSchema(pool) {
   ticketSchemaReady = true;
 }
 
+let ticketMessageSchemaReady = false;
+async function ensureTicketMessageSchema(pool) {
+  if (ticketMessageSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `ALTER TABLE ticket_messages
+     ADD COLUMN IF NOT EXISTS telegram_file_unique_id text`
+  );
+  ticketMessageSchemaReady = true;
+}
+
 let supportBanSchemaReady = false;
 async function ensureSupportBanSchema(pool) {
   if (supportBanSchemaReady) {
@@ -67,6 +79,7 @@ router.post("/open-or-create", async (req, res, next) => {
 
   try {
     await ensureTicketSchema(pool);
+    await ensureTicketMessageSchema(pool);
     await ensureSupportBanSchema(pool);
     await client.query("BEGIN");
     const banRes = await client.query(
@@ -171,6 +184,9 @@ router.post("/:id/message", async (req, res, next) => {
   const telegramFileId = req.body.telegram_file_id
     ? String(req.body.telegram_file_id).trim()
     : "";
+  const telegramFileUniqueId = req.body.telegram_file_unique_id
+    ? String(req.body.telegram_file_unique_id).trim()
+    : "";
 
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });
@@ -183,6 +199,7 @@ router.post("/:id/message", async (req, res, next) => {
 
   try {
     await ensureTicketSchema(pool);
+    await ensureTicketMessageSchema(pool);
     await ensureSupportBanSchema(pool);
     const banRes = await pool.query(
       "SELECT 1 FROM support_bans WHERE telegram_id = $1 LIMIT 1",
@@ -215,6 +232,22 @@ router.post("/:id/message", async (req, res, next) => {
       if (!allowRes.rows[0]?.allow_image) {
         return res.status(409).json({ error: "IMAGE_NOT_ALLOWED" });
       }
+      if (!telegramFileUniqueId) {
+        return res.status(400).json({ error: "telegram_file_unique_id is required" });
+      }
+      const duplicateRes = await pool.query(
+        `SELECT 1
+         FROM ticket_messages tm
+         JOIN tickets t ON t.id = tm.ticket_id
+         JOIN users u ON u.id = t.user_id
+         WHERE u.telegram_id = $1
+           AND tm.telegram_file_unique_id = $2
+         LIMIT 1`,
+        [telegramId, telegramFileUniqueId]
+      );
+      if (duplicateRes.rowCount > 0) {
+        return res.status(409).json({ error: "DUPLICATE_IMAGE" });
+      }
     } else {
       const lastMsgRes = await pool.query(
         `SELECT sender
@@ -230,10 +263,16 @@ router.post("/:id/message", async (req, res, next) => {
     }
 
     const msgRes = await pool.query(
-      `INSERT INTO ticket_messages (ticket_id, sender, message_text, telegram_file_id)
-       VALUES ($1, 'USER', $2, $3)
+      `INSERT INTO ticket_messages (
+         ticket_id,
+         sender,
+         message_text,
+         telegram_file_id,
+         telegram_file_unique_id
+       )
+       VALUES ($1, 'USER', $2, $3, $4)
        RETURNING *`,
-      [ticketId, messageText || null, telegramFileId || null]
+      [ticketId, messageText || null, telegramFileId || null, telegramFileUniqueId || null]
     );
 
     if (telegramFileId) {

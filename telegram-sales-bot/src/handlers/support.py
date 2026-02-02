@@ -1,3 +1,6 @@
+import time
+from typing import Dict
+
 from aiogram import F, Router
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
@@ -22,10 +25,30 @@ from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
+_IMAGE_DUPLICATE_TTL_SECONDS = 24 * 60 * 60
+_SUPPORT_IMAGE_CACHE: Dict[int, Dict[str, float]] = {}
 
 
 class SupportStates(StatesGroup):
     active = State()
+
+
+def _is_duplicate_user_image(
+    cache: Dict[int, Dict[str, float]], user_id: int, unique_id: str
+) -> bool:
+    if not unique_id:
+        return False
+    now = time.time()
+    cutoff = now - _IMAGE_DUPLICATE_TTL_SECONDS
+    user_cache = cache.get(user_id, {})
+    if user_cache:
+        user_cache = {key: ts for key, ts in user_cache.items() if ts >= cutoff}
+    if unique_id in user_cache:
+        cache[user_id] = user_cache
+        return True
+    user_cache[unique_id] = now
+    cache[user_id] = user_cache
+    return False
 
 
 def _build_support_menu_keyboard(locale: str | None) -> InlineKeyboardMarkup:
@@ -385,6 +408,10 @@ async def handle_support_photo(message: Message, state: FSMContext) -> None:
             t(locale, "rate_limit_wait").format(seconds=wait_seconds)
         )
         return
+    unique_id = message.photo[-1].file_unique_id
+    if _is_duplicate_user_image(_SUPPORT_IMAGE_CACHE, message.from_user.id, unique_id):
+        await message.answer(t(locale, "duplicate_image_warning"))
+        return
 
     active = await api_client.get_active_ticket(message.from_user.id)
     ticket = active.get("ticket")
@@ -397,9 +424,11 @@ async def handle_support_photo(message: Message, state: FSMContext) -> None:
         return
 
     file_id = message.photo[-1].file_id
+    file_unique_id = message.photo[-1].file_unique_id
     payload = {
         "telegram_id": message.from_user.id,
         "telegram_file_id": file_id,
+        "telegram_file_unique_id": file_unique_id,
     }
     result = await api_client.send_ticket_message(ticket["id"], payload)
     if result.get("status_code") == 403:
@@ -407,7 +436,11 @@ async def handle_support_photo(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
     if result.get("status_code") == 409:
-        await message.answer(t(locale, "support_image_not_allowed"))
+        error_code = (result.get("data") or {}).get("error")
+        if error_code == "DUPLICATE_IMAGE":
+            await message.answer(t(locale, "duplicate_image_warning"))
+        else:
+            await message.answer(t(locale, "support_image_not_allowed"))
         return
     await message.answer(t(locale, "support_image_received"))
 
@@ -432,6 +465,10 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
             t(locale, "rate_limit_wait").format(seconds=wait_seconds)
         )
         return
+    unique_id = message.document.file_unique_id
+    if _is_duplicate_user_image(_SUPPORT_IMAGE_CACHE, message.from_user.id, unique_id):
+        await message.answer(t(locale, "duplicate_image_warning"))
+        return
 
     active = await api_client.get_active_ticket(message.from_user.id)
     ticket = active.get("ticket")
@@ -446,6 +483,7 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
     payload = {
         "telegram_id": message.from_user.id,
         "telegram_file_id": message.document.file_id,
+        "telegram_file_unique_id": message.document.file_unique_id,
     }
     result = await api_client.send_ticket_message(ticket["id"], payload)
     if result.get("status_code") == 403:
@@ -453,6 +491,10 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
         await state.clear()
         return
     if result.get("status_code") == 409:
-        await message.answer(t(locale, "support_image_not_allowed"))
+        error_code = (result.get("data") or {}).get("error")
+        if error_code == "DUPLICATE_IMAGE":
+            await message.answer(t(locale, "duplicate_image_warning"))
+        else:
+            await message.answer(t(locale, "support_image_not_allowed"))
         return
     await message.answer(t(locale, "support_image_received"))

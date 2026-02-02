@@ -4292,6 +4292,48 @@ router.get("/affiliates/:id", async (req, res, next) => {
       [affiliateId]
     );
 
+    const salesTodayRes = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS count
+       FROM commissions c
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
+       WHERE c.affiliate_id = $1
+         AND c.status != 'REFUNDED'
+         AND c.earned_at >= date_trunc('day', now())`,
+      [affiliateId]
+    );
+
+    const salesWeekRes = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS count
+       FROM commissions c
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
+       WHERE c.affiliate_id = $1
+         AND c.status != 'REFUNDED'
+         AND c.earned_at >= now() - interval '7 days'`,
+      [affiliateId]
+    );
+
+    const salesMonthRes = await pool.query(
+      `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS count
+       FROM commissions c
+       LEFT JOIN (
+         SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+         FROM order_items
+         GROUP BY order_id
+       ) oi ON oi.order_id = c.order_id
+       WHERE c.affiliate_id = $1
+         AND c.status != 'REFUNDED'
+         AND c.earned_at >= now() - interval '30 days'`,
+      [affiliateId]
+    );
+
     const row = affiliateRes.rows[0];
 
     const streakDays = [];
@@ -4328,6 +4370,9 @@ router.get("/affiliates/:id", async (req, res, next) => {
         sales_rank: rankRes.rows[0]?.sales_rank || null,
         daily_streak: streakCount,
         referrals_total: referralsRes.rows[0]?.count || 0,
+        sales_today: salesTodayRes.rows[0]?.count || 0,
+        sales_week: salesWeekRes.rows[0]?.count || 0,
+        sales_month: salesMonthRes.rows[0]?.count || 0,
       },
       user: {
         telegram_id: displayTelegramId,

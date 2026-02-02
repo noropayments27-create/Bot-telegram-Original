@@ -411,6 +411,7 @@ async function submitPaymentProof(req, res, next) {
   const orderId = req.params.id;
   const telegramId = Number(req.body.telegram_id);
   const screenshotFileId = req.body.screenshot_file_id;
+  const screenshotUniqueId = req.body.screenshot_unique_id;
   const paymentMethod = req.body.payment_method;
 
   console.log(`[submitPaymentProof] orderId=${orderId}, paymentMethod=${paymentMethod}`);
@@ -420,6 +421,9 @@ async function submitPaymentProof(req, res, next) {
   }
   if (!screenshotFileId) {
     return res.status(400).json({ error: "screenshot_file_id is required" });
+  }
+  if (!screenshotUniqueId) {
+    return res.status(400).json({ error: "screenshot_unique_id is required" });
   }
 
   const pool = getPool();
@@ -460,6 +464,21 @@ async function submitPaymentProof(req, res, next) {
       return res.status(409).json({ error: "Order rejected" });
     }
 
+    const duplicateRes = await client.query(
+      `SELECT 1
+       FROM order_payments op
+       JOIN orders o ON o.id = op.order_id
+       JOIN users u ON u.id = o.user_id
+       WHERE u.telegram_id = $1
+         AND op.screenshot_unique_id = $2
+       LIMIT 1`,
+      [telegramId, screenshotUniqueId]
+    );
+    if (duplicateRes.rowCount > 0) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "DUPLICATE_IMAGE" });
+    }
+
     const existingPaymentRes = await client.query(
       "SELECT * FROM order_payments WHERE order_id = $1 FOR UPDATE",
       [orderId]
@@ -476,16 +495,23 @@ async function submitPaymentProof(req, res, next) {
     }
 
     const paymentRes = await client.query(
-      `INSERT INTO order_payments (order_id, screenshot_file_id, review_status, payment_method)
-       VALUES ($1, $2, 'PENDING', $3)
+      `INSERT INTO order_payments (
+         order_id,
+         screenshot_file_id,
+         screenshot_unique_id,
+         review_status,
+         payment_method
+       )
+       VALUES ($1, $2, $3, 'PENDING', $4)
        ON CONFLICT (order_id)
        DO UPDATE SET screenshot_file_id = EXCLUDED.screenshot_file_id,
+                     screenshot_unique_id = EXCLUDED.screenshot_unique_id,
                      submitted_at = now(),
                      review_status = 'PENDING',
                      reviewed_by_admin_at = NULL,
                      payment_method = EXCLUDED.payment_method
        RETURNING *`,
-      [orderId, screenshotFileId, paymentMethod]
+      [orderId, screenshotFileId, screenshotUniqueId, paymentMethod]
     );
 
     const updatedOrderRes = await client.query(

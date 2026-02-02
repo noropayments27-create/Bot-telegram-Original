@@ -1,6 +1,7 @@
 import asyncio
 import html
 import re
+import time
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 import httpx
@@ -59,6 +60,8 @@ from ..utils.rate_limit import check_global_rate_limit
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
+_IMAGE_DUPLICATE_TTL_SECONDS = 24 * 60 * 60
+_PAYMENT_IMAGE_CACHE: Dict[int, Dict[str, float]] = {}
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 _PAGE_SIZE = 9
 _CATEGORY_KEYS = {
@@ -87,6 +90,24 @@ _CRYPTO_ASSET_IMAGES = {
 }
 class PaymentStates(StatesGroup):
     waiting_photo = State()
+
+
+def _is_duplicate_user_image(
+    cache: Dict[int, Dict[str, float]], user_id: int, unique_id: str
+) -> bool:
+    if not unique_id:
+        return False
+    now = time.time()
+    cutoff = now - _IMAGE_DUPLICATE_TTL_SECONDS
+    user_cache = cache.get(user_id, {})
+    if user_cache:
+        user_cache = {key: ts for key, ts in user_cache.items() if ts >= cutoff}
+    if unique_id in user_cache:
+        cache[user_id] = user_cache
+        return True
+    user_cache[unique_id] = now
+    cache[user_id] = user_cache
+    return False
 def _format_usd_amount(amount: float) -> str:
     formatted = f"{amount:,.2f}".rstrip("0").rstrip(".")
     return formatted
@@ -950,6 +971,9 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
             show_alert=True,
         )
         return
+    if not callback.from_user.username:
+        await callback.answer(t(locale, "username_required_buy"), show_alert=True)
+        return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     page = int(callback.data.split(":")[-1])
     await render_shop_page(callback.message, callback.from_user.id, page, locale)
@@ -972,6 +996,9 @@ async def handle_category_page(callback: CallbackQuery) -> None:
             t(locale, "rate_limit_wait").format(seconds=wait_seconds),
             show_alert=True,
         )
+        return
+    if not callback.from_user.username:
+        await callback.answer(t(locale, "username_required_buy"), show_alert=True)
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     category_key = callback.data.split(":")[-1]
@@ -997,6 +1024,9 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
             t(locale, "rate_limit_wait").format(seconds=wait_seconds),
             show_alert=True,
         )
+        return
+    if not callback.from_user.username:
+        await callback.answer(t(locale, "username_required_buy"), show_alert=True)
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     _, _, page_text, index_text = callback.data.split(":", 3)
@@ -1860,7 +1890,8 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
 async def handle_payment_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
-    await _process_payment_proof(message, state, message.photo[-1].file_id)
+    unique_id = message.photo[-1].file_unique_id
+    await _process_payment_proof(message, state, message.photo[-1].file_id, unique_id)
 
 
 @router.message(PaymentStates.waiting_photo, F.document)
@@ -1869,15 +1900,24 @@ async def handle_payment_document(message: Message, state: FSMContext) -> None:
         return
     if not message.document.mime_type or not message.document.mime_type.startswith("image/"):
         return
-    await _process_payment_proof(message, state, message.document.file_id)
+    unique_id = message.document.file_unique_id
+    await _process_payment_proof(message, state, message.document.file_id, unique_id)
 
 
 async def _process_payment_proof(
-    message: Message, state: FSMContext, screenshot_file_id: str
+    message: Message,
+    state: FSMContext,
+    screenshot_file_id: str,
+    screenshot_unique_id: str,
 ) -> None:
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
+    if _is_duplicate_user_image(
+        _PAYMENT_IMAGE_CACHE, message.from_user.id, screenshot_unique_id
+    ):
+        await message.answer(t(locale, "duplicate_image_warning"))
+        return
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -1918,6 +1958,7 @@ async def _process_payment_proof(
     payload = {
         "telegram_id": message.from_user.id,
         "screenshot_file_id": screenshot_file_id,
+        "screenshot_unique_id": screenshot_unique_id,
         "payment_method": payment_method,
     }
     try:
@@ -1929,13 +1970,6 @@ async def _process_payment_proof(
         except Exception:
             error_payload = None
         error_code = error_payload.get("error") if isinstance(error_payload, dict) else None
-        if exc.response.status_code in (404, 409):
-            print(
-                "[bot/order_guard] not_payable",
-                {"order_id": order_id, "status": exc.response.status_code},
-            )
-            await show_not_payable_and_redirect(message, state, locale)
-            return
         if error_code == "SCREENSHOT_ALREADY_SUBMITTED":
             notice = await message.answer(
                 t(locale, "screenshot_received_already")
@@ -1946,6 +1980,16 @@ async def _process_payment_proof(
             except Exception:
                 pass
             await stop_order_watch(message.from_user.id, "already_submitted")
+            return
+        if error_code == "DUPLICATE_IMAGE":
+            await message.answer(t(locale, "duplicate_image_warning"))
+            return
+        if exc.response.status_code in (404, 409):
+            print(
+                "[bot/order_guard] not_payable",
+                {"order_id": order_id, "status": exc.response.status_code},
+            )
+            await show_not_payable_and_redirect(message, state, locale)
             return
         raise
     _SCREENSHOTS_RECEIVED.add(order_id)
