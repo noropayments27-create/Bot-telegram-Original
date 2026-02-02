@@ -31,6 +31,9 @@ export default function AffiliatesPage() {
   const [globalCommissionMessage, setGlobalCommissionMessage] = useState("");
   const [globalCommissionError, setGlobalCommissionError] = useState("");
   const [globalCommissionSaving, setGlobalCommissionSaving] = useState(false);
+  const [globalCommissionDuration, setGlobalCommissionDuration] = useState("60");
+  const [globalCommissionUnit, setGlobalCommissionUnit] = useState("minutes");
+  const [globalCommissionEndsAt, setGlobalCommissionEndsAt] = useState(null);
   const [photoUrls, setPhotoUrls] = useState({});
   const [isCommissionOpen, setIsCommissionOpen] = useState(true);
   const [toast, setToast] = useState("");
@@ -276,6 +279,7 @@ export default function AffiliatesPage() {
         if (data && data.rate_percent != null) {
           setGlobalCommissionRate(String(data.rate_percent));
         }
+        setGlobalCommissionEndsAt(data?.boost_ends_at || null);
       } catch (err) {
         setGlobalCommissionError("No se pudo cargar la comisión global.");
       }
@@ -726,11 +730,24 @@ export default function AffiliatesPage() {
     setGlobalCommissionMessage("");
     setGlobalCommissionError("");
     try {
-      const payload = { commission_rate: toDecimalRate(globalCommissionRate) };
+      const durationValue = Number(globalCommissionDuration);
+      const minutes =
+        globalCommissionUnit === "hours" ? durationValue * 60 : durationValue;
+      if (!Number.isFinite(minutes) || minutes < 1 || minutes > 1440) {
+        setGlobalCommissionError("Ingresa un tiempo válido (1 min a 24 horas).");
+        setGlobalCommissionSaving(false);
+        return;
+      }
+      const payload = {
+        commission_rate: toDecimalRate(globalCommissionRate),
+        duration_minutes: minutes,
+      };
       await apiFetch("/admin/affiliates/commission-rate", {
         method: "POST",
         body: JSON.stringify(payload),
       });
+      const endsAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
+      setGlobalCommissionEndsAt(endsAt);
       setGlobalCommissionMessage("Comisión global actualizada.");
     } catch (err) {
       const errorText =
@@ -739,6 +756,48 @@ export default function AffiliatesPage() {
     } finally {
       setGlobalCommissionSaving(false);
     }
+  };
+
+  const handleStopGlobalCommission = async () => {
+    if (globalCommissionSaving) {
+      return;
+    }
+    setGlobalCommissionSaving(true);
+    setGlobalCommissionMessage("");
+    setGlobalCommissionError("");
+    try {
+      await apiFetch("/admin/affiliates/commission-rate/stop", { method: "POST" });
+      setGlobalCommissionRate("0");
+      setGlobalCommissionEndsAt(null);
+      setGlobalCommissionMessage("Comisión global detenida.");
+    } catch (err) {
+      const errorText =
+        (err && err.payload && err.payload.error) ? ` (${err.payload.error})` : "";
+      setGlobalCommissionError(`No se pudo detener la comisión global.${errorText}`);
+    } finally {
+      setGlobalCommissionSaving(false);
+    }
+  };
+
+  const formatRemaining = (endsAt) => {
+    if (!endsAt) {
+      return "-";
+    }
+    const end = new Date(endsAt);
+    if (!Number.isFinite(end.getTime())) {
+      return "-";
+    }
+    const diffMs = end.getTime() - Date.now();
+    if (diffMs <= 0) {
+      return "Finalizado";
+    }
+    const totalMinutes = Math.ceil(diffMs / 60000);
+    const hours = Math.floor(totalMinutes / 60);
+    const minutes = totalMinutes % 60;
+    if (hours > 0) {
+      return `${hours}h ${minutes}m`;
+    }
+    return `${minutes}m`;
   };
 
   return (
@@ -803,6 +862,27 @@ export default function AffiliatesPage() {
                   step="0.01"
                 />
               </label>
+              <label>
+                Tiempo
+                <div className="commission-duration">
+                  <input
+                    className="commission-input commission-input-wide"
+                    type="number"
+                    min="1"
+                    max={globalCommissionUnit === "hours" ? "24" : "1440"}
+                    value={globalCommissionDuration}
+                    onChange={(event) => setGlobalCommissionDuration(event.target.value)}
+                  />
+                  <select
+                    className="commission-input"
+                    value={globalCommissionUnit}
+                    onChange={(event) => setGlobalCommissionUnit(event.target.value)}
+                  >
+                    <option value="minutes">Minutos</option>
+                    <option value="hours">Horas</option>
+                  </select>
+                </div>
+              </label>
               <button
                 type="button"
                 onClick={handleSaveGlobalCommission}
@@ -810,7 +890,16 @@ export default function AffiliatesPage() {
               >
                 {globalCommissionSaving ? "Guardando..." : "Guardar cambios"}
               </button>
+              <button
+                type="button"
+                className="danger-button"
+                onClick={handleStopGlobalCommission}
+                disabled={globalCommissionSaving}
+              >
+                Detener
+              </button>
             </div>
+            <p className="muted">Tiempo restante: {formatRemaining(globalCommissionEndsAt)}</p>
           </div>
           </div>
         </div>
@@ -834,7 +923,8 @@ export default function AffiliatesPage() {
               </tr>
             </thead>
             <tbody>
-              {items.map((affiliate) => {
+              {items.map((affiliate, index) => {
+                const displayIndex = (page - 1) * 20 + index + 1;
                 return (
                   <tr key={affiliate.id}>
                     <td>
@@ -866,9 +956,7 @@ export default function AffiliatesPage() {
                       </div>
                     </td>
                     <td className="affiliate-center">
-                      {affiliate?.affiliate_number
-                        ? `#${formatAffiliateNumber(affiliate.affiliate_number)}`
-                        : "-"}
+                      {`#${formatAffiliateNumber(displayIndex)}`}
                     </td>
                     <td className="affiliate-center">
                       <button

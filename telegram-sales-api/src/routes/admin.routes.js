@@ -138,6 +138,129 @@ async function ensureBroadcastSchema(pool) {
   broadcastSchemaReady = true;
 }
 
+let globalCommissionSchemaReady = false;
+async function ensureGlobalCommissionSchema(pool) {
+  if (globalCommissionSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS global_commission_boost (
+       id int PRIMARY KEY DEFAULT 1,
+       rate numeric(6,4) NOT NULL DEFAULT 0,
+       active boolean NOT NULL DEFAULT false,
+       ends_at timestamptz,
+       updated_at timestamptz NOT NULL DEFAULT now()
+     )`
+  );
+  await pool.query(
+    `INSERT INTO global_commission_boost (id)
+     VALUES (1)
+     ON CONFLICT (id) DO NOTHING`
+  );
+  globalCommissionSchemaReady = true;
+}
+
+let globalCommissionTimer = null;
+let globalCommissionEndsAt = null;
+let globalCommissionWatchStarted = false;
+
+async function notifyAffiliates(pool, message) {
+  if (!message) {
+    return;
+  }
+  const affiliatesRes = await pool.query(
+    `SELECT u.telegram_id
+     FROM affiliates a
+     JOIN users u ON u.id = a.user_id
+     WHERE a.status = 'APPROVED' AND u.telegram_id IS NOT NULL`
+  );
+  await Promise.all(
+    affiliatesRes.rows.map(async (row) => {
+      try {
+        await sendMessage(row.telegram_id, message);
+      } catch (err) {
+        // ignore affiliate notification errors
+      }
+    })
+  );
+}
+
+async function resetGlobalCommission(pool, reason) {
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await client.query("UPDATE affiliates SET commission_rate = 0");
+    await client.query(
+      "ALTER TABLE affiliates ALTER COLUMN commission_rate SET DEFAULT 0"
+    );
+    await client.query(
+      `UPDATE global_commission_boost
+       SET rate = 0, active = false, ends_at = NULL, updated_at = now()
+       WHERE id = 1`
+    );
+    await client.query("COMMIT");
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+  const message =
+    reason === "STOPPED"
+      ? `⛔️ BOOST DETENIDO\n\nTus comisiones vuelven a tu porcentaje habitual por nivel.`
+      : `✅ BOOST FINALIZADO\n\nTus comisiones vuelven a tu porcentaje habitual por nivel.`;
+  await notifyAffiliates(pool, message);
+}
+
+async function scheduleGlobalCommissionReset(pool, endsAt) {
+  if (globalCommissionTimer) {
+    clearTimeout(globalCommissionTimer);
+    globalCommissionTimer = null;
+  }
+  globalCommissionEndsAt = endsAt ? new Date(endsAt) : null;
+  if (!globalCommissionEndsAt || Number.isNaN(globalCommissionEndsAt.getTime())) {
+    return;
+  }
+  const ms = globalCommissionEndsAt.getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) {
+    await resetGlobalCommission(pool, "AUTO");
+    return;
+  }
+  globalCommissionTimer = setTimeout(() => {
+    resetGlobalCommission(pool, "AUTO").catch(() => null);
+  }, ms);
+}
+
+function startGlobalCommissionWatcher() {
+  if (globalCommissionWatchStarted) {
+    return;
+  }
+  globalCommissionWatchStarted = true;
+  setInterval(async () => {
+    try {
+      const pool = getPool();
+      await ensureGlobalCommissionSchema(pool);
+      const res = await pool.query(
+        `SELECT active, ends_at
+         FROM global_commission_boost
+         WHERE id = 1`
+      );
+      const row = res.rows[0];
+      if (!row || !row.active || !row.ends_at) {
+        return;
+      }
+      const endsAt = new Date(row.ends_at);
+      if (Number.isFinite(endsAt.getTime()) && endsAt.getTime() <= Date.now()) {
+        await resetGlobalCommission(pool, "AUTO");
+      }
+    } catch (err) {
+      // ignore watcher errors
+    }
+  }, 60000);
+}
+
+startGlobalCommissionWatcher();
+
 let ticketSchemaReady = false;
 async function ensureTicketSchema(pool) {
   if (ticketSchemaReady) {
@@ -3881,6 +4004,23 @@ router.get("/affiliates", async (req, res, next) => {
 router.get("/affiliates/commission-rate", async (req, res, next) => {
   const pool = getPool();
   try {
+    await ensureGlobalCommissionSchema(pool);
+    const boostRes = await pool.query(
+      `SELECT rate, active, ends_at
+       FROM global_commission_boost
+       WHERE id = 1`
+    );
+    const boostRow = boostRes.rows[0] || {};
+    const boostEndsAt = boostRow.ends_at || null;
+    const boostActive = Boolean(boostRow.active);
+    if (boostActive && boostEndsAt) {
+      const endsAtDate = new Date(boostEndsAt);
+      if (Number.isFinite(endsAtDate.getTime()) && endsAtDate.getTime() <= Date.now()) {
+        await resetGlobalCommission(pool, "AUTO");
+      } else {
+        await scheduleGlobalCommissionReset(pool, boostEndsAt);
+      }
+    }
     const defaultRes = await pool.query(
       `SELECT column_default
        FROM information_schema.columns
@@ -3906,7 +4046,12 @@ router.get("/affiliates/commission-rate", async (req, res, next) => {
       }
     }
     const ratePercent = rate != null ? Number((rate * 100).toFixed(2)) : null;
-    return res.json({ rate: rate ?? null, rate_percent: ratePercent });
+    return res.json({
+      rate: rate ?? null,
+      rate_percent: ratePercent,
+      boost_active: boostActive,
+      boost_ends_at: boostEndsAt,
+    });
   } catch (error) {
     return next(error);
   }
@@ -3962,7 +4107,10 @@ router.get("/users/:telegram_id/photo", async (req, res, next) => {
 });
 
 router.post("/affiliates/commission-rate", async (req, res, next) => {
-  const { commission_rate: commissionRateInput } = req.body || {};
+  const {
+    commission_rate: commissionRateInput,
+    duration_minutes: durationMinutesInput,
+  } = req.body || {};
   let commissionRate = null;
   if (commissionRateInput !== undefined && commissionRateInput !== null && commissionRateInput !== "") {
     const rateValue = Number(commissionRateInput);
@@ -3974,9 +4122,14 @@ router.post("/affiliates/commission-rate", async (req, res, next) => {
   if (commissionRate === null) {
     return res.status(400).json({ error: "COMMISSION_RATE_REQUIRED" });
   }
+  const durationMinutes = Number(durationMinutesInput);
+  if (!Number.isFinite(durationMinutes) || durationMinutes < 1 || durationMinutes > 1440) {
+    return res.status(400).json({ error: "INVALID_DURATION" });
+  }
   const pool = getPool();
   const client = await pool.connect();
   try {
+    await ensureGlobalCommissionSchema(pool);
     await client.query("BEGIN");
     const previousRes = await client.query(
       `SELECT commission_rate
@@ -3992,21 +4145,37 @@ router.post("/affiliates/commission-rate", async (req, res, next) => {
     await client.query(
       `ALTER TABLE affiliates ALTER COLUMN commission_rate SET DEFAULT ${commissionRate}`
     );
+    const endsAt = commissionRate > 0
+      ? new Date(Date.now() + durationMinutes * 60 * 1000)
+      : null;
+    await client.query(
+      `UPDATE global_commission_boost
+       SET rate = $1,
+           active = $2,
+           ends_at = $3,
+           updated_at = now()
+       WHERE id = 1`,
+      [commissionRate, commissionRate > 0, endsAt]
+    );
     await client.query("COMMIT");
+    await scheduleGlobalCommissionReset(pool, endsAt);
     const ratePercent = Number((commissionRate * 100).toFixed(2));
     const previousPercent = Number((previousRate * 100).toFixed(2));
     try {
-      const affiliatesRes = await pool.query(
-        `SELECT u.telegram_id
-         FROM affiliates a
-         JOIN users u ON u.id = a.user_id
-         WHERE a.status = 'APPROVED' AND u.telegram_id IS NOT NULL`
-      );
       let message = "";
       if (commissionRate > 0) {
+        const hours = Math.floor(durationMinutes / 60);
+        const minutes = durationMinutes % 60;
+        const durationText =
+          hours > 0 && minutes > 0
+            ? `${hours}h ${minutes}m`
+            : hours > 0
+            ? `${hours}h`
+            : `${minutes}m`;
         message =
           `🚀 BOOST ACTIVADO\n\n` +
-          `Porcentaje extra por venta: +${ratePercent}%\n\n` +
+          `Porcentaje extra por venta: +${ratePercent}%\n` +
+          `Duración: ${durationText}\n\n` +
           `Aplica a todas tus ventas mientras esté activo.`;
       } else if (previousRate > 0) {
         message =
@@ -4014,15 +4183,7 @@ router.post("/affiliates/commission-rate", async (req, res, next) => {
           `Tus comisiones vuelven a tu porcentaje habitual por nivel.`;
       }
       if (message) {
-        await Promise.all(
-          affiliatesRes.rows.map(async (row) => {
-            try {
-              await sendMessage(row.telegram_id, message);
-            } catch (err) {
-              // ignore affiliate notification errors
-            }
-          })
-        );
+        await notifyAffiliates(pool, message);
       }
     } catch (err) {
       // ignore broadcast errors
@@ -4036,6 +4197,18 @@ router.post("/affiliates/commission-rate", async (req, res, next) => {
     return next(error);
   } finally {
     client.release();
+  }
+});
+
+router.post("/affiliates/commission-rate/stop", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensureGlobalCommissionSchema(pool);
+    await resetGlobalCommission(pool, "STOPPED");
+    await scheduleGlobalCommissionReset(pool, null);
+    return res.json({ ok: true, commission_rate: 0 });
+  } catch (error) {
+    return next(error);
   }
 });
 

@@ -1349,6 +1349,9 @@ body.login-success {
   margin: 0;
   padding: 2px 24px;
   border-radius: 14px;
+  background: rgba(10, 10, 10, 0.6);
+  border: 1px solid rgba(255, 77, 0, 0.5);
+  box-shadow: 0 0 18px rgba(255, 77, 0, 0.15);
 }
 
 .affiliates-filters {
@@ -1367,6 +1370,16 @@ body.login-success {
 
 .commission-input {
   width: 60px;
+}
+
+.commission-input-wide {
+  width: 90px;
+}
+
+.commission-duration {
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .affiliates-commission-card .form {
