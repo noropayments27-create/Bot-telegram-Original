@@ -1494,6 +1494,15 @@ body.login-success {
   font-weight: 600;
 }
 
+.affiliate-row-blocked {
+  color: #ff4d4d;
+}
+
+.affiliate-row-blocked .orders-copy,
+.affiliate-row-blocked .affiliate-name-cell button {
+  color: #ff4d4d;
+}
+
 .orders-inline-line {
   display: flex;
   align-items: center;

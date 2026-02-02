@@ -929,7 +929,10 @@ export default function AffiliatesPage() {
               {items.map((affiliate, index) => {
                 const displayIndex = (page - 1) * 20 + index + 1;
                 return (
-                  <tr key={affiliate.id}>
+                  <tr
+                    key={affiliate.id}
+                    className={affiliate.status === "REJECTED" ? "affiliate-row-blocked" : ""}
+                  >
                     <td>
                       <div className="affiliate-name-cell">
                           <div className="affiliate-avatar">
