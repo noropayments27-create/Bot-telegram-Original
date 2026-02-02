@@ -3969,7 +3969,7 @@ router.get("/affiliates", async (req, res, next) => {
        ) oi ON oi.order_id = c.order_id
        ${whereClause}
        GROUP BY a.id, u.telegram_id, u.telegram_username, ranked.affiliate_number, adj.adjustments_total, adj_all.adjustments_total
-       ORDER BY a.created_at DESC
+       ORDER BY a.created_at ASC
        LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
       [...values, pageSize, offset]
     );

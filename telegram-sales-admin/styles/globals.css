@@ -1325,8 +1325,8 @@ body.login-success {
   display: flex;
   align-items: flex-end;
   gap: 16px;
-  flex-wrap: wrap;
-  margin-top: -68px;
+  flex-wrap: nowrap;
+  margin-top: 0;
 }
 
 .affiliates-title {
@@ -1345,9 +1345,9 @@ body.login-success {
 }
 
 .affiliates-commission-card {
-  max-width: 360px;
-  margin: 0;
-  padding: 2px 24px;
+  max-width: 270px;
+  margin: 0.3cm 0;
+  padding: 8px 16px;
   border-radius: 14px;
   background: rgba(10, 10, 10, 0.6);
   border: 1px solid rgba(255, 77, 0, 0.5);
