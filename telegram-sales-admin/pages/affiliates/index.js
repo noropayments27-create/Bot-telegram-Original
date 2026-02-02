@@ -478,12 +478,29 @@ export default function AffiliatesPage() {
     }
     try {
       const { toPng } = await import("html-to-image");
+      if (document.fonts && document.fonts.ready) {
+        await document.fonts.ready;
+      }
       const dataUrl = await toPng(node, {
         cacheBust: true,
         pixelRatio: 2,
+        backgroundColor: "#2b2b2b",
         filter: (target) => {
           if (!(target instanceof HTMLElement)) {
             return true;
+          }
+          if (target.tagName === "IMG") {
+            const src = target.getAttribute("src") || "";
+            if (src.startsWith("http")) {
+              try {
+                const url = new URL(src, window.location.href);
+                if (url.origin !== window.location.origin) {
+                  return false;
+                }
+              } catch (err) {
+                return false;
+              }
+            }
           }
           return target.dataset.noExport !== "true";
         },
@@ -493,6 +510,7 @@ export default function AffiliatesPage() {
       link.download = `afiliado-${affiliateId}.png`;
       link.click();
     } catch (err) {
+      console.error("Download affiliate image failed", err);
       setToast("No se pudo generar la imagen.");
     }
   };
