@@ -34,6 +34,7 @@ export default function AffiliatesPage() {
   const [globalCommissionDuration, setGlobalCommissionDuration] = useState("60");
   const [globalCommissionUnit, setGlobalCommissionUnit] = useState("minutes");
   const [globalCommissionEndsAt, setGlobalCommissionEndsAt] = useState(null);
+  const [globalCommissionRemaining, setGlobalCommissionRemaining] = useState("-");
   const [photoUrls, setPhotoUrls] = useState({});
   const [isCommissionOpen, setIsCommissionOpen] = useState(true);
   const [toast, setToast] = useState("");
@@ -748,7 +749,6 @@ export default function AffiliatesPage() {
       });
       const endsAt = new Date(Date.now() + minutes * 60 * 1000).toISOString();
       setGlobalCommissionEndsAt(endsAt);
-      setGlobalCommissionMessage("Comisión global actualizada.");
     } catch (err) {
       const errorText =
         (err && err.payload && err.payload.error) ? ` (${err.payload.error})` : "";
@@ -769,7 +769,6 @@ export default function AffiliatesPage() {
       await apiFetch("/admin/affiliates/commission-rate/stop", { method: "POST" });
       setGlobalCommissionRate("0");
       setGlobalCommissionEndsAt(null);
-      setGlobalCommissionMessage("Comisión global detenida.");
     } catch (err) {
       const errorText =
         (err && err.payload && err.payload.error) ? ` (${err.payload.error})` : "";
@@ -791,14 +790,19 @@ export default function AffiliatesPage() {
     if (diffMs <= 0) {
       return "Finalizado";
     }
-    const totalMinutes = Math.ceil(diffMs / 60000);
-    const hours = Math.floor(totalMinutes / 60);
-    const minutes = totalMinutes % 60;
-    if (hours > 0) {
-      return `${hours}h ${minutes}m`;
-    }
-    return `${minutes}m`;
+    const totalSeconds = Math.ceil(diffMs / 1000);
+    const minutes = Math.floor(totalSeconds / 60);
+    const seconds = totalSeconds % 60;
+    return `${String(minutes).padStart(2, "0")}:${String(seconds).padStart(2, "0")}`;
   };
+
+  useEffect(() => {
+    setGlobalCommissionRemaining(formatRemaining(globalCommissionEndsAt));
+    const interval = setInterval(() => {
+      setGlobalCommissionRemaining(formatRemaining(globalCommissionEndsAt));
+    }, 1000);
+    return () => clearInterval(interval);
+  }, [globalCommissionEndsAt]);
 
   return (
     <main className="page affiliates-page">
@@ -838,7 +842,6 @@ export default function AffiliatesPage() {
                 Comisión global
               </h2>
             </div>
-            {globalCommissionMessage && <p className="muted">{globalCommissionMessage}</p>}
             {globalCommissionError && <p className="error">{globalCommissionError}</p>}
             <div className="form">
               <label>
@@ -888,7 +891,7 @@ export default function AffiliatesPage() {
                 onClick={handleSaveGlobalCommission}
                 disabled={globalCommissionSaving}
               >
-                {globalCommissionSaving ? "Guardando..." : "Guardar cambios"}
+                {globalCommissionSaving ? "Guardando..." : "Comenzar"}
               </button>
               <button
                 type="button"
@@ -899,7 +902,7 @@ export default function AffiliatesPage() {
                 Detener
               </button>
             </div>
-            <p className="muted">Tiempo restante: {formatRemaining(globalCommissionEndsAt)}</p>
+            <p className="muted">Tiempo restante: {globalCommissionRemaining}</p>
           </div>
           </div>
         </div>

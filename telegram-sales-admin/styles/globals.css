@@ -1349,7 +1349,7 @@ body.login-success {
 
 .affiliates-commission-card {
   max-width: none;
-  margin: 0.3cm 0;
+  margin: -1.5cm 0 0.3cm;
   padding: 10px 16px;
   border-radius: 14px;
   background: rgba(10, 10, 10, 0.6);
@@ -1399,6 +1399,9 @@ body.login-success {
 
 .affiliates-commission-card .form label {
   margin: 0;
+  display: flex;
+  align-items: center;
+  gap: 8px;
 }
 
 .commission-input::-webkit-outer-spin-button,
