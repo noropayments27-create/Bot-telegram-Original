@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
+import { ArrowLeft, Download } from "lucide-react";
 
 import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconAffiliates } from "../../components/PanelIcons";
@@ -43,6 +44,7 @@ export default function AffiliatesPage() {
   const [deleteOpenById, setDeleteOpenById] = useState({});
   const hasPending = items.some((item) => item.status === "PENDING");
   const invoiceWatchRef = useRef({});
+  const detailRefs = useRef({});
 
   const formatRatePercent = (rate) => {
     const numeric = Number(rate);
@@ -466,6 +468,33 @@ export default function AffiliatesPage() {
       ...prev,
       [affiliateId]: !prev[affiliateId],
     }));
+  };
+
+  const handleDownloadAffiliate = async (affiliateId) => {
+    const node = detailRefs.current[affiliateId];
+    if (!node) {
+      setToast("No se pudo generar la imagen.");
+      return;
+    }
+    try {
+      const { toPng } = await import("html-to-image");
+      const dataUrl = await toPng(node, {
+        cacheBust: true,
+        pixelRatio: 2,
+        filter: (target) => {
+          if (!(target instanceof HTMLElement)) {
+            return true;
+          }
+          return target.dataset.noExport !== "true";
+        },
+      });
+      const link = document.createElement("a");
+      link.href = dataUrl;
+      link.download = `afiliado-${affiliateId}.png`;
+      link.click();
+    } catch (err) {
+      setToast("No se pudo generar la imagen.");
+    }
   };
 
   const handleCopy = async (label, value) => {
@@ -1046,7 +1075,15 @@ export default function AffiliatesPage() {
             const isWatchingInvoice = Boolean(invoiceWatchById[affiliateId]);
 
             return (
-              <section key={affiliateId} className="card orders-detail-card">
+              <section
+                key={affiliateId}
+                className="card orders-detail-card"
+                ref={(node) => {
+                  if (node) {
+                    detailRefs.current[affiliateId] = node;
+                  }
+                }}
+              >
                 {isLoading && <p>Cargando...</p>}
                 {!isLoading && affiliate && (
                   <>
@@ -1062,22 +1099,34 @@ export default function AffiliatesPage() {
                           type="button"
                           className="plain-button"
                           onClick={() => handleViewAffiliate(affiliate.id)}
+                          data-no-export="true"
                         >
                           Cerrar
                         </button>
                         <button
                           type="button"
                           className="plain-button"
+                          onClick={() => handleDownloadAffiliate(affiliate.id)}
+                          data-no-export="true"
+                        >
+                          <Download size={16} />
+                          Descargar
+                        </button>
+                        <button
+                          type="button"
+                          className="plain-button"
                           onClick={() => toggleDeleteAffiliate(affiliate.id)}
                           title="Mostrar opciones"
+                          data-no-export="true"
                         >
-                          ⬅️
+                          <ArrowLeft size={16} />
                         </button>
                         {isDeleteOpen && (
                           <button
                             type="button"
                             className="plain-button"
                             onClick={() => handleDeleteAffiliate(affiliate.id)}
+                            data-no-export="true"
                           >
                             Eliminar afiliado
                           </button>

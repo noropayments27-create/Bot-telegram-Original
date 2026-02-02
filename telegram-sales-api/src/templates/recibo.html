@@ -6,29 +6,40 @@
     <title>Recibo de Pago</title>
     <style>
         body {
-            font-family: 'Courier New', Courier, monospace;
-            background-color: #f0f0f0;
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #0b0b0b;
             display: flex;
             justify-content: center;
             margin: 0;
-            padding: 20px;
+            padding: 24px;
+            color: #c8ffd2;
         }
         .receipt {
-            width: 300px; /* Ancho típico de un recibo térmico */
-            background-color: #fff;
-            padding: 20px;
-            border: 1px solid #ccc;
-            box-shadow: 0 0 10px rgba(0,0,0,0.1);
-            color: #333;
-            line-height: 1.4;
-            font-size: 14px;
+            width: 340px;
+            background: radial-gradient(circle at top, #1a1a1a 0%, #0f0f0f 55%, #0a0a0a 100%);
+            padding: 22px 20px;
+            border: 2px solid #2aff67;
+            box-shadow: 0 0 16px rgba(42, 255, 103, 0.35), 0 0 40px rgba(0,0,0,0.6);
+            color: #c8ffd2;
+            line-height: 1.5;
+            font-size: 13px;
+            border-radius: 16px;
         }
         .header, .footer {
             text-align: center;
             text-transform: uppercase;
+            color: #7dff9a;
+            letter-spacing: 1px;
+        }
+        .header h2 {
+            margin: 0 0 8px 0;
+            padding: 8px 0;
+            border: 1px solid rgba(42, 255, 103, 0.5);
+            border-radius: 10px;
+            box-shadow: inset 0 0 10px rgba(42, 255, 103, 0.25);
         }
         .divider {
-            border-top: 1px dashed #333;
+            border-top: 1px dashed rgba(42, 255, 103, 0.6);
             margin: 10px 0;
         }
         .details, .items, .totals {
