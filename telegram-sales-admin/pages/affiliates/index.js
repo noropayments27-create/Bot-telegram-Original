@@ -300,30 +300,30 @@ export default function AffiliatesPage() {
     markAffiliatesSeen();
   }, []);
 
-  useEffect(() => {
-    const loadAffiliates = async () => {
-      try {
-        const params = new URLSearchParams({
-          page: String(page),
-          page_size: "20",
-        });
-        if (status) {
-          params.set("status", status);
-        }
-
-        const data = await apiFetch(`/admin/affiliates?${params.toString()}`);
-        setItems(data.items || []);
-        setTotalPages(data.total_pages || 1);
-        setError("");
-      } catch (err) {
-        setError("No se pudo cargar afiliados.");
+  const loadAffiliates = useCallback(async () => {
+    try {
+      const params = new URLSearchParams({
+        page: String(page),
+        page_size: "20",
+      });
+      if (status) {
+        params.set("status", status);
       }
-    };
 
+      const data = await apiFetch(`/admin/affiliates?${params.toString()}`);
+      setItems(data.items || []);
+      setTotalPages(data.total_pages || 1);
+      setError("");
+    } catch (err) {
+      setError("No se pudo cargar afiliados.");
+    }
+  }, [page, status]);
+
+  useEffect(() => {
     loadAffiliates();
     const interval = setInterval(loadAffiliates, 20000);
     return () => clearInterval(interval);
-  }, [page, status]);
+  }, [loadAffiliates]);
 
   useEffect(() => {
     items.forEach((affiliate) => {
@@ -429,6 +429,10 @@ export default function AffiliatesPage() {
         method: "POST",
         body: JSON.stringify({ amount: amountValue, reason }),
       });
+      setAdjustmentAmountById((prev) => ({ ...prev, [affiliateId]: "" }));
+      setAdjustmentReasonById((prev) => ({ ...prev, [affiliateId]: "" }));
+      await loadDetail(affiliateId);
+      await loadAffiliates();
       setToast("Factura enviada.");
     } catch (err) {
       const detail = formatApiError(
@@ -631,6 +635,7 @@ export default function AffiliatesPage() {
                 : Date.now();
               invoiceWatchRef.current[affiliateId].since = nextSince;
               await loadDetail(affiliateId);
+              await loadAffiliates();
               invoiceWatchRef.current[affiliateId].active = false;
               setInvoiceWatchById((prev) => ({ ...prev, [affiliateId]: false }));
               break;
@@ -648,7 +653,7 @@ export default function AffiliatesPage() {
       };
       run();
     },
-    [loadDetail]
+    [loadAffiliates, loadDetail]
   );
 
   const stopInvoiceWatch = useCallback((affiliateId) => {
@@ -1517,6 +1522,7 @@ export default function AffiliatesPage() {
                             className="danger-button"
                             onClick={() => handleAdjustment(affiliateId, "subtract")}
                             disabled={adjustmentStatusById[affiliateId] === "saving"}
+                            data-no-export="true"
                           >
                             Quitar saldo
                           </button>
