@@ -123,6 +123,12 @@ def _format_usd_value(amount: float) -> str:
     return f"{_format_usd_amount(amount)} USD"
 
 
+def _format_payment_amount(amount: float) -> str:
+    if amount <= 0:
+        return "Gratis ($0 USD)"
+    return _format_usd(amount)
+
+
 async def _render_shop_view(
     target: Message,
     user_id: int,
@@ -305,7 +311,7 @@ async def _build_payment_instructions(
     locale: str | None = None,
 ) -> str:
     total = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
-    base_total_text = _format_usd(total)
+    base_total_text = _format_payment_amount(total)
     total_text = base_total_text
     summary_text = _build_products_only_summary(summary)
     include_final_total = True
@@ -423,7 +429,7 @@ async def _build_payment_instructions(
             t(locale, "payment_paypal_amount_note").format(amount=base_total_text)
         )
         paypal_total = total * 1.25
-        total_text = _format_usd(paypal_total)
+        total_text = _format_payment_amount(paypal_total)
         instructions.append(f"➡️ Total a Enviar: {total_text}")
         instructions.append("")
         instructions.append(t(locale, "payment_paypal_steps_title"))
