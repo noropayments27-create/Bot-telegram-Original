@@ -471,47 +471,39 @@ export default function AffiliatesPage() {
   };
 
   const handleDownloadAffiliate = async (affiliateId) => {
+    if (typeof window === "undefined") {
+      setToast("No se pudo generar la imagen.");
+      return;
+    }
     const node = detailRefs.current[affiliateId];
     if (!node) {
       setToast("No se pudo generar la imagen.");
       return;
     }
     try {
-      const { toPng } = await import("html-to-image");
+      const { default: html2canvas } = await import("html2canvas");
       if (document.fonts && document.fonts.ready) {
         await document.fonts.ready;
       }
-      const dataUrl = await toPng(node, {
-        cacheBust: true,
-        pixelRatio: 2,
+      const canvas = await html2canvas(node, {
         backgroundColor: "#2b2b2b",
-        filter: (target) => {
+        scale: 2,
+        useCORS: true,
+        ignoreElements: (target) => {
           if (!(target instanceof HTMLElement)) {
-            return true;
+            return false;
           }
-          if (target.tagName === "IMG") {
-            const src = target.getAttribute("src") || "";
-            if (src.startsWith("http")) {
-              try {
-                const url = new URL(src, window.location.href);
-                if (url.origin !== window.location.origin) {
-                  return false;
-                }
-              } catch (err) {
-                return false;
-              }
-            }
-          }
-          return target.dataset.noExport !== "true";
+          return target.dataset.noExport === "true";
         },
       });
+      const dataUrl = canvas.toDataURL("image/png");
       const link = document.createElement("a");
       link.href = dataUrl;
       link.download = `afiliado-${affiliateId}.png`;
       link.click();
     } catch (err) {
       console.error("Download affiliate image failed", err);
-      setToast("No se pudo generar la imagen.");
+      setToast("No se pudo generar la imagen. Revisa la consola del navegador.");
     }
   };
 
