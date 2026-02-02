@@ -601,6 +601,79 @@ body.login-success {
   opacity: 0.18;
 }
 
+.payment-methods-page {
+  display: flex;
+  flex-direction: column;
+  gap: 20px;
+}
+
+.payment-methods-card {
+  padding: 20px;
+}
+
+.payment-methods-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+}
+
+.payment-methods-title-main {
+  margin: 0;
+  color: var(--scarlet-red);
+  font-size: 22px;
+}
+
+.payment-methods-form {
+  margin-top: 12px;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.payment-methods-form label {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  font-size: 12px;
+}
+
+.payment-methods-form input,
+.payment-methods-form textarea {
+  background: rgba(20, 20, 20, 0.8);
+  border: 1px solid rgba(255, 36, 0, 0.4);
+  border-radius: 10px;
+  color: #f2f2f2;
+  padding: 8px 10px;
+}
+
+.payment-methods-wide {
+  grid-column: span 2;
+}
+
+.payment-methods-checkbox {
+  flex-direction: row;
+  align-items: center;
+  gap: 8px;
+  margin-top: 22px;
+}
+
+.payment-methods-actions {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  grid-column: span 2;
+}
+
+.payment-methods-list-card {
+  padding: 20px;
+}
+
+.payment-methods-row-actions {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+}
+
 .orders-card {
   width: 100%;
   margin: -1cm auto 0;

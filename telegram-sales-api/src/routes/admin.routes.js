@@ -27,6 +27,8 @@ const {
   listPaymentMethods,
   normalizeMethodKey,
   togglePaymentMethod,
+  upsertPaymentMethod,
+  deletePaymentMethod,
 } = require("../services/paymentMethods");
 const { ensureProductCategorySchema } = require("../services/productSchema");
 const { renderReceiptPng } = require("../services/receiptRenderer");
@@ -1056,6 +1058,32 @@ router.post("/payment-methods/:key/toggle", async (req, res, next) => {
   }
   try {
     const methods = await togglePaymentMethod(pool, key);
+    return res.json({ methods });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/payment-methods", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const methods = await upsertPaymentMethod(pool, req.body || {});
+    if (!methods) {
+      return res.status(400).json({ error: "PAYMENT_METHOD_INVALID" });
+    }
+    return res.json({ methods });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.delete("/payment-methods/:key", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const methods = await deletePaymentMethod(pool, req.params.key);
+    if (!methods) {
+      return res.status(400).json({ error: "PAYMENT_METHOD_INVALID" });
+    }
     return res.json({ methods });
   } catch (error) {
     return next(error);

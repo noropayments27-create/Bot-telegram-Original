@@ -82,6 +82,13 @@ _PAYMENT_METHOD_IMAGES = {
     "mp": BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
     "paypal": BOT_PAYMENT_PAYPAL_IMAGE_URL,
 }
+_DEFAULT_PAYMENT_METHODS = [
+    {"key": "NEQUI", "label": t(None, "btn_method_nequi"), "enabled": True},
+    {"key": "BINANCE_ID", "label": t(None, "btn_method_binance"), "enabled": True},
+    {"key": "CRYPTO", "label": t(None, "btn_method_crypto"), "enabled": True},
+    {"key": "MERCADOPAGO", "label": t(None, "btn_method_mp"), "enabled": True},
+    {"key": "PAYPAL", "label": t(None, "btn_method_paypal"), "enabled": True},
+]
 _CRYPTO_ASSET_IMAGES = {
     "btc": BOT_CRYPTO_BTC_IMAGE_URL,
     "usdt_tron": BOT_CRYPTO_USDT_TRON_IMAGE_URL,
@@ -181,7 +188,9 @@ async def _render_cart_view(
     )
 
 
-def _get_payment_method_image(method_key: str) -> str | None:
+def _get_payment_method_image(method_key: str, method: Dict[str, Any] | None = None) -> str | None:
+    if method and method.get("image_url"):
+        return str(method.get("image_url"))
     return _PAYMENT_METHOD_IMAGES.get(method_key)
 
 
@@ -189,28 +198,31 @@ def _get_crypto_asset_image(asset_key: str) -> str | None:
     return _CRYPTO_ASSET_IMAGES.get(asset_key)
 
 
-async def _is_payment_method_enabled(method_key: str) -> bool:
-    mapping = {
-        "nequi": "NEQUI",
-        "binance": "BINANCE_ID",
-        "crypto": "CRYPTO",
-        "mp": "MERCADOPAGO",
-        "paypal": "PAYPAL",
-    }
-    api_key = mapping.get(method_key)
-    if not api_key:
-        return True
+async def _get_payment_methods() -> List[Dict[str, Any]]:
     try:
         response = await api_client.get_payment_methods()
         methods = response.get("methods") if isinstance(response, dict) else []
-        if not isinstance(methods, list):
-            return True
-        for item in methods:
-            if item.get("key") == api_key:
-                return bool(item.get("enabled"))
+        if isinstance(methods, list):
+            return methods
     except Exception:
+        return list(_DEFAULT_PAYMENT_METHODS)
+    return list(_DEFAULT_PAYMENT_METHODS)
+
+
+async def _find_payment_method(method_key: str) -> Dict[str, Any] | None:
+    methods = await _get_payment_methods()
+    key = str(method_key or "").lower()
+    for method in methods:
+        if str(method.get("key") or "").lower() == key:
+            return method
+    return None
+
+
+async def _is_payment_method_enabled(method_key: str) -> bool:
+    method = await _find_payment_method(method_key)
+    if method is None:
         return True
-    return True
+    return bool(method.get("enabled", True))
 def _build_cart_text(
     cart_items: List[Dict[str, Any]], total_usd: float, locale: str | None = None
 ) -> str:
@@ -309,6 +321,7 @@ async def _build_payment_instructions(
     base_total: Optional[float],
     summary: Optional[str],
     locale: str | None = None,
+    method: Dict[str, Any] | None = None,
 ) -> str:
     total = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
     base_total_text = _format_payment_amount(total)
@@ -316,6 +329,13 @@ async def _build_payment_instructions(
     summary_text = _build_products_only_summary(summary)
     include_final_total = True
     instructions: List[str] = []
+    if method and method.get("markup"):
+        custom = str(method.get("markup"))
+        return (
+            custom
+            .replace("{amount}", base_total_text)
+            .replace("{total}", total_text)
+        )
     if method_key == "nequi":
         instructions.append(t(locale, "payment_nequi_title"))
         instructions.append("")
@@ -766,53 +786,40 @@ async def _get_category_items(
         return []
     products = await _get_products_by_category(category_value, telegram_id)
     return _paginate(products, 1)
-def build_payment_methods_keyboard(
+async def build_payment_methods_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
+    methods = await _get_payment_methods()
+    enabled_methods = [
+        item for item in methods if bool(item.get("enabled", True))
+    ]
+    rows: List[List[InlineKeyboardButton]] = []
+    for method in enabled_methods:
+        key = str(method.get("key") or "").lower()
+        label = method.get("label") or key.upper()
+        if not key:
+            continue
+        rows.append(
             [
                 InlineKeyboardButton(
-                    text=t(locale, "btn_method_nequi"),
-                    callback_data=f"order:method:{order_id}:{page}:{index}:nequi",
+                    text=str(label),
+                    callback_data=f"order:method:{order_id}:{page}:{index}:{key}",
                 )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_method_binance"),
-                    callback_data=f"order:method:{order_id}:{page}:{index}:binance",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_method_crypto"),
-                    callback_data=f"order:method:{order_id}:{page}:{index}:crypto",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_method_mp"),
-                    callback_data=f"order:method:{order_id}:{page}:{index}:mp",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_method_paypal"),
-                    callback_data=f"order:method:{order_id}:{page}:{index}:paypal",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_back"),
-                    callback_data="nav:back",
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "btn_home"),
-                    callback_data="home:show",
-                ),
-            ],
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=t(locale, "btn_back"),
+                callback_data="nav:back",
+            ),
+            InlineKeyboardButton(
+                text=t(locale, "btn_home"),
+                callback_data="home:show",
+            ),
         ]
     )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
 def build_crypto_assets_keyboard(
     order_id: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
@@ -1179,7 +1186,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         callback.message,
         callback.from_user.id,
         t(locale, "payment_choose_method"),
-        reply_markup=build_payment_methods_keyboard(order["id"], page, index, locale),
+        reply_markup=await build_payment_methods_keyboard(order["id"], page, index, locale),
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("category:buy:"))
@@ -1254,7 +1261,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         callback.message,
         callback.from_user.id,
         t(locale, "payment_choose_method"),
-        reply_markup=build_payment_methods_keyboard(order["id"], 1, 1, locale),
+        reply_markup=await build_payment_methods_keyboard(order["id"], 1, 1, locale),
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("shop:cart:"))
@@ -1618,7 +1625,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         callback.message,
         callback.from_user.id,
         t(locale, "payment_choose_method"),
-        reply_markup=build_payment_methods_keyboard(order_id, 1, 1, locale),
+        reply_markup=await build_payment_methods_keyboard(order_id, 1, 1, locale),
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
@@ -1654,7 +1661,7 @@ async def handle_order_methods(callback: CallbackQuery, state: FSMContext) -> No
         callback.message,
         callback.from_user.id,
         t(locale, "payment_choose_method"),
-        reply_markup=build_payment_methods_keyboard(order_id, page, index, locale),
+        reply_markup=await build_payment_methods_keyboard(order_id, page, index, locale),
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
@@ -1686,14 +1693,16 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
     ):
         await callback.answer()
         return
-    if not await _is_payment_method_enabled(method_key):
+    method = await _find_payment_method(method_key)
+    if method and not bool(method.get("enabled", True)):
         await callback.answer(
             t(locale, "payment_method_unavailable"),
             show_alert=True,
         )
         return
-    if method_key == "crypto":
-        method_image = _get_payment_method_image(method_key)
+    method_key_normalized = str((method or {}).get("key") or method_key).lower()
+    if method_key_normalized == "crypto":
+        method_image = _get_payment_method_image(method_key_normalized, method)
         if method_image:
             await render_main_view_with_photo(
                 callback.message,
@@ -1714,8 +1723,14 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
     data = await state.get_data()
     total = data.get("current_order_total")
     summary = data.get("current_order_summary")
-    text = await _build_payment_instructions(method_key, total, summary, locale)
-    method_image = _get_payment_method_image(method_key)
+    text = await _build_payment_instructions(
+        method_key_normalized,
+        total,
+        summary,
+        locale,
+        method=method,
+    )
+    method_image = _get_payment_method_image(method_key_normalized, method)
     if method_image:
         await render_main_view_with_photo(
             callback.message,
@@ -1734,7 +1749,7 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
             parse_mode=ParseMode.HTML,
         )
     await state.update_data(
-        payment_method=method_key,
+        payment_method=str((method or {}).get("key") or method_key),
         payment_method_order_id=order_id,
         payment_ready=False,
     )
@@ -1869,7 +1884,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
             callback.message,
             callback.from_user.id,
             t(locale, "payment_choose_method"),
-            reply_markup=build_payment_methods_keyboard(order_id, 1, 1, locale),
+            reply_markup=await build_payment_methods_keyboard(order_id, 1, 1, locale),
         )
         await callback.answer(t(locale, "select_payment_method_first"), show_alert=True)
         return

@@ -1,27 +1,39 @@
 const DEFAULT_METHODS = [
-  { key: "NEQUI", label: "Nequi" },
-  { key: "BINANCE_ID", label: "Binance ID" },
-  { key: "CRYPTO", label: "Cripto" },
-  { key: "MERCADOPAGO", label: "Mercado pago" },
-  { key: "PAYPAL", label: "Paypal" },
+  { key: "NEQUI", label: "Nequi", sort_order: 1 },
+  { key: "BINANCE_ID", label: "Binance ID", sort_order: 2 },
+  { key: "CRYPTO", label: "Cripto", sort_order: 3 },
+  { key: "MERCADOPAGO", label: "Mercado pago", sort_order: 4 },
+  { key: "PAYPAL", label: "Paypal", sort_order: 5 },
 ];
 
 async function ensurePaymentMethodsSchema(pool) {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS payment_methods (
        method_key text PRIMARY KEY,
+       label text,
+       image_url text,
+       markup text,
+       sort_order int,
        enabled boolean NOT NULL DEFAULT true,
        updated_at timestamptz NOT NULL DEFAULT now()
      )`
   );
+  await pool.query(
+    `ALTER TABLE payment_methods
+     ADD COLUMN IF NOT EXISTS label text,
+     ADD COLUMN IF NOT EXISTS image_url text,
+     ADD COLUMN IF NOT EXISTS markup text,
+     ADD COLUMN IF NOT EXISTS sort_order int`
+  );
   const values = [];
   const placeholders = DEFAULT_METHODS.map((item, idx) => {
-    values.push(item.key);
-    return `($${idx + 1}, true)`;
+    const base = idx * 3;
+    values.push(item.key, item.label, item.sort_order);
+    return `($${base + 1}, $${base + 2}, $${base + 3}, true)`;
   }).join(", ");
   if (values.length > 0) {
     await pool.query(
-      `INSERT INTO payment_methods (method_key, enabled)
+      `INSERT INTO payment_methods (method_key, label, sort_order, enabled)
        VALUES ${placeholders}
        ON CONFLICT (method_key) DO NOTHING`,
       values
@@ -31,20 +43,23 @@ async function ensurePaymentMethodsSchema(pool) {
 
 function normalizeMethodKey(input) {
   const key = String(input || "").trim().toUpperCase();
-  const allowed = new Set(DEFAULT_METHODS.map((item) => item.key));
-  return allowed.has(key) ? key : null;
+  return key ? key : null;
 }
 
 async function listPaymentMethods(pool) {
   await ensurePaymentMethodsSchema(pool);
   const res = await pool.query(
-    "SELECT method_key, enabled FROM payment_methods"
+    `SELECT method_key, label, image_url, markup, sort_order, enabled
+     FROM payment_methods
+     ORDER BY sort_order NULLS LAST, method_key ASC`
   );
-  const byKey = new Map(res.rows.map((row) => [row.method_key, row.enabled]));
-  return DEFAULT_METHODS.map((item) => ({
-    key: item.key,
-    label: item.label,
-    enabled: byKey.has(item.key) ? Boolean(byKey.get(item.key)) : true,
+  return res.rows.map((row) => ({
+    key: row.method_key,
+    label: row.label || row.method_key,
+    enabled: Boolean(row.enabled),
+    image_url: row.image_url || null,
+    markup: row.markup || null,
+    sort_order: row.sort_order ?? null,
   }));
 }
 
@@ -89,6 +104,50 @@ async function isPaymentMethodEnabled(pool, methodKey) {
   return Boolean(res.rows[0].enabled);
 }
 
+async function upsertPaymentMethod(pool, payload) {
+  await ensurePaymentMethodsSchema(pool);
+  const key = normalizeMethodKey(payload?.method_key || payload?.key);
+  if (!key) {
+    return null;
+  }
+  const label = payload?.label ? String(payload.label).trim() : null;
+  const imageUrl = payload?.image_url ? String(payload.image_url).trim() : null;
+  const markup = payload?.markup ? String(payload.markup) : null;
+  const sortOrderRaw = payload?.sort_order;
+  const sortOrder = Number.isFinite(Number(sortOrderRaw)) ? Number(sortOrderRaw) : null;
+  const enabled =
+    payload?.enabled === undefined || payload?.enabled === null
+      ? true
+      : Boolean(payload.enabled);
+  await pool.query(
+    `INSERT INTO payment_methods (method_key, label, image_url, markup, sort_order, enabled)
+     VALUES ($1, $2, $3, $4, $5, $6)
+     ON CONFLICT (method_key)
+     DO UPDATE SET
+       label = EXCLUDED.label,
+       image_url = EXCLUDED.image_url,
+       markup = EXCLUDED.markup,
+       sort_order = EXCLUDED.sort_order,
+       enabled = EXCLUDED.enabled,
+       updated_at = now()`,
+    [key, label, imageUrl, markup, sortOrder, enabled]
+  );
+  return listPaymentMethods(pool);
+}
+
+async function deletePaymentMethod(pool, methodKey) {
+  await ensurePaymentMethodsSchema(pool);
+  const key = normalizeMethodKey(methodKey);
+  if (!key) {
+    return null;
+  }
+  await pool.query(
+    "DELETE FROM payment_methods WHERE method_key = $1",
+    [key]
+  );
+  return listPaymentMethods(pool);
+}
+
 module.exports = {
   DEFAULT_METHODS,
   ensurePaymentMethodsSchema,
@@ -96,4 +155,6 @@ module.exports = {
   listPaymentMethods,
   togglePaymentMethod,
   isPaymentMethodEnabled,
+  upsertPaymentMethod,
+  deletePaymentMethod,
 };
