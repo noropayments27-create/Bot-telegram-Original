@@ -1330,7 +1330,7 @@ body.login-success {
   margin-left: auto;
   position: relative;
   top: -2cm;
-  left: -9cm;
+  left: -8cm;
 }
 
 .affiliates-title {
@@ -1362,9 +1362,11 @@ body.login-success {
 }
 
 .affiliates-filters {
-  margin-top: -24px !important;
+  margin-top: 0 !important;
+  margin-bottom: 0.5cm !important;
+  margin-left: 0.5cm !important;
   display: flex;
-  margin-right: 460px !important; /* Mueve todo a la izquierda */
+  margin-right: 0 !important;
 }
 
 .affiliates-commission-header {
@@ -1445,6 +1447,7 @@ body.login-success {
   border: 1px solid rgba(255, 36, 0, 0.35);
   border-radius: 14px;
   padding: 6px 8px;
+  margin-top: -1cm;
 }
 
 .affiliates-status-select {
