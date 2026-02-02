@@ -826,9 +826,8 @@ export default function AffiliatesPage() {
                 </select>
               </label>
             </div>
-            <div className="affiliates-commission-card">
-            <div className="affiliates-commission-header">
-              <h2 className="affiliates-title">
+            <div className="affiliates-commission-wrap">
+              <div className="affiliates-commission-title">
                 <svg viewBox="0 0 24 24" aria-hidden="true" className="affiliates-title-icon">
                   <path
                     d="M12 2v20M7 6.5c0-1.9 2.2-3.5 5-3.5s5 1.6 5 3.5-2.2 3.5-5 3.5-5 1.6-5 3.5 2.2 3.5 5 3.5 5-1.6 5-3.5"
@@ -840,70 +839,71 @@ export default function AffiliatesPage() {
                   />
                 </svg>
                 Comisión global
-              </h2>
-            </div>
-            {globalCommissionError && <p className="error">{globalCommissionError}</p>}
-            <div className="form">
-              <label>
-                Comisión (%)
-                <input
-                  className="commission-input"
-                  type="number"
-                  value={globalCommissionRate}
-                  onChange={(event) => {
-                    const raw = event.target.value || "";
-                    const cleaned = raw.replace(/[^0-9.]/g, "");
-                    const parts = cleaned.split(".");
-                    const integerPart = (parts[0] || "").slice(0, 2);
-                    const decimalPart = (parts[1] || "").slice(0, 2);
-                    const value = decimalPart ? `${integerPart}.${decimalPart}` : integerPart;
-                    setGlobalCommissionRate(value);
-                  }}
-                  placeholder="20"
-                  min="0"
-                  max="99"
-                  step="0.01"
-                />
-              </label>
-              <label>
-                Tiempo
-                <div className="commission-duration">
-                  <input
-                    className="commission-input commission-input-wide"
-                    type="number"
-                    min="1"
-                    max={globalCommissionUnit === "hours" ? "24" : "1440"}
-                    value={globalCommissionDuration}
-                    onChange={(event) => setGlobalCommissionDuration(event.target.value)}
-                  />
-                  <select
-                    className="commission-input"
-                    value={globalCommissionUnit}
-                    onChange={(event) => setGlobalCommissionUnit(event.target.value)}
+              </div>
+              <div className="affiliates-commission-card">
+                {globalCommissionError && <p className="error">{globalCommissionError}</p>}
+                <div className="form">
+                  <label>
+                    <span className="commission-label">Comisión (%)</span>
+                    <input
+                      className="commission-input"
+                      type="number"
+                      value={globalCommissionRate}
+                      onChange={(event) => {
+                        const raw = event.target.value || "";
+                        const cleaned = raw.replace(/[^0-9.]/g, "");
+                        const parts = cleaned.split(".");
+                        const integerPart = (parts[0] || "").slice(0, 2);
+                        const decimalPart = (parts[1] || "").slice(0, 2);
+                        const value = decimalPart ? `${integerPart}.${decimalPart}` : integerPart;
+                        setGlobalCommissionRate(value);
+                      }}
+                      placeholder="20"
+                      min="0"
+                      max="99"
+                      step="0.01"
+                    />
+                  </label>
+                  <label>
+                    <span className="commission-label">Tiempo</span>
+                    <div className="commission-duration">
+                      <input
+                        className="commission-input commission-input-wide"
+                        type="number"
+                        min="1"
+                        max={globalCommissionUnit === "hours" ? "24" : "1440"}
+                        value={globalCommissionDuration}
+                        onChange={(event) => setGlobalCommissionDuration(event.target.value)}
+                      />
+                      <select
+                        className="commission-input"
+                        value={globalCommissionUnit}
+                        onChange={(event) => setGlobalCommissionUnit(event.target.value)}
+                      >
+                        <option value="minutes">Minutos</option>
+                        <option value="hours">Horas</option>
+                      </select>
+                    </div>
+                  </label>
+                  <button
+                    type="button"
+                    onClick={handleSaveGlobalCommission}
+                    disabled={globalCommissionSaving}
                   >
-                    <option value="minutes">Minutos</option>
-                    <option value="hours">Horas</option>
-                  </select>
+                    {globalCommissionSaving ? "Guardando..." : "Comenzar"}
+                  </button>
+                  <button
+                    type="button"
+                    className="danger-button"
+                    onClick={handleStopGlobalCommission}
+                    disabled={globalCommissionSaving}
+                  >
+                    Detener
+                  </button>
                 </div>
-              </label>
-              <button
-                type="button"
-                onClick={handleSaveGlobalCommission}
-                disabled={globalCommissionSaving}
-              >
-                {globalCommissionSaving ? "Guardando..." : "Comenzar"}
-              </button>
-              <button
-                type="button"
-                className="danger-button"
-                onClick={handleStopGlobalCommission}
-                disabled={globalCommissionSaving}
-              >
-                Detener
-              </button>
+                <p className="muted">Expira en: {globalCommissionRemaining}</p>
+              </div>
             </div>
-            <p className="muted">Tiempo restante: {globalCommissionRemaining}</p>
-          </div>
           </div>
         </div>
         {message && <p className="muted">{message}</p>}
