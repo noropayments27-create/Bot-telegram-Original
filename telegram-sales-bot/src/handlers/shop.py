@@ -316,6 +316,39 @@ def _build_products_only_summary(summary_text: Optional[str]) -> str:
                 continue
         lines.append(line)
     return "\n".join(lines).strip()
+
+
+def _format_payment_method_title(
+    method_key: str,
+    method: Dict[str, Any] | None,
+    locale: str | None = None,
+) -> str:
+    key = str(method_key or "").lower()
+    emoji_map = {
+        "nequi": "🏦",
+        "binance": "🟡",
+        "binance_id": "🟡",
+        "crypto": "🪙",
+        "mp": "🧾",
+        "mercadopago": "🧾",
+        "paypal": "💳",
+    }
+    label = None
+    if method and method.get("label"):
+        label = str(method.get("label"))
+    if not label:
+        label_map = {
+            "nequi": t(locale, "btn_method_nequi"),
+            "binance": t(locale, "btn_method_binance"),
+            "binance_id": t(locale, "btn_method_binance"),
+            "crypto": t(locale, "btn_method_crypto"),
+            "mp": t(locale, "btn_method_mp"),
+            "mercadopago": t(locale, "btn_method_mp"),
+            "paypal": t(locale, "btn_method_paypal"),
+        }
+        label = label_map.get(key, t(locale, "payment_method_default"))
+    emoji = emoji_map.get(key, "💳")
+    return f"{emoji} <b>{html.escape(label)}</b>"
 async def _build_payment_instructions(
     method_key: str,
     base_total: Optional[float],
@@ -325,19 +358,47 @@ async def _build_payment_instructions(
 ) -> str:
     total = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
     base_total_text = _format_payment_amount(total)
-    total_text = base_total_text
+    markup_percent = None
+    custom_markup = None
+    if method and method.get("markup") is not None:
+        raw_markup = str(method.get("markup")).strip()
+        if raw_markup:
+            try:
+                markup_percent = float(raw_markup)
+            except ValueError:
+                custom_markup = raw_markup
+    if markup_percent:
+        total = total * (1 + markup_percent / 100)
+    total_text = _format_payment_amount(total)
+    amount_label_text = total_text if markup_percent else base_total_text
     summary_text = _build_products_only_summary(summary)
     include_final_total = True
     instructions: List[str] = []
-    if method and method.get("markup"):
-        custom = str(method.get("markup"))
-        return (
-            custom
+    description_line = ""
+    if method and method.get("description"):
+        description_text = str(method.get("description")).replace("\n", " ").strip()
+        if description_text:
+            description_line = t(locale, "payment_method_description").format(
+                description=html.escape(description_text)
+            )
+    title_line = _format_payment_method_title(method_key, method, locale)
+    if custom_markup:
+        instructions.append(
+            custom_markup
             .replace("{amount}", base_total_text)
             .replace("{total}", total_text)
         )
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
+        instructions.append("")
+        instructions.append(t(locale, "payment_after_pay_global"))
+        return "\n".join(instructions)
     if method_key == "nequi":
-        instructions.append(t(locale, "payment_nequi_title"))
+        instructions.append(title_line)
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
         instructions.append("")
         if NEQUI_NUMBER:
             instructions.append(
@@ -358,7 +419,7 @@ async def _build_payment_instructions(
             instructions.append(summary_text)
         instructions.append("")
         instructions.append(
-            t(locale, "payment_amount_label").format(amount=base_total_text)
+            t(locale, "payment_amount_label").format(amount=amount_label_text)
         )
         try:
             rate = await usd_to_cop()
@@ -371,11 +432,12 @@ async def _build_payment_instructions(
         except Exception as exc:
             print("[FX] Nequi COP error:", repr(exc))
             instructions.append(t(locale, "payment_send_unavailable_cop"))
-        instructions.append("")
-        instructions.append(t(locale, "payment_after_pay"))
         include_final_total = False
     elif method_key == "binance":
-        instructions.append(t(locale, "payment_binance_title"))
+        instructions.append(title_line)
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
         instructions.append("")
         if BINANCE_ID:
             instructions.append(
@@ -390,13 +452,14 @@ async def _build_payment_instructions(
             instructions.append(summary_text)
         instructions.append("")
         instructions.append(
-            t(locale, "payment_amount_label").format(amount=base_total_text)
+            t(locale, "payment_amount_label").format(amount=amount_label_text)
         )
-        instructions.append("")
-        instructions.append(t(locale, "payment_after_pay_short"))
         include_final_total = False
     elif method_key == "crypto":
-        instructions.append(t(locale, "crypto_title"))
+        instructions.append(title_line)
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
         if CRYPTO_WALLET_BTC:
             instructions.append(f"Bitcoin: {html.escape(CRYPTO_WALLET_BTC)}")
         if CRYPTO_WALLET_USDT_TRON:
@@ -406,7 +469,10 @@ async def _build_payment_instructions(
         if CRYPTO_WALLET_LTC:
             instructions.append(f"LTC: {html.escape(CRYPTO_WALLET_LTC)}")
     elif method_key == "mp":
-        instructions.append(t(locale, "payment_mp_title"))
+        instructions.append(title_line)
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
         instructions.append("")
         if MERCADOPAGO_ACCOUNT:
             clabe = str(MERCADOPAGO_ACCOUNT).replace("CLABE:", "").strip()
@@ -419,7 +485,7 @@ async def _build_payment_instructions(
             instructions.append(summary_text)
         instructions.append("")
         instructions.append(
-            t(locale, "payment_amount_label").format(amount=base_total_text)
+            t(locale, "payment_amount_label").format(amount=amount_label_text)
         )
         try:
             rate = await usd_to_mxn()
@@ -432,11 +498,12 @@ async def _build_payment_instructions(
         except Exception as exc:
             print("[FX] MP MXN error:", repr(exc))
             instructions.append(t(locale, "payment_send_unavailable_mxn"))
-        instructions.append("")
-        instructions.append(t(locale, "payment_after_pay"))
         include_final_total = False
     elif method_key == "paypal":
-        instructions.append(t(locale, "payment_paypal_title"))
+        instructions.append(title_line)
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
         instructions.append("")
         if PAYPAL_ACCOUNT:
             instructions.append(
@@ -446,7 +513,7 @@ async def _build_payment_instructions(
             )
         instructions.append("")
         instructions.append(
-            t(locale, "payment_paypal_amount_note").format(amount=base_total_text)
+            t(locale, "payment_paypal_amount_note").format(amount=amount_label_text)
         )
         paypal_total = total * 1.25
         total_text = _format_payment_amount(paypal_total)
@@ -467,7 +534,10 @@ async def _build_payment_instructions(
         instructions.append(t(locale, "payment_paypal_warning"))
         include_final_total = False
     else:
-        instructions.append(t(locale, "payment_method_default"))
+        instructions.append(title_line)
+        if description_line:
+            instructions.append("")
+            instructions.append(description_line)
     instructions.append("")
     if summary_text and include_final_total:
         instructions.append(summary_text)
@@ -477,6 +547,8 @@ async def _build_payment_instructions(
             t(locale, "payment_final_total").format(amount=total_text)
         )
         instructions.append(t(locale, "payment_final_note"))
+    instructions.append("")
+    instructions.append(t(locale, "payment_after_pay_global"))
     return "\n".join(instructions)
 def build_shop_keyboard(
     page: int, total_pages: int, count: int, locale: str | None = None
