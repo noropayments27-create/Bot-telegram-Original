@@ -41,6 +41,7 @@ export default function InventoryPage() {
   const [createOpen, setCreateOpen] = useState(false);
   const [createName, setCreateName] = useState("");
   const [createNameEn, setCreateNameEn] = useState("");
+  const [createImageUrl, setCreateImageUrl] = useState("");
   const [createCategory, setCreateCategory] = useState("tienda");
   const [createPrice, setCreatePrice] = useState("0");
   const [createIsFree, setCreateIsFree] = useState(false);
@@ -66,6 +67,7 @@ export default function InventoryPage() {
   const [createDescriptionEn, setCreateDescriptionEn] = useState("");
   const [editProductName, setEditProductName] = useState("");
   const [editNameEn, setEditNameEn] = useState("");
+  const [editImageUrl, setEditImageUrl] = useState("");
   const [editCategory, setEditCategory] = useState("tienda");
   const [editPrice, setEditPrice] = useState("0");
   const [editIsFree, setEditIsFree] = useState(false);
@@ -360,6 +362,7 @@ export default function InventoryPage() {
     );
     setEditProductName(stripCategoryPrefix(data?.product?.name || ""));
     setEditNameEn(String(data?.product?.name_en || ""));
+    setEditImageUrl(String(data?.product?.image_url || ""));
     setEditCategory(getCategoryKey(data?.product));
     setEditPrice(
       data?.product?.price === null || data?.product?.price === undefined
@@ -600,11 +603,13 @@ export default function InventoryPage() {
       const deliveryPayloadEn = createDeliveryTextEn.trim()
         ? { text: createDeliveryTextEn.trim() }
         : null;
+      const imageUrl = createImageUrl.trim();
       const data = await apiFetch("/admin/products", {
         method: "POST",
         body: JSON.stringify({
           display_name: trimmedName,
           name_en: trimmedNameEn,
+          image_url: imageUrl || null,
           category_key: createCategory,
           price: normalizedPrice,
           stock_mode: createMode,
@@ -621,6 +626,7 @@ export default function InventoryPage() {
       await loadProducts({ silent: true });
       setCreateName("");
       setCreateNameEn("");
+      setCreateImageUrl("");
       setCreatePrice("0");
       setCreateIsFree(false);
       setCreateLastPrice("0");
@@ -839,6 +845,7 @@ export default function InventoryPage() {
     const deliveryPayloadEn = editDeliveryTextEn.trim()
       ? { text: editDeliveryTextEn.trim() }
       : null;
+    const imageUrl = editImageUrl.trim();
     setEditIsFree(Number(normalizedPrice || 0) <= 0);
     try {
       const data = await apiFetch(`/admin/products/${detail.product.id}/update`, {
@@ -846,6 +853,7 @@ export default function InventoryPage() {
         body: JSON.stringify({
           display_name: trimmedName,
           name_en: trimmedNameEn,
+          image_url: imageUrl || null,
           category_key: editCategory,
           price: normalizedPrice,
           description: buildDescriptionPayload(editDescription),
@@ -1046,6 +1054,15 @@ export default function InventoryPage() {
                     value={createNameEn}
                     onChange={(event) => setCreateNameEn(event.target.value)}
                     placeholder="Nombre en ingles (opcional)"
+                  />
+                </label>
+                <label>
+                  Imagen (URL)
+                  <input
+                    type="text"
+                    value={createImageUrl}
+                    onChange={(event) => setCreateImageUrl(event.target.value)}
+                    placeholder="https://..."
                   />
                 </label>
                 <label>
@@ -1763,6 +1780,15 @@ export default function InventoryPage() {
                         type="text"
                         value={editNameEn}
                         onChange={(event) => setEditNameEn(event.target.value)}
+                      />
+                    </label>
+                    <label>
+                      Imagen (URL)
+                      <input
+                        type="text"
+                        value={editImageUrl}
+                        onChange={(event) => setEditImageUrl(event.target.value)}
+                        placeholder="https://..."
                       />
                     </label>
                     <label>

@@ -13,6 +13,7 @@ async function ensurePaymentMethodsSchema(pool) {
        label text,
        description text,
        destination text,
+       asset_images text,
        image_url text,
        markup text,
        sort_order int,
@@ -25,6 +26,7 @@ async function ensurePaymentMethodsSchema(pool) {
      ADD COLUMN IF NOT EXISTS label text,
      ADD COLUMN IF NOT EXISTS description text,
      ADD COLUMN IF NOT EXISTS destination text,
+     ADD COLUMN IF NOT EXISTS asset_images text,
      ADD COLUMN IF NOT EXISTS image_url text,
      ADD COLUMN IF NOT EXISTS markup text,
      ADD COLUMN IF NOT EXISTS sort_order int`
@@ -53,7 +55,7 @@ function normalizeMethodKey(input) {
 async function listPaymentMethods(pool) {
   await ensurePaymentMethodsSchema(pool);
   const res = await pool.query(
-    `SELECT method_key, label, description, destination, image_url, markup, sort_order, enabled
+    `SELECT method_key, label, description, destination, asset_images, image_url, markup, sort_order, enabled
      FROM payment_methods
      ORDER BY sort_order NULLS LAST, method_key ASC`
   );
@@ -62,6 +64,7 @@ async function listPaymentMethods(pool) {
     label: row.label || row.method_key,
     description: row.description || null,
     destination: row.destination || null,
+    asset_images: row.asset_images || null,
     enabled: Boolean(row.enabled),
     image_url: row.image_url || null,
     markup: row.markup || null,
@@ -119,6 +122,12 @@ async function upsertPaymentMethod(pool, payload) {
   const label = payload?.label ? String(payload.label).trim() : null;
   const description = payload?.description ? String(payload.description).trim() : null;
   const destination = payload?.destination ? String(payload.destination).trim() : null;
+  const assetImagesRaw = payload?.asset_images;
+  const assetImages = assetImagesRaw
+    ? typeof assetImagesRaw === "string"
+      ? assetImagesRaw.trim()
+      : JSON.stringify(assetImagesRaw)
+    : null;
   const imageUrl = payload?.image_url ? String(payload.image_url).trim() : null;
   const markup = payload?.markup ? String(payload.markup) : null;
   const sortOrderRaw = payload?.sort_order;
@@ -128,19 +137,20 @@ async function upsertPaymentMethod(pool, payload) {
       ? false
       : Boolean(payload.enabled);
   await pool.query(
-    `INSERT INTO payment_methods (method_key, label, description, destination, image_url, markup, sort_order, enabled)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
+    `INSERT INTO payment_methods (method_key, label, description, destination, asset_images, image_url, markup, sort_order, enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
      ON CONFLICT (method_key)
      DO UPDATE SET
        label = EXCLUDED.label,
        description = EXCLUDED.description,
        destination = EXCLUDED.destination,
+       asset_images = EXCLUDED.asset_images,
        image_url = EXCLUDED.image_url,
        markup = EXCLUDED.markup,
        sort_order = EXCLUDED.sort_order,
        enabled = EXCLUDED.enabled,
        updated_at = now()`,
-    [key, label, description, destination, imageUrl, markup, sortOrder, enabled]
+    [key, label, description, destination, assetImages, imageUrl, markup, sortOrder, enabled]
   );
   return listPaymentMethods(pool);
 }

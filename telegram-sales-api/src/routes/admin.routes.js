@@ -1260,6 +1260,9 @@ router.post("/products", async (req, res, next) => {
   const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
     ? String(req.body?.description_en || "").trim()
     : null;
+  const imageUrl = Object.prototype.hasOwnProperty.call(req.body || {}, "image_url")
+    ? String(req.body?.image_url || "").trim()
+    : "";
   const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
     ? req.body.delivery_payload
     : {};
@@ -1277,10 +1280,10 @@ router.post("/products", async (req, res, next) => {
       }
       const insertRes = await client.query(
         `INSERT INTO products
-          (sku_key, name, description, name_en, description_en, price, is_active, delivery_type,
-           delivery_payload, delivery_payload_en, stock_mode, stock_qty, show_stock,
+          (sku_key, name, description, name_en, description_en, image_url, price, is_active,
+           delivery_type, delivery_payload, delivery_payload_en, stock_mode, stock_qty, show_stock,
            unique_purchase, category_key)
-         VALUES ($1, $2, $3, $4, $5, $6, true, $7, $8, $9, $10, $11, $12, $13, $14)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, $12, $13, $14, $15)
          RETURNING *`,
         [
           skuKey,
@@ -1288,6 +1291,7 @@ router.post("/products", async (req, res, next) => {
           description,
           nameEn,
           descriptionEn,
+          imageUrl || null,
           parsedPrice,
           deliveryType,
           deliveryPayload,
@@ -1366,6 +1370,10 @@ router.post("/products/:id/update", async (req, res, next) => {
   const descriptionEn = Object.prototype.hasOwnProperty.call(req.body || {}, "description_en")
     ? String(req.body?.description_en || "").trim()
     : null;
+  const imageUrlProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "image_url");
+  const imageUrl = imageUrlProvided
+    ? String(req.body?.image_url || "").trim()
+    : null;
 
   const showStock = req.body?.show_stock === undefined
     ? true
@@ -1409,6 +1417,7 @@ router.post("/products/:id/update", async (req, res, next) => {
              description = $3,
              name_en = COALESCE($4, name_en),
              description_en = COALESCE($5, description_en),
+             image_url = CASE WHEN $14 THEN $15 ELSE image_url END,
              price = $6,
              show_stock = $7,
              unique_purchase = $8,
@@ -1435,6 +1444,8 @@ router.post("/products/:id/update", async (req, res, next) => {
           deliveryPayload ? JSON.stringify(deliveryPayload) : null,
           deliveryPayloadEn ? JSON.stringify(deliveryPayloadEn) : null,
           categoryKey || null,
+          imageUrlProvided,
+          imageUrl || null,
         ]
       );
 
@@ -1703,6 +1714,7 @@ router.get("/stock/inspect", async (req, res, next) => {
         name_en: product.name_en,
         description: product.description,
         description_en: product.description_en,
+        image_url: product.image_url,
         price: product.price,
         show_stock: product.show_stock,
         stock_mode: product.stock_mode,

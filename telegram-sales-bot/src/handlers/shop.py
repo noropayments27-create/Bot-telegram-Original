@@ -191,13 +191,59 @@ async def _render_cart_view(
     )
 
 
+async def _render_product_detail_view(
+    target: Message,
+    user_id: int,
+    text: str,
+    product: Dict[str, Any],
+    reply_markup: InlineKeyboardMarkup | None = None,
+    parse_mode: ParseMode | str | None = None,
+) -> None:
+    image_url = _get_product_image(product) or BOT_SHOP_SECTION_IMAGE_URL
+    if image_url:
+        await render_main_view_with_photo(
+            target,
+            user_id,
+            text,
+            image_url,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+        )
+        return
+    await render_main_view(
+        target,
+        user_id,
+        text,
+        reply_markup=reply_markup,
+        parse_mode=parse_mode,
+    )
+
+
 def _get_payment_method_image(method_key: str, method: Dict[str, Any] | None = None) -> str | None:
     if method and method.get("image_url"):
         return str(method.get("image_url"))
     return _PAYMENT_METHOD_IMAGES.get(method_key)
 
 
-def _get_crypto_asset_image(asset_key: str) -> str | None:
+def _get_product_image(product: Dict[str, Any]) -> str | None:
+    value = str(product.get("image_url") or "").strip()
+    if value:
+        return value
+    return None
+
+
+def _get_crypto_asset_image(
+    asset_key: str, method: Dict[str, Any] | None = None
+) -> str | None:
+    if method and method.get("asset_images"):
+        try:
+            data = json.loads(str(method.get("asset_images")))
+        except (TypeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            value = str(data.get(asset_key) or "").strip()
+            if value:
+                return value
     return _CRYPTO_ASSET_IMAGES.get(asset_key)
 
 
@@ -794,6 +840,7 @@ def _normalize_product(product: Dict[str, Any]) -> Dict[str, Any]:
         "name": name,
         "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "",
+        "image_url": product.get("image_url") or "",
         "price": float(product.get("price") or _DEFAULT_PRODUCT_PRICE_USD),
         "available_stock": product.get("available_stock"),
         "stock_is_unlimited": product.get("stock_is_unlimited"),
@@ -1160,10 +1207,11 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         f"{_format_price_label(product['price'], locale)}"
     )
     keyboard = build_product_detail_keyboard(page, index, locale)
-    await render_main_view(
+    await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
         text,
+        product,
         reply_markup=keyboard,
     )
     await callback.answer()
@@ -1204,10 +1252,11 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         f"{_format_price_label(item['price'], locale)}"
     )
     keyboard = build_category_detail_keyboard(category_key, index, locale)
-    await render_main_view(
+    await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
         text,
+        item,
         reply_markup=keyboard,
     )
     await callback.answer()
@@ -1454,10 +1503,11 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
         f"{total_line}"
     )
     keyboard = build_product_detail_keyboard(page, index, locale)
-    await render_main_view(
+    await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
         text,
+        product,
         reply_markup=keyboard,
     )
     await callback.answer()
@@ -1549,10 +1599,11 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
         f"{total_line}"
     )
     keyboard = build_category_detail_keyboard(category_key, index, locale)
-    await render_main_view(
+    await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
         text,
+        item,
         reply_markup=keyboard,
     )
     await callback.answer()
@@ -2280,7 +2331,7 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
     if description_line:
         text += f"\n{description_line}"
     text += f"\n\n{t(locale, 'payment_after_pay_global')}"
-    asset_image = _get_crypto_asset_image(asset_key)
+    asset_image = _get_crypto_asset_image(asset_key, method)
     if asset_image:
         await render_main_view_with_photo(
             callback.message,
