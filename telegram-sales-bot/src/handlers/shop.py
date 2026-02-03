@@ -643,14 +643,8 @@ async def _build_payment_instructions(
             .replace("{amount}", base_total_text)
             .replace("{total}", total_text)
         )
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
     else:
         instructions.append(title_line)
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
 
     if destination_lines:
         instructions.append("")
