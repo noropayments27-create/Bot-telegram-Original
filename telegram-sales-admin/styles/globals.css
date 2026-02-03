@@ -739,7 +739,6 @@ body.login-success {
 
 .payment-methods-grid {
   width: 100%;
-  overflow: visible;
 }
 
 .pm-grid-item {
@@ -750,9 +749,7 @@ body.login-success {
   border: 1px solid rgba(255, 36, 0, 0.2);
   background: rgba(20, 20, 20, 0.65);
   padding: 10px;
-  overflow: visible;
-  min-width: 0;
-  min-height: 0;
+  overflow: hidden;
 }
 
 .pm-grid-handle {
@@ -770,11 +767,6 @@ body.login-success {
   border-radius: 10px;
   color: #f2f2f2;
   padding: 8px 10px;
-  width: 100%;
-  height: 100%;
-  min-width: 0;
-  min-height: 0;
-  box-sizing: border-box;
 }
 
 .payment-methods-order-input {
@@ -877,19 +869,6 @@ body.login-success {
   display: flex;
   align-items: center;
   gap: 10px;
-}
-
-.payment-methods-action {
-  display: flex;
-  align-items: center;
-}
-
-.payment-methods-ghost-button {
-  background: transparent;
-  border: none;
-  box-shadow: none;
-  color: var(--scarlet-red);
-  padding: 0;
 }
 
 .payment-methods-list-card {
