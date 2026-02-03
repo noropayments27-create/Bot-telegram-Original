@@ -66,25 +66,20 @@ const emptyForm = {
 };
 
 const layoutApiKey = "payment-methods";
-const legacyLayoutCols = 12;
-const layoutCols = 120;
 
 const defaultFormLayout = [
-  { i: "key", x: 0, y: 0, w: 20, h: 6, minW: 6, minH: 4 },
-  { i: "label", x: 20, y: 0, w: 20, h: 6, minW: 6, minH: 4 },
-  { i: "crypto", x: 40, y: 0, w: 30, h: 6, minW: 8, minH: 4 },
-  { i: "markup", x: 70, y: 0, w: 15, h: 6, minW: 6, minH: 4 },
-  { i: "order", x: 85, y: 0, w: 10, h: 6, minW: 4, minH: 4 },
-  { i: "destination", x: 0, y: 6, w: 60, h: 12, minW: 10, minH: 6 },
-  { i: "description", x: 0, y: 18, w: 60, h: 6, minW: 10, minH: 4 },
-  { i: "actionSave", x: 0, y: 24, w: 12, h: 6, minW: 6, minH: 4 },
-  { i: "actionClear", x: 12, y: 24, w: 12, h: 6, minW: 6, minH: 4 },
+  { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
+  { i: "destination", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
+  { i: "description", x: 0, y: 8, w: 8, h: 2, minW: 3, minH: 2 },
+  { i: "actions", x: 0, y: 10, w: 12, h: 2, minW: 4, minH: 2 },
 ];
 
 const defaultPageLayout = [
-  { i: "header", x: 0, y: 0, w: 120, h: 8, minW: 20, minH: 6 },
-  { i: "form", x: 0, y: 8, w: 120, h: 40, minW: 20, minH: 20 },
-  { i: "list", x: 0, y: 48, w: 120, h: 40, minW: 20, minH: 20 },
+  { i: "header", x: 0, y: 0, w: 12, h: 2, minW: 6, minH: 2 },
+  { i: "form", x: 0, y: 2, w: 12, h: 12, minW: 6, minH: 6 },
+  { i: "list", x: 0, y: 14, w: 12, h: 12, minW: 6, minH: 6 },
 ];
 
 const normalizeLayout = (defaults, saved) => {
@@ -98,23 +93,6 @@ const normalizeLayout = (defaults, saved) => {
   }));
 };
 
-const scaleLayout = (layout, targetCols, baseCols) => {
-  if (!Array.isArray(layout) || layout.length === 0) {
-    return layout;
-  }
-  const maxCol = Math.max(...layout.map((item) => (item.x || 0) + (item.w || 0)));
-  if (maxCol > baseCols) {
-    return layout;
-  }
-  const factor = targetCols / baseCols;
-  return layout.map((item) => ({
-    ...item,
-    x: Math.round((item.x || 0) * factor),
-    w: Math.max(1, Math.round((item.w || 1) * factor)),
-    minW: item.minW ? Math.max(1, Math.round(item.minW * factor)) : item.minW,
-  }));
-};
-
 export default function PaymentMethodsPage() {
   const router = useRouter();
   const [methods, setMethods] = useState([]);
@@ -122,12 +100,8 @@ export default function PaymentMethodsPage() {
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
   const [layoutEditing, setLayoutEditing] = useState(false);
-  const [formLayout, setFormLayout] = useState(
-    scaleLayout(defaultFormLayout, layoutCols, legacyLayoutCols)
-  );
-  const [pageLayout, setPageLayout] = useState(
-    scaleLayout(defaultPageLayout, layoutCols, legacyLayoutCols)
-  );
+  const [formLayout, setFormLayout] = useState(defaultFormLayout);
+  const [pageLayout, setPageLayout] = useState(defaultPageLayout);
   const [layoutStatus, setLayoutStatus] = useState("");
   const [layoutError, setLayoutError] = useState("");
   const [message, setMessage] = useState("");
@@ -158,10 +132,8 @@ export default function PaymentMethodsPage() {
       try {
         const data = await apiFetch(`/admin/layouts/${layoutApiKey}`);
         const layout = data?.layout || {};
-        const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
-        const nextFormLayout = normalizeLayout(defaultFormLayout, layout.form_layout);
-        setPageLayout(scaleLayout(nextPageLayout, layoutCols, legacyLayoutCols));
-        setFormLayout(scaleLayout(nextFormLayout, layoutCols, legacyLayoutCols));
+        setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
+        setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
       } catch (err) {
         setLayoutError("No se pudo cargar el diseño.");
       }
@@ -181,10 +153,8 @@ export default function PaymentMethodsPage() {
         }),
       });
       const layout = data?.layout || {};
-      const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
-      const nextFormLayout = normalizeLayout(defaultFormLayout, layout.form_layout);
-      setPageLayout(scaleLayout(nextPageLayout, layoutCols, legacyLayoutCols));
-      setFormLayout(scaleLayout(nextFormLayout, layoutCols, legacyLayoutCols));
+      setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
+      setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
       setLayoutStatus("saved");
     } catch (err) {
       setLayoutStatus("error");
@@ -218,11 +188,9 @@ export default function PaymentMethodsPage() {
   };
 
   const handleResetLayout = async () => {
-    const nextPageLayout = scaleLayout(defaultPageLayout, layoutCols, legacyLayoutCols);
-    const nextFormLayout = scaleLayout(defaultFormLayout, layoutCols, legacyLayoutCols);
-    setPageLayout(nextPageLayout);
-    setFormLayout(nextFormLayout);
-    await persistLayout(nextPageLayout, nextFormLayout);
+    setPageLayout(defaultPageLayout);
+    setFormLayout(defaultFormLayout);
+    await persistLayout(defaultPageLayout, defaultFormLayout);
   };
 
   const handleEdit = (method) => {
@@ -321,6 +289,17 @@ export default function PaymentMethodsPage() {
     }
   };
 
+  const handleToggle = async (key) => {
+    try {
+      const data = await apiFetch(`/admin/payment-methods/${key}/toggle`, {
+        method: "POST",
+      });
+      setMethods(Array.isArray(data?.methods) ? data.methods : []);
+    } catch (err) {
+      setError("No se pudo actualizar el método de pago.");
+    }
+  };
+
   return (
     <main className="page payment-methods-page">
       <div className="payment-methods-layout-controls">
@@ -341,22 +320,18 @@ export default function PaymentMethodsPage() {
       </div>
       <ResponsiveGridLayout
         className="payment-methods-page-grid"
-        cols={layoutCols}
-        rowHeight={8}
-        margin={[0, 0]}
-        containerPadding={[0, 0]}
+        cols={12}
+        rowHeight={32}
+        margin={[16, 16]}
         layout={pageLayout}
         onLayoutChange={handlePageLayoutChange}
         isDraggable={layoutEditing}
         isResizable={layoutEditing}
         draggableHandle=".pm-layout-handle"
         compactType={null}
-        preventCollision={false}
+        preventCollision
       >
-        <section
-          key="header"
-          className="card payment-methods-card pm-layout-card payment-methods-header-card"
-        >
+        <section key="header" className="card payment-methods-card pm-layout-card">
           {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
           <div className="payment-methods-header">
             <h1 className="payment-methods-title-main">
@@ -372,17 +347,16 @@ export default function PaymentMethodsPage() {
           <div className="payment-methods-form">
             <ResponsiveGridLayout
               className="payment-methods-grid"
-              cols={layoutCols}
-              rowHeight={8}
-              margin={[0, 0]}
-              containerPadding={[0, 0]}
+              cols={12}
+              rowHeight={32}
+              margin={[12, 12]}
               layout={formLayout}
               onLayoutChange={handleFormLayoutChange}
               isDraggable={layoutEditing}
               isResizable={layoutEditing}
               draggableHandle=".pm-grid-handle"
               compactType={null}
-              preventCollision={false}
+              preventCollision
             >
             <div key="key" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
@@ -416,72 +390,66 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="crypto" className="pm-grid-item">
+            <div key="midline" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-crypto-inline">
-                <span className="payment-methods-crypto-label">Tipo de cripto</span>
-                {isCryptoMethod ? (
-                  <div className="payment-methods-crypto-buttons">
-                    {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                      <button
-                        key={option.key}
-                        type="button"
-                        className={`payment-methods-crypto-button${
-                          cryptoDestinationKey === option.key ? " is-active" : ""
-                        }`}
-                        onClick={() => setCryptoDestinationKey(option.key)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+              <div className="payment-methods-midline">
+                {isCryptoMethod && (
+                  <div className="payment-methods-crypto-inline">
+                    <span className="payment-methods-crypto-label">Tipo de cripto</span>
+                    <div className="payment-methods-crypto-buttons">
+                      {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          className={`payment-methods-crypto-button${
+                            cryptoDestinationKey === option.key ? " is-active" : ""
+                          }`}
+                          onClick={() => setCryptoDestinationKey(option.key)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                ) : (
-                  <span className="muted">Solo disponible para CRYPTO.</span>
                 )}
-              </div>
-            </div>
-            <div key="markup" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <label className="payment-methods-markup">
-                Markup (%)
-                <div className="payment-methods-inline-field">
+                <label className="payment-methods-markup">
+                  Markup (%)
+                  <div className="payment-methods-inline-field">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={2}
+                      value={form.markup}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                        }))
+                      }
+                      placeholder="0"
+                      className="payment-methods-percent-input"
+                    />
+                    <span className="payment-methods-percent-suffix">%</span>
+                  </div>
+                </label>
+                <label className="payment-methods-order">
+                  Orden
                   <input
                     type="text"
                     inputMode="numeric"
-                    maxLength={2}
-                    value={form.markup}
+                    maxLength={1}
+                    value={form.sort_order}
                     onChange={(event) =>
                       setForm((prev) => ({
                         ...prev,
-                        markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                        sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
                       }))
                     }
-                    placeholder="0"
-                    className="payment-methods-percent-input"
+                    placeholder="1"
+                    className="payment-methods-order-input"
                   />
-                  <span className="payment-methods-percent-suffix">%</span>
-                </div>
-              </label>
-            </div>
-            <div key="order" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <label className="payment-methods-order">
-                Orden
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={form.sort_order}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
-                    }))
-                  }
-                  placeholder="1"
-                  className="payment-methods-order-input"
-                />
-              </label>
+                </label>
+              </div>
             </div>
             <div key="destination" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
@@ -521,17 +489,12 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="actionSave" className="pm-grid-item">
+            <div key="actions" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-action">
+              <div className="payment-methods-actions">
                 <button type="button" onClick={handleSave}>
                   {editingKey ? "Actualizar" : "Agregar"}
                 </button>
-              </div>
-            </div>
-            <div key="actionClear" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-action">
                 <button type="button" className="plain-button" onClick={handleClear}>
                   Limpiar
                 </button>
@@ -573,6 +536,13 @@ export default function PaymentMethodsPage() {
                       <div className="payment-methods-row-actions">
                         <button type="button" onClick={() => handleEdit(method)}>
                           Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="plain-button"
+                          onClick={() => handleToggle(method.key)}
+                        >
+                          {method.enabled ? "Desactivar" : "Activar"}
                         </button>
                         <button
                           type="button"
