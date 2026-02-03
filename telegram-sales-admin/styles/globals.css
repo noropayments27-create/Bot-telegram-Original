@@ -875,6 +875,23 @@ body.login-success {
   padding: 20px;
 }
 
+.payment-methods-list-scroll {
+  max-height: 360px;
+  overflow-y: auto;
+  border: 1px solid rgba(255, 36, 0, 0.35);
+  border-radius: 14px;
+  background: rgba(10, 10, 10, 0.9);
+  padding: 8px;
+}
+
+.payment-methods-list-scroll table {
+  min-width: 600px;
+}
+
+.payment-methods-row-disabled td {
+  background: rgba(255, 36, 0, 0.18);
+}
+
 .payment-methods-row-actions {
   display: flex;
   gap: 8px;

@@ -507,7 +507,7 @@ export default function PaymentMethodsPage() {
         <section key="list" className="card payment-methods-list-card pm-layout-card">
           {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
           <h3>Lista de métodos</h3>
-          <div className="table-scroll">
+          <div className="table-scroll payment-methods-list-scroll">
             <table style={{ width: "100%" }}>
               <thead>
                 <tr>
@@ -520,7 +520,10 @@ export default function PaymentMethodsPage() {
               </thead>
               <tbody>
                 {methods.map((method) => (
-                  <tr key={method.key}>
+                  <tr
+                    key={method.key}
+                    className={method.enabled ? "" : "payment-methods-row-disabled"}
+                  >
                     <td>{method.key}</td>
                     <td>{method.label}</td>
                     <td>{method.sort_order ?? "-"}</td>
