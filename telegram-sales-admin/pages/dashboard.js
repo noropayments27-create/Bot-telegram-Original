@@ -167,13 +167,21 @@ export default function Dashboard() {
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
   const affiliatesCounter = useCountUp(stats.affiliates);
-  const paymentMethodLabels = [
-    { key: "NEQUI", label: "Nequi" },
-    { key: "BINANCE_ID", label: "Binance ID" },
-    { key: "CRYPTO", label: "Cripto" },
-    { key: "MERCADOPAGO", label: "Mercado pago" },
-    { key: "PAYPAL", label: "Paypal" },
-  ];
+  const paymentMethodLabels = paymentMethods
+    .slice()
+    .sort((a, b) => {
+      const aOrder = a.sort_order ?? 0;
+      const bOrder = b.sort_order ?? 0;
+      if (aOrder !== bOrder) {
+        return aOrder - bOrder;
+      }
+      return String(a.label || a.key).localeCompare(String(b.label || b.key));
+    })
+    .map((method) => ({
+      key: method.key,
+      label: method.label || method.key,
+      enabled: method.enabled,
+    }));
 
   const loadSummary = useCallback(async () => {
     try {
@@ -463,8 +471,7 @@ export default function Dashboard() {
         {paymentMethodsError && <p className="error">{paymentMethodsError}</p>}
         <div className="payment-methods-row">
           {paymentMethodLabels.map((method) => {
-            const current = paymentMethods.find((item) => item.key === method.key);
-            const enabled = current ? current.enabled : true;
+            const enabled = method.enabled ?? true;
             return (
               <button
                 key={method.key}
