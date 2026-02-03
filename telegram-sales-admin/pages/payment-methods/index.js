@@ -66,23 +66,25 @@ const emptyForm = {
 };
 
 const layoutApiKey = "payment-methods";
-
 const legacyLayoutCols = 12;
 const layoutCols = 120;
 
 const defaultFormLayout = [
-  { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-  { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-  { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
-  { i: "destination", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
-  { i: "description", x: 0, y: 8, w: 8, h: 2, minW: 3, minH: 2 },
-  { i: "actions", x: 0, y: 10, w: 12, h: 2, minW: 4, minH: 2 },
+  { i: "key", x: 0, y: 0, w: 20, h: 6, minW: 6, minH: 4 },
+  { i: "label", x: 20, y: 0, w: 20, h: 6, minW: 6, minH: 4 },
+  { i: "crypto", x: 40, y: 0, w: 30, h: 6, minW: 8, minH: 4 },
+  { i: "markup", x: 70, y: 0, w: 15, h: 6, minW: 6, minH: 4 },
+  { i: "order", x: 85, y: 0, w: 10, h: 6, minW: 4, minH: 4 },
+  { i: "destination", x: 0, y: 6, w: 60, h: 12, minW: 10, minH: 6 },
+  { i: "description", x: 0, y: 18, w: 60, h: 6, minW: 10, minH: 4 },
+  { i: "actionSave", x: 0, y: 24, w: 12, h: 6, minW: 6, minH: 4 },
+  { i: "actionClear", x: 12, y: 24, w: 12, h: 6, minW: 6, minH: 4 },
 ];
 
 const defaultPageLayout = [
-  { i: "header", x: 0, y: 0, w: 12, h: 2, minW: 6, minH: 2 },
-  { i: "form", x: 0, y: 2, w: 12, h: 12, minW: 6, minH: 6 },
-  { i: "list", x: 0, y: 14, w: 12, h: 12, minW: 6, minH: 6 },
+  { i: "header", x: 0, y: 0, w: 120, h: 8, minW: 20, minH: 6 },
+  { i: "form", x: 0, y: 8, w: 120, h: 40, minW: 20, minH: 20 },
+  { i: "list", x: 0, y: 48, w: 120, h: 40, minW: 20, minH: 20 },
 ];
 
 const normalizeLayout = (defaults, saved) => {
@@ -351,7 +353,10 @@ export default function PaymentMethodsPage() {
         compactType={null}
         preventCollision={false}
       >
-        <section key="header" className="card payment-methods-card pm-layout-card">
+        <section
+          key="header"
+          className="card payment-methods-card pm-layout-card payment-methods-header-card"
+        >
           {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
           <div className="payment-methods-header">
             <h1 className="payment-methods-title-main">
@@ -411,66 +416,72 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="midline" className="pm-grid-item">
+            <div key="crypto" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-midline">
-                {isCryptoMethod && (
-                  <div className="payment-methods-crypto-inline">
-                    <span className="payment-methods-crypto-label">Tipo de cripto</span>
-                    <div className="payment-methods-crypto-buttons">
-                      {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                        <button
-                          key={option.key}
-                          type="button"
-                          className={`payment-methods-crypto-button${
-                            cryptoDestinationKey === option.key ? " is-active" : ""
-                          }`}
-                          onClick={() => setCryptoDestinationKey(option.key)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
+              <div className="payment-methods-crypto-inline">
+                <span className="payment-methods-crypto-label">Tipo de cripto</span>
+                {isCryptoMethod ? (
+                  <div className="payment-methods-crypto-buttons">
+                    {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={`payment-methods-crypto-button${
+                          cryptoDestinationKey === option.key ? " is-active" : ""
+                        }`}
+                        onClick={() => setCryptoDestinationKey(option.key)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
                   </div>
+                ) : (
+                  <span className="muted">Solo disponible para CRYPTO.</span>
                 )}
-                <label className="payment-methods-markup">
-                  Markup (%)
-                  <div className="payment-methods-inline-field">
-                    <input
-                      type="text"
-                      inputMode="numeric"
-                      maxLength={2}
-                      value={form.markup}
-                      onChange={(event) =>
-                        setForm((prev) => ({
-                          ...prev,
-                          markup: event.target.value.replace(/\D/g, "").slice(0, 2),
-                        }))
-                      }
-                      placeholder="0"
-                      className="payment-methods-percent-input"
-                    />
-                    <span className="payment-methods-percent-suffix">%</span>
-                  </div>
-                </label>
-                <label className="payment-methods-order">
-                  Orden
+              </div>
+            </div>
+            <div key="markup" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <label className="payment-methods-markup">
+                Markup (%)
+                <div className="payment-methods-inline-field">
                   <input
                     type="text"
                     inputMode="numeric"
-                    maxLength={1}
-                    value={form.sort_order}
+                    maxLength={2}
+                    value={form.markup}
                     onChange={(event) =>
                       setForm((prev) => ({
                         ...prev,
-                        sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
+                        markup: event.target.value.replace(/\D/g, "").slice(0, 2),
                       }))
                     }
-                    placeholder="1"
-                    className="payment-methods-order-input"
+                    placeholder="0"
+                    className="payment-methods-percent-input"
                   />
-                </label>
-              </div>
+                  <span className="payment-methods-percent-suffix">%</span>
+                </div>
+              </label>
+            </div>
+            <div key="order" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <label className="payment-methods-order">
+                Orden
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={1}
+                  value={form.sort_order}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
+                    }))
+                  }
+                  placeholder="1"
+                  className="payment-methods-order-input"
+                />
+              </label>
             </div>
             <div key="destination" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
@@ -510,12 +521,17 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="actions" className="pm-grid-item">
+            <div key="actionSave" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-actions">
+              <div className="payment-methods-action">
                 <button type="button" onClick={handleSave}>
                   {editingKey ? "Actualizar" : "Agregar"}
                 </button>
+              </div>
+            </div>
+            <div key="actionClear" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <div className="payment-methods-action">
                 <button type="button" className="plain-button" onClick={handleClear}>
                   Limpiar
                 </button>
