@@ -710,6 +710,10 @@ body.login-success {
 
 .pm-layout-card {
   position: relative;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  overflow: visible;
 }
 
 .pm-layout-handle {
@@ -738,11 +742,12 @@ body.login-success {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 36, 0, 0.2);
-  background: rgba(20, 20, 20, 0.65);
-  padding: 10px;
-  overflow: hidden;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  overflow: visible;
+  min-width: 0;
 }
 
 .pm-grid-handle {
@@ -760,19 +765,14 @@ body.login-success {
   border-radius: 10px;
   color: #f2f2f2;
   padding: 8px 10px;
+  width: 100%;
+  min-width: 0;
+  box-sizing: border-box;
 }
 
 .payment-methods-order-input {
   width: 48px;
   text-align: center;
-}
-
-.payment-methods-midline {
-  display: flex;
-  gap: 0.3cm;
-  align-items: flex-end;
-  flex-wrap: nowrap;
-  margin: 0.3cm 0;
 }
 
 .payment-methods-order {
@@ -805,6 +805,13 @@ body.login-success {
 
 .payment-methods-destination {
   grid-column: 1 / 3;
+  height: 100%;
+}
+
+.payment-methods-destination textarea {
+  flex: 1 1 auto;
+  min-height: 0;
+  height: 100%;
 }
 
 .payment-methods-image {
@@ -862,6 +869,11 @@ body.login-success {
   display: flex;
   align-items: center;
   gap: 10px;
+}
+
+.payment-methods-action {
+  display: flex;
+  align-items: center;
 }
 
 .payment-methods-list-card {
