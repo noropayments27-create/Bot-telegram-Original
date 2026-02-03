@@ -11,6 +11,13 @@ const CRYPTO_DESTINATION_OPTIONS = [
   { key: "ltc", label: "LTC" },
 ];
 
+const CRYPTO_IMAGE_LABELS = {
+  btc: "Bitcoin",
+  usdt_tron: "Usdt Tron",
+  usdt_bsc: "Usdt Bsc",
+  ltc: "Ltc",
+};
+
 const emptyCryptoDestination = {
   btc: "",
   usdt_tron: "",
@@ -104,6 +111,9 @@ const emptyForm = {
 export default function PaymentMethodsPage() {
   const router = useRouter();
   const [methods, setMethods] = useState([]);
+  const [paymentMethodsImage, setPaymentMethodsImage] = useState("");
+  const [paymentMethodsImageStatus, setPaymentMethodsImageStatus] = useState("");
+  const [paymentMethodsImageError, setPaymentMethodsImageError] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
@@ -126,8 +136,19 @@ export default function PaymentMethodsPage() {
     }
   };
 
+  const loadPaymentMethodsImage = async () => {
+    try {
+      const data = await apiFetch("/admin/bot-assets");
+      setPaymentMethodsImage(data?.assets?.payment_methods_image_url || "");
+      setPaymentMethodsImageError("");
+    } catch (err) {
+      setPaymentMethodsImageError("No se pudo cargar la imagen del listado.");
+    }
+  };
+
   useEffect(() => {
     loadMethods();
+    loadPaymentMethodsImage();
   }, []);
 
   const handleEdit = (method) => {
@@ -200,6 +221,23 @@ export default function PaymentMethodsPage() {
     }
   };
 
+  const handleSavePaymentMethodsImage = async () => {
+    setPaymentMethodsImageStatus("processing");
+    setPaymentMethodsImageError("");
+    try {
+      const trimmed = paymentMethodsImage.trim();
+      const data = await apiFetch("/admin/bot-assets/payment-methods-image", {
+        method: "POST",
+        body: JSON.stringify({ image_url: trimmed }),
+      });
+      setPaymentMethodsImage(data?.image_url || "");
+      setPaymentMethodsImageStatus("done");
+    } catch (err) {
+      setPaymentMethodsImageStatus("error");
+      setPaymentMethodsImageError("No se pudo guardar la imagen del listado.");
+    }
+  };
+
   const isCryptoMethod = form.method_key.trim().toUpperCase() === "CRYPTO";
   const cryptoDestination = isCryptoMethod
     ? parseCryptoDestination(form.destination)
@@ -217,6 +255,7 @@ export default function PaymentMethodsPage() {
       ? cryptoAssetImages[cryptoDestinationKey] || ""
       : cryptoAssetImages.legacy || ""
     : "";
+  const cryptoImageLabel = CRYPTO_IMAGE_LABELS[cryptoDestinationKey] || "Cripto";
 
   const handleDelete = async (key) => {
     const confirmed = window.confirm("¿Eliminar este método de pago?");
@@ -258,6 +297,30 @@ export default function PaymentMethodsPage() {
         </div>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
+        <div className="payment-methods-banner">
+          <label>
+            Imagen (URL) - Elige tu método
+            <input
+              type="text"
+              value={paymentMethodsImage}
+              onChange={(event) => setPaymentMethodsImage(event.target.value)}
+              placeholder="https://..."
+            />
+          </label>
+          <button
+            type="button"
+            onClick={handleSavePaymentMethodsImage}
+            disabled={paymentMethodsImageStatus === "processing"}
+          >
+            Guardar
+          </button>
+          {paymentMethodsImageStatus === "done" && (
+            <span className="muted">Imagen actualizada.</span>
+          )}
+          {paymentMethodsImageError && (
+            <span className="error">{paymentMethodsImageError}</span>
+          )}
+        </div>
         <div className="payment-methods-form">
           <label>
             Key
@@ -280,17 +343,6 @@ export default function PaymentMethodsPage() {
                 setForm((prev) => ({ ...prev, label: event.target.value }))
               }
               placeholder="Nequi"
-            />
-          </label>
-          <label className="payment-methods-description">
-            Descripción
-            <input
-              type="text"
-              value={form.description}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, description: event.target.value }))
-              }
-              placeholder="Descripción del método"
             />
           </label>
           <label className="payment-methods-destination">
@@ -383,9 +435,20 @@ export default function PaymentMethodsPage() {
               </div>
             </div>
           )}
+          <label className="payment-methods-description">
+            Descripción
+            <input
+              type="text"
+              value={form.description}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, description: event.target.value }))
+              }
+              placeholder="Descripción del método"
+            />
+          </label>
           {isCryptoMethod && (
             <label className="payment-methods-crypto-image">
-              Imagen cripto (URL)
+              Imagen {cryptoImageLabel} (URL)
               <input
                 type="text"
                 value={cryptoAssetImageValue}

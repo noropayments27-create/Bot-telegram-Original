@@ -3,6 +3,7 @@ const { consumeStockForOrder, releaseStockForOrder } = require("../../services/s
 const { deliverOrderToTelegram } = require("../../services/delivery");
 const { getAffiliateLevel } = require("../../services/affiliateLevels");
 const { listPaymentMethods } = require("../../services/paymentMethods");
+const { getBotAssets } = require("../../services/botAssets");
 const { sendPhoto } = require("../../services/telegram");
 const {
   recordAdminOrderNotification,
@@ -401,7 +402,11 @@ async function getPaymentMethods(req, res, next) {
   try {
     const pool = getPool();
     const methods = await listPaymentMethods(pool);
-    return res.json({ methods });
+    const assets = await getBotAssets(pool);
+    return res.json({
+      methods,
+      header_image_url: assets.payment_methods_image_url || null,
+    });
   } catch (error) {
     return next(error);
   }

@@ -248,14 +248,62 @@ def _get_crypto_asset_image(
 
 
 async def _get_payment_methods() -> List[Dict[str, Any]]:
+    payload = await _get_payment_methods_payload()
+    methods = payload.get("methods") if isinstance(payload, dict) else []
+    if isinstance(methods, list):
+        return methods
+    return list(_DEFAULT_PAYMENT_METHODS)
+
+
+async def _get_payment_methods_payload() -> Dict[str, Any]:
     try:
         response = await api_client.get_payment_methods()
-        methods = response.get("methods") if isinstance(response, dict) else []
-        if isinstance(methods, list):
-            return methods
+        if isinstance(response, dict):
+            return response
     except Exception:
-        return list(_DEFAULT_PAYMENT_METHODS)
-    return list(_DEFAULT_PAYMENT_METHODS)
+        return {"methods": list(_DEFAULT_PAYMENT_METHODS)}
+    return {"methods": list(_DEFAULT_PAYMENT_METHODS)}
+
+
+async def _get_payment_methods_header_image(
+    payload: Dict[str, Any] | None = None,
+) -> str | None:
+    source = payload or await _get_payment_methods_payload()
+    value = str(source.get("header_image_url") or "").strip()
+    return value or None
+
+
+async def _render_payment_methods_prompt(
+    target: Message,
+    user_id: int,
+    order_id: str,
+    page: int,
+    index: int,
+    locale: str | None = None,
+) -> None:
+    payload = await _get_payment_methods_payload()
+    methods = payload.get("methods") if isinstance(payload, dict) else []
+    if not isinstance(methods, list):
+        methods = list(_DEFAULT_PAYMENT_METHODS)
+    header_image_url = await _get_payment_methods_header_image(payload)
+    keyboard = await build_payment_methods_keyboard(
+        order_id, page, index, locale, methods=methods
+    )
+    if header_image_url:
+        await render_main_view_with_photo(
+            target,
+            user_id,
+            t(locale, "payment_choose_method"),
+            header_image_url,
+            reply_markup=keyboard,
+        )
+        return
+    await render_main_view(
+        target,
+        user_id,
+        t(locale, "payment_choose_method"),
+        reply_markup=keyboard,
+    )
 
 
 async def _find_payment_method(method_key: str) -> Dict[str, Any] | None:
@@ -933,9 +981,13 @@ async def _get_category_items(
     products = await _get_products_by_category(category_value, telegram_id)
     return _paginate(products, 1)
 async def build_payment_methods_keyboard(
-    order_id: str, page: int, index: int, locale: str | None = None
+    order_id: str,
+    page: int,
+    index: int,
+    locale: str | None = None,
+    methods: List[Dict[str, Any]] | None = None,
 ) -> InlineKeyboardMarkup:
-    methods = await _get_payment_methods()
+    methods = methods if isinstance(methods, list) else await _get_payment_methods()
     enabled_methods = [
         item for item in methods if bool(item.get("enabled", True))
     ]
@@ -1330,11 +1382,13 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         current_order_total=order.get("total"),
         current_order_summary=None,
     )
-    await render_main_view(
+    await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
-        t(locale, "payment_choose_method"),
-        reply_markup=await build_payment_methods_keyboard(order["id"], page, index, locale),
+        order["id"],
+        page,
+        index,
+        locale,
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("category:buy:"))
@@ -1405,11 +1459,13 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         current_order_total=order.get("total"),
         current_order_summary=None,
     )
-    await render_main_view(
+    await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
-        t(locale, "payment_choose_method"),
-        reply_markup=await build_payment_methods_keyboard(order["id"], 1, 1, locale),
+        order["id"],
+        1,
+        1,
+        locale,
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("shop:cart:"))
@@ -1771,11 +1827,13 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         payment_method_order_id=None,
         payment_ready=False,
     )
-    await render_main_view(
+    await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
-        t(locale, "payment_choose_method"),
-        reply_markup=await build_payment_methods_keyboard(order_id, 1, 1, locale),
+        order_id,
+        1,
+        1,
+        locale,
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
@@ -1807,11 +1865,13 @@ async def handle_order_methods(callback: CallbackQuery, state: FSMContext) -> No
     ):
         await callback.answer()
         return
-    await render_main_view(
+    await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
-        t(locale, "payment_choose_method"),
-        reply_markup=await build_payment_methods_keyboard(order_id, page, index, locale),
+        order_id,
+        page,
+        index,
+        locale,
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
@@ -2030,11 +2090,13 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
     payment_method = data.get("payment_method")
     payment_method_order_id = data.get("payment_method_order_id")
     if not payment_method or payment_method_order_id != order_id:
-        await render_main_view(
+        await _render_payment_methods_prompt(
             callback.message,
             callback.from_user.id,
-            t(locale, "payment_choose_method"),
-            reply_markup=await build_payment_methods_keyboard(order_id, 1, 1, locale),
+            order_id,
+            1,
+            1,
+            locale,
         )
         await callback.answer(t(locale, "select_payment_method_first"), show_alert=True)
         return

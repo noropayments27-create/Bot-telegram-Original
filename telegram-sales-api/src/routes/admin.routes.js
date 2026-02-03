@@ -34,6 +34,10 @@ const {
   getMaintenanceStatus,
   setMaintenanceStatus,
 } = require("../services/maintenance");
+const {
+  getBotAssets,
+  setPaymentMethodsImage,
+} = require("../services/botAssets");
 const { ensureProductCategorySchema } = require("../services/productSchema");
 const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
@@ -1065,6 +1069,27 @@ router.post("/maintenance", async (req, res, next) => {
     }
     const active = await setMaintenanceStatus(pool, nextActive);
     return res.json({ active });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/bot-assets", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const assets = await getBotAssets(pool);
+    return res.json({ assets });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/bot-assets/payment-methods-image", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const imageUrl = req.body?.image_url || "";
+    const value = await setPaymentMethodsImage(pool, imageUrl);
+    return res.json({ image_url: value });
   } catch (error) {
     return next(error);
   }

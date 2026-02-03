@@ -13,6 +13,14 @@
   padding: 24px 18px;
   z-index: 120;
   transition: transform 0.25s ease;
+  overflow-y: auto;
+  scrollbar-width: none;
+  -ms-overflow-style: none;
+}
+
+.sidebar::-webkit-scrollbar {
+  width: 0;
+  height: 0;
 }
 
 .sidebarHeader {
@@ -72,14 +80,14 @@
 
 .nav {
   display: grid;
-  gap: 8px;
+  gap: 6px;
 }
 
 .navItem {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 10px 14px;
+  padding: 8px 12px;
   border-radius: 999px;
   color: var(--scarlet-red);
   text-decoration: none;
@@ -114,10 +122,10 @@
 
 .usersCounter {
   margin-top: 16px;
-  padding: 12px 14px;
+  padding: 0;
   border-radius: 16px;
-  border: 1px solid rgba(255, 36, 0, 0.35);
-  background: rgba(26, 26, 26, 0.6);
+  border: none;
+  background: transparent;
   display: grid;
   gap: 6px;
   text-align: center;
