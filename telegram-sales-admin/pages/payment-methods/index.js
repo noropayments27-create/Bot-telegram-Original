@@ -4,6 +4,52 @@ import { useRouter } from "next/router";
 import { apiFetch, getAuthToken } from "../../lib/api";
 import { IconPayments } from "../../components/PanelIcons";
 
+const CRYPTO_DESTINATION_OPTIONS = [
+  { key: "btc", label: "BTC" },
+  { key: "usdt_tron", label: "USDT Tron" },
+  { key: "usdt_bsc", label: "USDT BSC" },
+  { key: "ltc", label: "LTC" },
+];
+
+const emptyCryptoDestination = {
+  btc: "",
+  usdt_tron: "",
+  usdt_bsc: "",
+  ltc: "",
+};
+
+function parseCryptoDestination(value) {
+  if (!value) {
+    return { ...emptyCryptoDestination, legacy: "", isJson: false };
+  }
+  try {
+    const parsed = JSON.parse(value);
+    if (parsed && typeof parsed === "object") {
+      return {
+        ...emptyCryptoDestination,
+        ...parsed,
+        legacy: "",
+        isJson: true,
+      };
+    }
+  } catch (error) {
+    // Fall back to legacy text below.
+  }
+  return { ...emptyCryptoDestination, legacy: String(value), isJson: false };
+}
+
+function buildCryptoDestination(currentValue, selectedKey, nextValue) {
+  const parsed = parseCryptoDestination(currentValue);
+  const next = {
+    btc: parsed.btc || "",
+    usdt_tron: parsed.usdt_tron || "",
+    usdt_bsc: parsed.usdt_bsc || "",
+    ltc: parsed.ltc || "",
+  };
+  next[selectedKey] = nextValue;
+  return JSON.stringify(next);
+}
+
 const emptyForm = {
   method_key: "",
   label: "",
@@ -20,6 +66,7 @@ export default function PaymentMethodsPage() {
   const [methods, setMethods] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [editingKey, setEditingKey] = useState("");
+  const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -48,6 +95,14 @@ export default function PaymentMethodsPage() {
     const markupValue = String(selected.markup ?? "")
       .replace(/\D/g, "")
       .slice(0, 2);
+    const isCrypto = String(selected.key || "").toUpperCase() === "CRYPTO";
+    if (isCrypto) {
+      const parsed = parseCryptoDestination(selected.destination || "");
+      const firstMatch = CRYPTO_DESTINATION_OPTIONS.find(
+        (option) => parsed[option.key]
+      );
+      setCryptoDestinationKey(firstMatch ? firstMatch.key : "usdt_bsc");
+    }
     setEditingKey(selected.key);
     setForm({
       method_key: selected.key ?? "",
@@ -101,6 +156,16 @@ export default function PaymentMethodsPage() {
       setError("No se pudo guardar el método de pago.");
     }
   };
+
+  const isCryptoMethod = form.method_key.trim().toUpperCase() === "CRYPTO";
+  const cryptoDestination = isCryptoMethod
+    ? parseCryptoDestination(form.destination)
+    : null;
+  const destinationValue = isCryptoMethod
+    ? cryptoDestination.isJson
+      ? cryptoDestination[cryptoDestinationKey] || ""
+      : cryptoDestination.legacy || ""
+    : form.destination;
 
   const handleDelete = async (key) => {
     const confirmed = window.confirm("¿Eliminar este método de pago?");
@@ -180,9 +245,19 @@ export default function PaymentMethodsPage() {
           <label className="payment-methods-destination">
             Direcciones de destino
             <textarea
-              value={form.destination}
+              value={destinationValue}
               onChange={(event) =>
-                setForm((prev) => ({ ...prev, destination: event.target.value }))
+                setForm((prev) => {
+                  if (!isCryptoMethod) {
+                    return { ...prev, destination: event.target.value };
+                  }
+                  const nextDestination = buildCryptoDestination(
+                    prev.destination,
+                    cryptoDestinationKey,
+                    event.target.value
+                  );
+                  return { ...prev, destination: nextDestination };
+                })
               }
               rows={3}
               placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
@@ -199,6 +274,25 @@ export default function PaymentMethodsPage() {
               placeholder="https://..."
             />
           </label>
+          {isCryptoMethod && (
+            <div className="payment-methods-crypto-selector">
+              <span className="payment-methods-crypto-label">Tipo de cripto</span>
+              <div className="payment-methods-crypto-buttons">
+                {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`payment-methods-crypto-button${
+                      cryptoDestinationKey === option.key ? " is-active" : ""
+                    }`}
+                    onClick={() => setCryptoDestinationKey(option.key)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="payment-methods-inline-group">
             <label className="payment-methods-markup">
               Markup (%)

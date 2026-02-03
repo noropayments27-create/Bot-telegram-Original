@@ -1,5 +1,6 @@
 import asyncio
 import html
+import json
 import re
 import time
 from datetime import datetime
@@ -358,15 +359,38 @@ def _build_destination_lines(
     method: Dict[str, Any] | None,
     locale: str | None = None,
 ) -> List[str]:
-    if method and method.get("destination"):
-        lines = []
-        for raw_line in str(method.get("destination")).splitlines():
-            line = raw_line.strip()
-            if line:
-                lines.append(html.escape(line))
-        if lines:
-            return lines
     key = str(method_key or "").lower()
+    if method and method.get("destination"):
+        raw = str(method.get("destination")).strip()
+        if raw:
+            if key == "crypto":
+                try:
+                    data = json.loads(raw)
+                except (TypeError, ValueError):
+                    data = None
+                if isinstance(data, dict):
+                    lines = []
+                    btc = str(data.get("btc") or "").strip()
+                    usdt_tron = str(data.get("usdt_tron") or "").strip()
+                    usdt_bsc = str(data.get("usdt_bsc") or "").strip()
+                    ltc = str(data.get("ltc") or "").strip()
+                    if btc:
+                        lines.append(f"₿ BTC: <code>{html.escape(btc)}</code>")
+                    if usdt_tron:
+                        lines.append(f"🪙 USDT Tron: <code>{html.escape(usdt_tron)}</code>")
+                    if usdt_bsc:
+                        lines.append(f"🪙 USDT BSC: <code>{html.escape(usdt_bsc)}</code>")
+                    if ltc:
+                        lines.append(f"🪙 LTC: <code>{html.escape(ltc)}</code>")
+                    if lines:
+                        return lines
+            lines = []
+            for raw_line in raw.splitlines():
+                line = raw_line.strip()
+                if line:
+                    lines.append(html.escape(line))
+            if lines:
+                return lines
     lines: List[str] = []
     if key == "nequi":
         if NEQUI_NUMBER:
@@ -421,8 +445,8 @@ async def _build_payment_instructions(
     locale: str | None = None,
     method: Dict[str, Any] | None = None,
 ) -> str:
-    total = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
-    base_total_text = _format_payment_amount(total)
+    base_total_value = float(base_total) if base_total is not None else _DEFAULT_PRODUCT_PRICE_USD
+    base_total_text = _format_payment_amount(base_total_value)
     markup_percent = None
     custom_markup = None
     if method and method.get("markup") is not None:
@@ -432,10 +456,11 @@ async def _build_payment_instructions(
                 markup_percent = float(raw_markup)
             except ValueError:
                 custom_markup = raw_markup
+    send_total_value = base_total_value
     if markup_percent:
-        total = total * (1 + markup_percent / 100)
-    total_text = _format_payment_amount(total)
-    amount_label_text = total_text if markup_percent else base_total_text
+        send_total_value = base_total_value * (1 + markup_percent / 100)
+    total_text = _format_payment_amount(send_total_value)
+    amount_label_text = base_total_text
     summary_text = _build_products_only_summary(summary)
     instructions: List[str] = []
     description_line = ""
@@ -453,7 +478,7 @@ async def _build_payment_instructions(
     if method_key_normalized == "nequi":
         try:
             rate = await usd_to_cop()
-            cop_amount = total * rate
+            cop_amount = send_total_value * rate
             conversion_line = t(locale, "payment_send_label").format(
                 amount=f"{cop_amount:,.0f} COP"
             )
@@ -463,7 +488,7 @@ async def _build_payment_instructions(
     elif method_key_normalized in {"mp", "mercadopago"}:
         try:
             rate = await usd_to_mxn()
-            mxn_amount = total * rate
+            mxn_amount = send_total_value * rate
             conversion_line = t(locale, "payment_send_label").format(
                 amount=f"{mxn_amount:,.2f} MXN"
             )
@@ -471,7 +496,7 @@ async def _build_payment_instructions(
             print("[FX] MP MXN error:", repr(exc))
             conversion_line = t(locale, "payment_send_unavailable_mxn")
     elif method_key_normalized == "paypal":
-        paypal_total = total * 1.25
+        paypal_total = send_total_value * 1.25
         conversion_line = f"➡️ Total a Enviar: {_format_payment_amount(paypal_total)}"
         extra_lines.extend(
             [
@@ -520,6 +545,10 @@ async def _build_payment_instructions(
     )
     if conversion_line:
         instructions.append(conversion_line)
+
+    if description_line:
+        instructions.append("")
+        instructions.append(description_line)
 
     if extra_lines:
         instructions.append("")

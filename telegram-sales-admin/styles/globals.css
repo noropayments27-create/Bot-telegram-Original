@@ -689,11 +689,12 @@ body.login-success {
 }
 
 .payment-methods-inline-group {
-  grid-column: span 1;
+  grid-column: 4 / 5;
+  grid-row: span 2;
   display: flex;
   gap: 16px;
   align-items: flex-end;
-  flex-wrap: wrap;
+  flex-wrap: nowrap;
 }
 
 .payment-methods-order {
@@ -729,11 +730,50 @@ body.login-success {
 }
 
 .payment-methods-image {
-  grid-column: span 1;
+  grid-column: 3 / 4;
 }
 
 .payment-methods-markup {
   min-width: 140px;
+}
+
+.payment-methods-crypto-selector {
+  grid-column: 3 / 4;
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+}
+
+.payment-methods-crypto-label {
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.payment-methods-crypto-buttons {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+}
+
+.payment-methods-crypto-button {
+  padding: 6px 12px;
+  font-size: 12px;
+  border-radius: 999px;
+}
+
+.payment-methods-crypto-button.is-active {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.7);
+  color: #43d17a;
+  box-shadow:
+    inset 4px 4px 10px rgba(0, 0, 0, 0.45),
+    inset -3px -3px 8px rgba(255, 255, 255, 0.06);
+  transform: translateY(1px);
+}
+
+.payment-methods-crypto-button.is-active:hover {
+  transform: translateY(1px);
+  color: #43d17a;
 }
 
 .payment-methods-actions {
