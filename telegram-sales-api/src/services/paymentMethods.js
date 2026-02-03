@@ -11,6 +11,7 @@ async function ensurePaymentMethodsSchema(pool) {
     `CREATE TABLE IF NOT EXISTS payment_methods (
        method_key text PRIMARY KEY,
        label text,
+       description text,
        image_url text,
        markup text,
        sort_order int,
@@ -21,6 +22,7 @@ async function ensurePaymentMethodsSchema(pool) {
   await pool.query(
     `ALTER TABLE payment_methods
      ADD COLUMN IF NOT EXISTS label text,
+     ADD COLUMN IF NOT EXISTS description text,
      ADD COLUMN IF NOT EXISTS image_url text,
      ADD COLUMN IF NOT EXISTS markup text,
      ADD COLUMN IF NOT EXISTS sort_order int`
@@ -49,13 +51,14 @@ function normalizeMethodKey(input) {
 async function listPaymentMethods(pool) {
   await ensurePaymentMethodsSchema(pool);
   const res = await pool.query(
-    `SELECT method_key, label, image_url, markup, sort_order, enabled
+    `SELECT method_key, label, description, image_url, markup, sort_order, enabled
      FROM payment_methods
      ORDER BY sort_order NULLS LAST, method_key ASC`
   );
   return res.rows.map((row) => ({
     key: row.method_key,
     label: row.label || row.method_key,
+    description: row.description || null,
     enabled: Boolean(row.enabled),
     image_url: row.image_url || null,
     markup: row.markup || null,
@@ -111,26 +114,28 @@ async function upsertPaymentMethod(pool, payload) {
     return null;
   }
   const label = payload?.label ? String(payload.label).trim() : null;
+  const description = payload?.description ? String(payload.description).trim() : null;
   const imageUrl = payload?.image_url ? String(payload.image_url).trim() : null;
   const markup = payload?.markup ? String(payload.markup) : null;
   const sortOrderRaw = payload?.sort_order;
   const sortOrder = Number.isFinite(Number(sortOrderRaw)) ? Number(sortOrderRaw) : null;
   const enabled =
     payload?.enabled === undefined || payload?.enabled === null
-      ? true
+      ? false
       : Boolean(payload.enabled);
   await pool.query(
-    `INSERT INTO payment_methods (method_key, label, image_url, markup, sort_order, enabled)
-     VALUES ($1, $2, $3, $4, $5, $6)
+    `INSERT INTO payment_methods (method_key, label, description, image_url, markup, sort_order, enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, $7)
      ON CONFLICT (method_key)
      DO UPDATE SET
        label = EXCLUDED.label,
+       description = EXCLUDED.description,
        image_url = EXCLUDED.image_url,
        markup = EXCLUDED.markup,
        sort_order = EXCLUDED.sort_order,
        enabled = EXCLUDED.enabled,
        updated_at = now()`,
-    [key, label, imageUrl, markup, sortOrder, enabled]
+    [key, label, description, imageUrl, markup, sortOrder, enabled]
   );
   return listPaymentMethods(pool);
 }

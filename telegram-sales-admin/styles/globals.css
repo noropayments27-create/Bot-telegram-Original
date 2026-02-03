@@ -610,6 +610,21 @@ body.login-success {
   color: var(--scarlet-red);
 }
 
+.payment-method-toggle.is-enabled {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.7);
+  color: #43d17a;
+  box-shadow:
+    inset 4px 4px 10px rgba(0, 0, 0, 0.45),
+    inset -3px -3px 8px rgba(255, 255, 255, 0.06);
+  transform: translateY(1px);
+}
+
+.payment-method-toggle.is-enabled:hover {
+  transform: translateY(1px);
+  color: #43d17a;
+}
+
 .payment-method-toggle.is-disabled {
   background: rgba(120, 20, 20, 0.7);
   border-color: rgba(255, 80, 80, 0.6);
@@ -645,11 +660,6 @@ body.login-success {
   gap: 8px;
 }
 
-.payment-methods-title-icon {
-  font-size: 20px;
-  line-height: 1;
-}
-
 .payment-methods-form {
   margin-top: 12px;
   display: grid;
@@ -678,6 +688,17 @@ body.login-success {
   text-align: center;
 }
 
+.payment-methods-inline-group {
+  grid-column: span 3;
+  display: flex;
+  gap: 16px;
+  align-items: flex-end;
+}
+
+.payment-methods-order {
+  min-width: 110px;
+}
+
 .payment-methods-inline-field {
   display: flex;
   align-items: center;
@@ -698,19 +719,16 @@ body.login-success {
   grid-column: span 2;
 }
 
+.payment-methods-description {
+  grid-column: span 2;
+}
+
 .payment-methods-image {
   grid-column: span 1;
 }
 
 .payment-methods-markup {
-  grid-column: span 1;
-}
-
-.payment-methods-checkbox {
-  flex-direction: row;
-  align-items: center;
-  gap: 8px;
-  margin-top: 22px;
+  min-width: 140px;
 }
 
 .payment-methods-actions {
@@ -728,6 +746,32 @@ body.login-success {
   display: flex;
   gap: 8px;
   align-items: center;
+}
+
+.payment-methods-status {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  min-width: 110px;
+  padding: 6px 12px;
+  border-radius: 999px;
+  border: 1px solid rgba(255, 36, 0, 0.4);
+  background: rgba(26, 26, 26, 0.85);
+  color: #f2f2f2;
+  font-weight: 700;
+  font-size: 12px;
+  box-shadow:
+    6px 6px 14px var(--shadow-dark),
+    -4px -4px 10px var(--shadow-light);
+}
+
+.payment-methods-status.is-active {
+  background: rgba(34, 197, 94, 0.2);
+  border-color: rgba(34, 197, 94, 0.7);
+  color: #43d17a;
+  box-shadow:
+    inset 4px 4px 10px rgba(0, 0, 0, 0.45),
+    inset -3px -3px 8px rgba(255, 255, 255, 0.06);
 }
 
 .orders-card {

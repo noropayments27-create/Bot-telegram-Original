@@ -54,9 +54,7 @@ class MaintenanceGuardMiddleware(BaseMiddleware):
         message_text = t(locale, "maintenance_message")
 
         if isinstance(event, CallbackQuery):
-            if event.message:
-                await event.message.answer(message_text)
-            await event.answer()
+            await event.answer(message_text, show_alert=True)
             return None
         if isinstance(event, Message):
             await event.answer(message_text)

@@ -469,9 +469,11 @@ export default function Dashboard() {
               <button
                 key={method.key}
                 type="button"
-                className={`payment-method-toggle${enabled ? "" : " is-disabled"}`}
+                className={`payment-method-toggle${
+                  enabled ? " is-enabled" : " is-disabled"
+                }`}
                 onClick={() => handleTogglePaymentMethod(method.key)}
-                aria-pressed={!enabled}
+                aria-pressed={enabled}
                 title={enabled ? "Deshabilitar metodo" : "Habilitar metodo"}
               >
                 {method.label}

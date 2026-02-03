@@ -2,14 +2,16 @@ import { useEffect, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
+import { IconPayments } from "../../components/PanelIcons";
 
 const emptyForm = {
   method_key: "",
   label: "",
+  description: "",
   image_url: "",
   markup: "",
   sort_order: "",
-  enabled: true,
+  enabled: false,
 };
 
 export default function PaymentMethodsPage() {
@@ -49,6 +51,7 @@ export default function PaymentMethodsPage() {
     setForm({
       method_key: selected.key ?? "",
       label: selected.label ?? "",
+      description: selected.description ?? "",
       image_url: selected.image_url ?? "",
       markup: markupValue,
       sort_order: selected.sort_order ?? "",
@@ -76,6 +79,7 @@ export default function PaymentMethodsPage() {
       const payload = {
         method_key: form.method_key.trim(),
         label: form.label.trim(),
+        description: form.description.trim(),
         image_url: form.image_url.trim(),
         markup: form.markup,
         sort_order: form.sort_order === "" ? null : Number(form.sort_order),
@@ -129,7 +133,7 @@ export default function PaymentMethodsPage() {
       <section className="card payment-methods-card">
         <div className="payment-methods-header">
           <h1 className="payment-methods-title-main">
-            <span className="payment-methods-title-icon" aria-hidden="true">💳</span>
+            <IconPayments className="panel-icon" />
             Métodos de pago
           </h1>
         </div>
@@ -159,32 +163,16 @@ export default function PaymentMethodsPage() {
               placeholder="Nequi"
             />
           </label>
-          <label>
-            Orden
+          <label className="payment-methods-description">
+            Descripción
             <input
               type="text"
-              inputMode="numeric"
-              maxLength={1}
-              value={form.sort_order}
+              value={form.description}
               onChange={(event) =>
-                setForm((prev) => ({
-                  ...prev,
-                  sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
-                }))
+                setForm((prev) => ({ ...prev, description: event.target.value }))
               }
-              placeholder="1"
-              className="payment-methods-order-input"
+              placeholder="Descripción del método"
             />
-          </label>
-          <label className="payment-methods-checkbox">
-            <input
-              type="checkbox"
-              checked={Boolean(form.enabled)}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, enabled: event.target.checked }))
-              }
-            />
-            Activo
           </label>
           <label className="payment-methods-image">
             Imagen (URL)
@@ -197,26 +185,45 @@ export default function PaymentMethodsPage() {
               placeholder="https://..."
             />
           </label>
-          <label className="payment-methods-markup">
-            Markup (%)
-            <div className="payment-methods-inline-field">
+          <div className="payment-methods-inline-group">
+            <label className="payment-methods-markup">
+              Markup (%)
+              <div className="payment-methods-inline-field">
+                <input
+                  type="text"
+                  inputMode="numeric"
+                  maxLength={2}
+                  value={form.markup}
+                  onChange={(event) =>
+                    setForm((prev) => ({
+                      ...prev,
+                      markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                    }))
+                  }
+                  placeholder="0"
+                  className="payment-methods-percent-input"
+                />
+                <span className="payment-methods-percent-suffix">%</span>
+              </div>
+            </label>
+            <label className="payment-methods-order">
+              Orden
               <input
                 type="text"
                 inputMode="numeric"
-                maxLength={2}
-                value={form.markup}
+                maxLength={1}
+                value={form.sort_order}
                 onChange={(event) =>
                   setForm((prev) => ({
                     ...prev,
-                    markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                    sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
                   }))
                 }
-                placeholder="0"
-                className="payment-methods-percent-input"
+                placeholder="1"
+                className="payment-methods-order-input"
               />
-              <span className="payment-methods-percent-suffix">%</span>
-            </div>
-          </label>
+            </label>
+          </div>
           <div className="payment-methods-actions">
             <button type="button" onClick={handleSave}>
               {editingKey ? "Actualizar" : "Agregar"}
@@ -247,7 +254,15 @@ export default function PaymentMethodsPage() {
                   <td>{method.key}</td>
                   <td>{method.label}</td>
                   <td>{method.sort_order ?? "-"}</td>
-                  <td>{method.enabled ? "Activo" : "Desactivado"}</td>
+                  <td>
+                    <span
+                      className={`payment-methods-status${
+                        method.enabled ? " is-active" : ""
+                      }`}
+                    >
+                      {method.enabled ? "Activo" : "Desactivado"}
+                    </span>
+                  </td>
                   <td>
                     <div className="payment-methods-row-actions">
                       <button type="button" onClick={() => handleEdit(method)}>
