@@ -8,6 +8,7 @@ from .config import TELEGRAM_BOT_TOKEN
 from .handlers import admin_actions, admin_auth, affiliates, lang, start, shop, support
 from .middlewares.ban_guard import BanGuardMiddleware
 from .middlewares.access_code import AccessCodeMiddleware
+from .middlewares.maintenance_guard import MaintenanceGuardMiddleware
 
 
 async def main() -> None:
@@ -19,8 +20,11 @@ async def main() -> None:
     bot = Bot(token=TELEGRAM_BOT_TOKEN)
     dp = Dispatcher(storage=MemoryStorage())
 
+    maintenance_guard = MaintenanceGuardMiddleware()
     ban_guard = BanGuardMiddleware()
     access_guard = AccessCodeMiddleware()
+    dp.message.middleware(maintenance_guard)
+    dp.callback_query.middleware(maintenance_guard)
     dp.message.middleware(ban_guard)
     dp.callback_query.middleware(ban_guard)
     dp.message.middleware(access_guard)

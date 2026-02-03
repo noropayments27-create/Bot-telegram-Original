@@ -30,6 +30,10 @@ const {
   upsertPaymentMethod,
   deletePaymentMethod,
 } = require("../services/paymentMethods");
+const {
+  getMaintenanceStatus,
+  setMaintenanceStatus,
+} = require("../services/maintenance");
 const { ensureProductCategorySchema } = require("../services/productSchema");
 const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
@@ -1035,6 +1039,32 @@ router.get("/users/total", async (req, res, next) => {
     );
     const total = result.rows[0]?.total || 0;
     return res.json({ total });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/maintenance", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const active = await getMaintenanceStatus(pool);
+    return res.json({ active });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/maintenance", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const requested = req.body?.active;
+    let nextActive = requested;
+    if (typeof nextActive !== "boolean") {
+      const current = await getMaintenanceStatus(pool);
+      nextActive = !current;
+    }
+    const active = await setMaintenanceStatus(pool, nextActive);
+    return res.json({ active });
   } catch (error) {
     return next(error);
   }

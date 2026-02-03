@@ -160,6 +160,9 @@ export default function Dashboard() {
   const [resetStatus, setResetStatus] = useState("");
   const [paymentMethods, setPaymentMethods] = useState([]);
   const [paymentMethodsError, setPaymentMethodsError] = useState("");
+  const [maintenanceActive, setMaintenanceActive] = useState(false);
+  const [maintenanceStatus, setMaintenanceStatus] = useState("");
+  const [maintenanceError, setMaintenanceError] = useState("");
   const customersCounter = useCountUp(stats.customers);
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
@@ -211,6 +214,16 @@ export default function Dashboard() {
     }
   }, []);
 
+  const loadMaintenanceStatus = useCallback(async () => {
+    try {
+      const data = await apiFetch("/admin/maintenance");
+      setMaintenanceActive(Boolean(data?.active));
+      setMaintenanceError("");
+    } catch (error) {
+      setMaintenanceError("No se pudo cargar el estado de mantenimiento.");
+    }
+  }, []);
+
   const handleTogglePaymentMethod = async (methodKey) => {
     try {
       const data = await apiFetch(`/admin/payment-methods/${methodKey}/toggle`, {
@@ -230,11 +243,12 @@ export default function Dashboard() {
   useEffect(() => {
     loadSummary();
     loadPaymentMethods();
+    loadMaintenanceStatus();
     const interval = setInterval(() => {
       loadSummary();
     }, 20000);
     return () => clearInterval(interval);
-  }, [loadPaymentMethods, loadSummary]);
+  }, [loadMaintenanceStatus, loadPaymentMethods, loadSummary]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -287,6 +301,23 @@ export default function Dashboard() {
     }
   };
 
+  const handleToggleMaintenance = async () => {
+    const nextActive = !maintenanceActive;
+    setMaintenanceStatus("processing");
+    setMaintenanceError("");
+    try {
+      const data = await apiFetch("/admin/maintenance", {
+        method: "POST",
+        body: JSON.stringify({ active: nextActive }),
+      });
+      setMaintenanceActive(Boolean(data?.active));
+      setMaintenanceStatus("done");
+    } catch (error) {
+      setMaintenanceStatus("error");
+      setMaintenanceError("No se pudo actualizar el mantenimiento.");
+    }
+  };
+
   return (
     <main className="page dashboard-page">
       <section className="card">
@@ -306,6 +337,22 @@ export default function Dashboard() {
               className="dashboard-reset-input"
               aria-label="Confirmar reset de estadisticas"
             />
+            <button
+              type="button"
+              onClick={handleToggleMaintenance}
+              className={`dashboard-maintenance-button${
+                maintenanceActive ? " is-active" : ""
+              }`}
+              aria-pressed={maintenanceActive}
+              disabled={maintenanceStatus === "processing"}
+              title={
+                maintenanceActive
+                  ? "Desactivar mantenimiento del bot"
+                  : "Activar mantenimiento del bot"
+              }
+            >
+              Mantenimiento
+            </button>
             {canReset && (
               <button
                 type="button"
@@ -322,6 +369,7 @@ export default function Dashboard() {
             {resetStatus === "done" && (
               <span className="muted">Estadisticas reiniciadas.</span>
             )}
+            {maintenanceError && <span className="error">{maintenanceError}</span>}
           </div>
         </div>
         <div className="dashboard-grid">
