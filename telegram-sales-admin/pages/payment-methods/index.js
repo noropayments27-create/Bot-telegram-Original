@@ -65,9 +65,9 @@ const emptyForm = {
   enabled: false,
 };
 
-const layoutStorageKey = "payment_methods_layout_v1";
+const layoutApiKey = "payment-methods";
 
-const defaultLayout = [
+const defaultFormLayout = [
   { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
   { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
   { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
@@ -76,12 +76,18 @@ const defaultLayout = [
   { i: "actions", x: 0, y: 10, w: 12, h: 2, minW: 4, minH: 2 },
 ];
 
-const normalizeLayout = (saved) => {
+const defaultPageLayout = [
+  { i: "header", x: 0, y: 0, w: 12, h: 2, minW: 6, minH: 2 },
+  { i: "form", x: 0, y: 2, w: 12, h: 12, minW: 6, minH: 6 },
+  { i: "list", x: 0, y: 14, w: 12, h: 12, minW: 6, minH: 6 },
+];
+
+const normalizeLayout = (defaults, saved) => {
   if (!Array.isArray(saved)) {
-    return defaultLayout;
+    return defaults;
   }
   const savedMap = new Map(saved.map((item) => [item.i, item]));
-  return defaultLayout.map((item) => ({
+  return defaults.map((item) => ({
     ...item,
     ...(savedMap.get(item.i) || {}),
   }));
@@ -94,7 +100,10 @@ export default function PaymentMethodsPage() {
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
   const [layoutEditing, setLayoutEditing] = useState(false);
-  const [layout, setLayout] = useState(defaultLayout);
+  const [formLayout, setFormLayout] = useState(defaultFormLayout);
+  const [pageLayout, setPageLayout] = useState(defaultPageLayout);
+  const [layoutStatus, setLayoutStatus] = useState("");
+  const [layoutError, setLayoutError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -119,40 +128,69 @@ export default function PaymentMethodsPage() {
   }, []);
 
   useEffect(() => {
-    if (typeof window === "undefined") {
-      return;
-    }
-    const raw = window.localStorage.getItem(layoutStorageKey);
-    if (!raw) {
-      return;
-    }
-    try {
-      const parsed = JSON.parse(raw);
-      setLayout(normalizeLayout(parsed));
-    } catch (err) {
-      window.localStorage.removeItem(layoutStorageKey);
-    }
+    const loadLayouts = async () => {
+      try {
+        const data = await apiFetch(`/admin/layouts/${layoutApiKey}`);
+        const layout = data?.layout || {};
+        setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
+        setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
+      } catch (err) {
+        setLayoutError("No se pudo cargar el diseño.");
+      }
+    };
+    loadLayouts();
   }, []);
 
-  const persistLayout = (nextLayout) => {
-    if (typeof window === "undefined") {
+  const persistLayout = async (nextPageLayout, nextFormLayout) => {
+    try {
+      setLayoutStatus("saving");
+      setLayoutError("");
+      const data = await apiFetch(`/admin/layouts/${layoutApiKey}`, {
+        method: "POST",
+        body: JSON.stringify({
+          page_layout: nextPageLayout,
+          form_layout: nextFormLayout,
+        }),
+      });
+      const layout = data?.layout || {};
+      setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
+      setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
+      setLayoutStatus("saved");
+    } catch (err) {
+      setLayoutStatus("error");
+      setLayoutError("No se pudo guardar el diseño.");
+    } finally {
+      setTimeout(() => setLayoutStatus(""), 1500);
+    }
+  };
+
+  const handlePageLayoutChange = (nextLayout) => {
+    if (!layoutEditing) {
       return;
     }
-    window.localStorage.setItem(layoutStorageKey, JSON.stringify(nextLayout));
+    setPageLayout(nextLayout);
   };
 
-  const handleLayoutChange = (nextLayout) => {
-    setLayout(nextLayout);
+  const handleFormLayoutChange = (nextLayout) => {
+    if (!layoutEditing) {
+      return;
+    }
+    setFormLayout(nextLayout);
+  };
+
+  const handleToggleLayoutEditing = async () => {
     if (layoutEditing) {
-      persistLayout(nextLayout);
+      setLayoutEditing(false);
+      await persistLayout(pageLayout, formLayout);
+      return;
     }
+    setLayoutEditing(true);
   };
 
-  const handleResetLayout = () => {
-    setLayout(defaultLayout);
-    if (typeof window !== "undefined") {
-      window.localStorage.removeItem(layoutStorageKey);
-    }
+  const handleResetLayout = async () => {
+    setPageLayout(defaultPageLayout);
+    setFormLayout(defaultFormLayout);
+    await persistLayout(defaultPageLayout, defaultFormLayout);
   };
 
   const handleEdit = (method) => {
@@ -264,43 +302,62 @@ export default function PaymentMethodsPage() {
 
   return (
     <main className="page payment-methods-page">
-      <section className="card payment-methods-card">
-        <div className="payment-methods-header">
-          <h1 className="payment-methods-title-main">
-            <IconPayments className="panel-icon" />
-            Métodos de pago
-          </h1>
-        </div>
-        {message && <p className="muted">{message}</p>}
-        {error && <p className="error">{error}</p>}
-        <div className="payment-methods-form">
-          <div className="payment-methods-layout-controls">
-            <button
-              type="button"
-              onClick={() => setLayoutEditing((prev) => !prev)}
-              className={layoutEditing ? "is-active" : ""}
-            >
-              {layoutEditing ? "Listo" : "Editar diseño"}
-            </button>
-            {layoutEditing && (
-              <button type="button" className="plain-button" onClick={handleResetLayout}>
-                Restablecer
-              </button>
-            )}
+      <div className="payment-methods-layout-controls">
+        <button
+          type="button"
+          onClick={handleToggleLayoutEditing}
+          className={layoutEditing ? "is-active" : ""}
+        >
+          {layoutEditing ? "Listo" : "Editar diseño"}
+        </button>
+        {layoutEditing && (
+          <button type="button" className="plain-button" onClick={handleResetLayout}>
+            Restablecer
+          </button>
+        )}
+        {layoutStatus === "saved" && <span className="muted">Diseño guardado.</span>}
+        {layoutError && <span className="error">{layoutError}</span>}
+      </div>
+      <ResponsiveGridLayout
+        className="payment-methods-page-grid"
+        cols={12}
+        rowHeight={32}
+        margin={[16, 16]}
+        layout={pageLayout}
+        onLayoutChange={handlePageLayoutChange}
+        isDraggable={layoutEditing}
+        isResizable={layoutEditing}
+        draggableHandle=".pm-layout-handle"
+        compactType={null}
+        preventCollision
+      >
+        <section key="header" className="card payment-methods-card pm-layout-card">
+          {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
+          <div className="payment-methods-header">
+            <h1 className="payment-methods-title-main">
+              <IconPayments className="panel-icon" />
+              Métodos de pago
+            </h1>
           </div>
-          <ResponsiveGridLayout
-            className="payment-methods-grid"
-            cols={12}
-            rowHeight={32}
-            margin={[12, 12]}
-            layout={layout}
-            onLayoutChange={handleLayoutChange}
-            isDraggable={layoutEditing}
-            isResizable={layoutEditing}
-            draggableHandle=".pm-grid-handle"
-            compactType={null}
-            preventCollision
-          >
+          {message && <p className="muted">{message}</p>}
+          {error && <p className="error">{error}</p>}
+        </section>
+        <section key="form" className="card payment-methods-card pm-layout-card">
+          {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
+          <div className="payment-methods-form">
+            <ResponsiveGridLayout
+              className="payment-methods-grid"
+              cols={12}
+              rowHeight={32}
+              margin={[12, 12]}
+              layout={formLayout}
+              onLayoutChange={handleFormLayoutChange}
+              isDraggable={layoutEditing}
+              isResizable={layoutEditing}
+              draggableHandle=".pm-grid-handle"
+              compactType={null}
+              preventCollision
+            >
             <div key="key" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
               <label>
@@ -444,71 +501,72 @@ export default function PaymentMethodsPage() {
               </div>
             </div>
           </ResponsiveGridLayout>
-        </div>
-      </section>
-
-      <section className="card payment-methods-list-card">
-        <h3>Lista de métodos</h3>
-        <div className="table-scroll">
-          <table style={{ width: "100%" }}>
-            <thead>
-              <tr>
-                <th align="left">Key</th>
-                <th align="left">Nombre</th>
-                <th align="left">Orden</th>
-                <th align="left">Estado</th>
-                <th align="left">Acciones</th>
-              </tr>
-            </thead>
-            <tbody>
-              {methods.map((method) => (
-                <tr key={method.key}>
-                  <td>{method.key}</td>
-                  <td>{method.label}</td>
-                  <td>{method.sort_order ?? "-"}</td>
-                  <td>
-                    <span
-                      className={`payment-methods-status${
-                        method.enabled ? " is-active" : ""
-                      }`}
-                    >
-                      {method.enabled ? "Activo" : "Desactivado"}
-                    </span>
-                  </td>
-                  <td>
-                    <div className="payment-methods-row-actions">
-                      <button type="button" onClick={() => handleEdit(method)}>
-                        Editar
-                      </button>
-                      <button
-                        type="button"
-                        className="plain-button"
-                        onClick={() => handleToggle(method.key)}
-                      >
-                        {method.enabled ? "Desactivar" : "Activar"}
-                      </button>
-                      <button
-                        type="button"
-                        className="danger-button"
-                        onClick={() => handleDelete(method.key)}
-                      >
-                        Eliminar
-                      </button>
-                    </div>
-                  </td>
-                </tr>
-              ))}
-              {methods.length === 0 && (
+          </div>
+        </section>
+        <section key="list" className="card payment-methods-list-card pm-layout-card">
+          {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
+          <h3>Lista de métodos</h3>
+          <div className="table-scroll">
+            <table style={{ width: "100%" }}>
+              <thead>
                 <tr>
-                  <td colSpan={5} className="muted">
-                    Sin métodos registrados.
-                  </td>
+                  <th align="left">Key</th>
+                  <th align="left">Nombre</th>
+                  <th align="left">Orden</th>
+                  <th align="left">Estado</th>
+                  <th align="left">Acciones</th>
                 </tr>
-              )}
-            </tbody>
-          </table>
-        </div>
-      </section>
+              </thead>
+              <tbody>
+                {methods.map((method) => (
+                  <tr key={method.key}>
+                    <td>{method.key}</td>
+                    <td>{method.label}</td>
+                    <td>{method.sort_order ?? "-"}</td>
+                    <td>
+                      <span
+                        className={`payment-methods-status${
+                          method.enabled ? " is-active" : ""
+                        }`}
+                      >
+                        {method.enabled ? "Activo" : "Desactivado"}
+                      </span>
+                    </td>
+                    <td>
+                      <div className="payment-methods-row-actions">
+                        <button type="button" onClick={() => handleEdit(method)}>
+                          Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="plain-button"
+                          onClick={() => handleToggle(method.key)}
+                        >
+                          {method.enabled ? "Desactivar" : "Activar"}
+                        </button>
+                        <button
+                          type="button"
+                          className="danger-button"
+                          onClick={() => handleDelete(method.key)}
+                        >
+                          Eliminar
+                        </button>
+                      </div>
+                    </td>
+                  </tr>
+                ))}
+                {methods.length === 0 && (
+                  <tr>
+                    <td colSpan={5} className="muted">
+                      Sin métodos registrados.
+                    </td>
+                  </tr>
+                )}
+              </tbody>
+            </table>
+          </div>
+        </section>
+      </ResponsiveGridLayout>
     </main>
   );
 }

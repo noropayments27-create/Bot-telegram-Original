@@ -44,6 +44,7 @@ const { renderReceiptPng } = require("../services/receiptRenderer");
 const { consumeStockForOrder, releaseStockForOrder } = require("../services/stock");
 const { deliverOrderToTelegram } = require("../services/delivery");
 const { getAffiliateLevel } = require("../services/affiliateLevels");
+const { getAdminLayout, setAdminLayout } = require("../services/adminLayouts");
 const env = require("../config/env");
 const bcrypt = require("bcryptjs");
 
@@ -1101,6 +1102,34 @@ router.post("/bot-assets/payment-methods-image", async (req, res, next) => {
     const imageUrl = req.body?.image_url || "";
     const value = await setPaymentMethodsImage(pool, imageUrl);
     return res.json({ image_url: value });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/layouts/:key", async (req, res, next) => {
+  const pool = getPool();
+  const key = String(req.params.key || "").trim();
+  if (!key) {
+    return res.status(400).json({ error: "LAYOUT_KEY_REQUIRED" });
+  }
+  try {
+    const layout = await getAdminLayout(pool, key);
+    return res.json({ layout });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/layouts/:key", async (req, res, next) => {
+  const pool = getPool();
+  const key = String(req.params.key || "").trim();
+  if (!key) {
+    return res.status(400).json({ error: "LAYOUT_KEY_REQUIRED" });
+  }
+  try {
+    const layout = await setAdminLayout(pool, key, req.body || {});
+    return res.json({ layout });
   } catch (error) {
     return next(error);
   }
