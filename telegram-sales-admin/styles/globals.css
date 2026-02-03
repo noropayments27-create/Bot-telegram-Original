@@ -643,6 +643,7 @@ body.login-success {
 
 .payment-methods-card {
   padding: 20px;
+  overflow: visible;
 }
 
 .payment-methods-header {
@@ -658,6 +659,10 @@ body.login-success {
   display: flex;
   align-items: center;
   gap: 8px;
+  background: transparent;
+  border: none;
+  box-shadow: none;
+  padding: 0;
 }
 
 .payment-methods-form {
@@ -696,6 +701,7 @@ body.login-success {
   flex-direction: column;
   gap: 6px;
   font-size: 12px;
+  height: 100%;
 }
 
 .payment-methods-layout-controls {
@@ -706,10 +712,16 @@ body.login-success {
 
 .payment-methods-page-grid {
   width: 100%;
+  overflow: visible;
+}
+
+.payment-methods-page-grid .react-grid-item {
+  overflow: visible;
 }
 
 .pm-layout-card {
   position: relative;
+  overflow: visible;
 }
 
 .pm-layout-handle {
@@ -732,17 +744,20 @@ body.login-success {
 
 .payment-methods-grid {
   width: 100%;
+  overflow: visible;
 }
 
 .pm-grid-item {
   display: flex;
   flex-direction: column;
   gap: 6px;
-  border-radius: 12px;
-  border: 1px solid rgba(255, 36, 0, 0.2);
-  background: rgba(20, 20, 20, 0.65);
-  padding: 10px;
-  overflow: hidden;
+  border-radius: 0;
+  border: none;
+  background: transparent;
+  padding: 0;
+  overflow: visible;
+  min-width: 0;
+  min-height: 0;
 }
 
 .pm-grid-handle {
@@ -760,10 +775,15 @@ body.login-success {
   border-radius: 10px;
   color: #f2f2f2;
   padding: 8px 10px;
+  width: 100%;
+  height: 100%;
+  min-width: 0;
+  min-height: 0;
+  box-sizing: border-box;
 }
 
 .payment-methods-order-input {
-  width: 48px;
+  width: 100%;
   text-align: center;
 }
 
@@ -783,10 +803,12 @@ body.login-success {
   display: flex;
   align-items: center;
   gap: 6px;
+  width: 100%;
 }
 
 .payment-methods-percent-input {
-  width: 60px;
+  flex: 1 1 auto;
+  min-width: 0;
   text-align: center;
 }
 

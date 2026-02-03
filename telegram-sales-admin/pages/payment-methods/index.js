@@ -67,6 +67,9 @@ const emptyForm = {
 
 const layoutApiKey = "payment-methods";
 
+const legacyLayoutCols = 12;
+const layoutCols = 120;
+
 const defaultFormLayout = [
   { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
   { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
@@ -93,6 +96,23 @@ const normalizeLayout = (defaults, saved) => {
   }));
 };
 
+const scaleLayout = (layout, targetCols, baseCols) => {
+  if (!Array.isArray(layout) || layout.length === 0) {
+    return layout;
+  }
+  const maxCol = Math.max(...layout.map((item) => (item.x || 0) + (item.w || 0)));
+  if (maxCol > baseCols) {
+    return layout;
+  }
+  const factor = targetCols / baseCols;
+  return layout.map((item) => ({
+    ...item,
+    x: Math.round((item.x || 0) * factor),
+    w: Math.max(1, Math.round((item.w || 1) * factor)),
+    minW: item.minW ? Math.max(1, Math.round(item.minW * factor)) : item.minW,
+  }));
+};
+
 export default function PaymentMethodsPage() {
   const router = useRouter();
   const [methods, setMethods] = useState([]);
@@ -100,8 +120,12 @@ export default function PaymentMethodsPage() {
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
   const [layoutEditing, setLayoutEditing] = useState(false);
-  const [formLayout, setFormLayout] = useState(defaultFormLayout);
-  const [pageLayout, setPageLayout] = useState(defaultPageLayout);
+  const [formLayout, setFormLayout] = useState(
+    scaleLayout(defaultFormLayout, layoutCols, legacyLayoutCols)
+  );
+  const [pageLayout, setPageLayout] = useState(
+    scaleLayout(defaultPageLayout, layoutCols, legacyLayoutCols)
+  );
   const [layoutStatus, setLayoutStatus] = useState("");
   const [layoutError, setLayoutError] = useState("");
   const [message, setMessage] = useState("");
@@ -132,8 +156,10 @@ export default function PaymentMethodsPage() {
       try {
         const data = await apiFetch(`/admin/layouts/${layoutApiKey}`);
         const layout = data?.layout || {};
-        setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
-        setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
+        const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
+        const nextFormLayout = normalizeLayout(defaultFormLayout, layout.form_layout);
+        setPageLayout(scaleLayout(nextPageLayout, layoutCols, legacyLayoutCols));
+        setFormLayout(scaleLayout(nextFormLayout, layoutCols, legacyLayoutCols));
       } catch (err) {
         setLayoutError("No se pudo cargar el diseño.");
       }
@@ -153,8 +179,10 @@ export default function PaymentMethodsPage() {
         }),
       });
       const layout = data?.layout || {};
-      setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
-      setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
+      const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
+      const nextFormLayout = normalizeLayout(defaultFormLayout, layout.form_layout);
+      setPageLayout(scaleLayout(nextPageLayout, layoutCols, legacyLayoutCols));
+      setFormLayout(scaleLayout(nextFormLayout, layoutCols, legacyLayoutCols));
       setLayoutStatus("saved");
     } catch (err) {
       setLayoutStatus("error");
@@ -188,9 +216,11 @@ export default function PaymentMethodsPage() {
   };
 
   const handleResetLayout = async () => {
-    setPageLayout(defaultPageLayout);
-    setFormLayout(defaultFormLayout);
-    await persistLayout(defaultPageLayout, defaultFormLayout);
+    const nextPageLayout = scaleLayout(defaultPageLayout, layoutCols, legacyLayoutCols);
+    const nextFormLayout = scaleLayout(defaultFormLayout, layoutCols, legacyLayoutCols);
+    setPageLayout(nextPageLayout);
+    setFormLayout(nextFormLayout);
+    await persistLayout(nextPageLayout, nextFormLayout);
   };
 
   const handleEdit = (method) => {
@@ -289,17 +319,6 @@ export default function PaymentMethodsPage() {
     }
   };
 
-  const handleToggle = async (key) => {
-    try {
-      const data = await apiFetch(`/admin/payment-methods/${key}/toggle`, {
-        method: "POST",
-      });
-      setMethods(Array.isArray(data?.methods) ? data.methods : []);
-    } catch (err) {
-      setError("No se pudo actualizar el método de pago.");
-    }
-  };
-
   return (
     <main className="page payment-methods-page">
       <div className="payment-methods-layout-controls">
@@ -320,16 +339,17 @@ export default function PaymentMethodsPage() {
       </div>
       <ResponsiveGridLayout
         className="payment-methods-page-grid"
-        cols={12}
-        rowHeight={32}
-        margin={[16, 16]}
+        cols={layoutCols}
+        rowHeight={8}
+        margin={[0, 0]}
+        containerPadding={[0, 0]}
         layout={pageLayout}
         onLayoutChange={handlePageLayoutChange}
         isDraggable={layoutEditing}
         isResizable={layoutEditing}
         draggableHandle=".pm-layout-handle"
         compactType={null}
-        preventCollision
+        preventCollision={false}
       >
         <section key="header" className="card payment-methods-card pm-layout-card">
           {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
@@ -347,16 +367,17 @@ export default function PaymentMethodsPage() {
           <div className="payment-methods-form">
             <ResponsiveGridLayout
               className="payment-methods-grid"
-              cols={12}
-              rowHeight={32}
-              margin={[12, 12]}
+              cols={layoutCols}
+              rowHeight={8}
+              margin={[0, 0]}
+              containerPadding={[0, 0]}
               layout={formLayout}
               onLayoutChange={handleFormLayoutChange}
               isDraggable={layoutEditing}
               isResizable={layoutEditing}
               draggableHandle=".pm-grid-handle"
               compactType={null}
-              preventCollision
+              preventCollision={false}
             >
             <div key="key" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
@@ -536,13 +557,6 @@ export default function PaymentMethodsPage() {
                       <div className="payment-methods-row-actions">
                         <button type="button" onClick={() => handleEdit(method)}>
                           Editar
-                        </button>
-                        <button
-                          type="button"
-                          className="plain-button"
-                          onClick={() => handleToggle(method.key)}
-                        >
-                          {method.enabled ? "Desactivar" : "Activar"}
                         </button>
                         <button
                           type="button"
