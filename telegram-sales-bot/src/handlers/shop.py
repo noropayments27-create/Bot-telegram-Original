@@ -438,6 +438,26 @@ def _build_destination_lines(
         if CRYPTO_WALLET_LTC:
             lines.append(f"🪙 LTC: <code>{html.escape(CRYPTO_WALLET_LTC)}</code>")
     return lines
+
+
+def _extract_crypto_destinations(method: Dict[str, Any] | None) -> Dict[str, str]:
+    if not method or not method.get("destination"):
+        return {}
+    raw = str(method.get("destination")).strip()
+    if not raw:
+        return {}
+    try:
+        data = json.loads(raw)
+    except (TypeError, ValueError):
+        return {}
+    if not isinstance(data, dict):
+        return {}
+    return {
+        "btc": str(data.get("btc") or "").strip(),
+        "usdt_tron": str(data.get("usdt_tron") or "").strip(),
+        "usdt_bsc": str(data.get("usdt_bsc") or "").strip(),
+        "ltc": str(data.get("ltc") or "").strip(),
+    }
 async def _build_payment_instructions(
     method_key: str,
     base_total: Optional[float],
@@ -2173,7 +2193,7 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         await callback.answer()
         return
     data = await state.get_data()
-    total = float(data.get("current_order_total") or 0)
+    base_total = float(data.get("current_order_total") or 0)
     items_text = ""
     summary = data.get("current_order_summary")
     if summary:
@@ -2193,32 +2213,43 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
                 items_text = "\n".join(lines)
         except Exception:
             items_text = ""
+    method = await _find_payment_method("crypto")
+    markup_percent = None
+    if method and method.get("markup") is not None:
+        raw_markup = str(method.get("markup")).strip()
+        if raw_markup:
+            try:
+                markup_percent = float(raw_markup)
+            except ValueError:
+                markup_percent = None
+    send_total = base_total * (1 + (markup_percent or 0) / 100)
+    destinations = _extract_crypto_destinations(method)
     wallet = ""
     send_str = ""
     if asset_key == "btc":
-        wallet = CRYPTO_WALLET_BTC
+        wallet = destinations.get("btc") or CRYPTO_WALLET_BTC
         try:
             rate = await usd_to_btc_rate()
-            send_amount = total * rate
+            send_amount = send_total * rate
             send_str = f"{send_amount:.8f} BTC"
         except Exception:
             send_str = t(locale, "crypto_send_unavailable_btc")
     elif asset_key == "ltc":
-        wallet = CRYPTO_WALLET_LTC
+        wallet = destinations.get("ltc") or CRYPTO_WALLET_LTC
         try:
             rate = await usd_to_ltc_rate()
-            send_amount = total * rate
+            send_amount = send_total * rate
             send_str = f"{send_amount:.8f} LTC"
         except Exception:
             send_str = t(locale, "crypto_send_unavailable_ltc")
     elif asset_key == "usdt_tron":
-        wallet = CRYPTO_WALLET_USDT_TRON
-        send_str = f"{total:.2f} USDT (TRON)"
+        wallet = destinations.get("usdt_tron") or CRYPTO_WALLET_USDT_TRON
+        send_str = f"{send_total:.2f} USDT (TRON)"
     elif asset_key == "usdt_bsc":
-        wallet = CRYPTO_WALLET_USDT_BSC
-        send_str = f"{total:.2f} USDT (BSC)"
+        wallet = destinations.get("usdt_bsc") or CRYPTO_WALLET_USDT_BSC
+        send_str = f"{send_total:.2f} USDT (BSC)"
     else:
-        send_str = f"{total:.2f} USDT"
+        send_str = f"{send_total:.2f} USDT"
     if not wallet:
         wallet = t(locale, "crypto_wallet_not_configured")
     title = {
@@ -2227,6 +2258,13 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
         "usdt_bsc": t(locale, "crypto_asset_usdt_bsc"),
         "ltc": t(locale, "crypto_asset_ltc"),
     }.get(asset_key, t(locale, "crypto_asset_default"))
+    description_line = ""
+    if method and method.get("description"):
+        description_text = str(method.get("description")).replace("\n", " ").strip()
+        if description_text:
+            description_line = t(locale, "payment_method_description").format(
+                description=html.escape(description_text)
+            )
     text = (
         f"{title}\n\n"
         f"{t(locale, 'crypto_wallet_label')}\n<code>{html.escape(wallet)}</code>\n\n"
@@ -2236,10 +2274,12 @@ async def handle_crypto_asset(callback: CallbackQuery, state: FSMContext) -> Non
             f"{t(locale, 'payment_products_title')}\n\n{items_text}\n\n"
         )
     text += (
-        f"{t(locale, 'payment_amount_total_label').format(amount=_format_usd(total))}\n"
-        f"{t(locale, 'payment_send_label_bold').format(amount=send_str)}\n\n"
-        f"{t(locale, 'payment_after_pay_short')}"
+        f"{t(locale, 'payment_amount_total_label').format(amount=_format_usd(base_total))}\n"
+        f"{t(locale, 'payment_send_label_bold').format(amount=send_str)}\n"
     )
+    if description_line:
+        text += f"\n{description_line}"
+    text += f"\n\n{t(locale, 'payment_after_pay_global')}"
     asset_image = _get_crypto_asset_image(asset_key)
     if asset_image:
         await render_main_view_with_photo(

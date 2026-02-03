@@ -664,7 +664,8 @@ body.login-success {
   margin-top: 12px;
   display: grid;
   grid-template-columns: repeat(4, minmax(0, 1fr));
-  gap: 12px;
+  row-gap: 12px;
+  column-gap: 0.5cm;
 }
 
 .payment-methods-form label {
@@ -690,7 +691,6 @@ body.login-success {
 
 .payment-methods-inline-group {
   grid-column: 4 / 5;
-  grid-row: span 2;
   display: flex;
   gap: 16px;
   align-items: flex-end;
@@ -751,8 +751,8 @@ body.login-success {
 
 .payment-methods-crypto-buttons {
   display: flex;
-  gap: 8px;
-  flex-wrap: wrap;
+  gap: 0.5cm;
+  flex-wrap: nowrap;
 }
 
 .payment-methods-crypto-button {

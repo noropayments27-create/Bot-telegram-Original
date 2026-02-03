@@ -274,25 +274,6 @@ export default function PaymentMethodsPage() {
               placeholder="https://..."
             />
           </label>
-          {isCryptoMethod && (
-            <div className="payment-methods-crypto-selector">
-              <span className="payment-methods-crypto-label">Tipo de cripto</span>
-              <div className="payment-methods-crypto-buttons">
-                {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                  <button
-                    key={option.key}
-                    type="button"
-                    className={`payment-methods-crypto-button${
-                      cryptoDestinationKey === option.key ? " is-active" : ""
-                    }`}
-                    onClick={() => setCryptoDestinationKey(option.key)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
           <div className="payment-methods-inline-group">
             <label className="payment-methods-markup">
               Markup (%)
@@ -332,6 +313,25 @@ export default function PaymentMethodsPage() {
               />
             </label>
           </div>
+          {isCryptoMethod && (
+            <div className="payment-methods-crypto-selector">
+              <span className="payment-methods-crypto-label">Tipo de cripto</span>
+              <div className="payment-methods-crypto-buttons">
+                {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                  <button
+                    key={option.key}
+                    type="button"
+                    className={`payment-methods-crypto-button${
+                      cryptoDestinationKey === option.key ? " is-active" : ""
+                    }`}
+                    onClick={() => setCryptoDestinationKey(option.key)}
+                  >
+                    {option.label}
+                  </button>
+                ))}
+              </div>
+            </div>
+          )}
           <div className="payment-methods-actions">
             <button type="button" onClick={handleSave}>
               {editingKey ? "Actualizar" : "Agregar"}
