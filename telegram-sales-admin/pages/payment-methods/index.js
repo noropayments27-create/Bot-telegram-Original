@@ -233,28 +233,26 @@ export default function PaymentMethodsPage() {
               placeholder="Nequi"
             />
           </label>
-          <label className="payment-methods-destination">
-            Direcciones de destino
-            <textarea
-              value={destinationValue}
-              onChange={(event) =>
-                setForm((prev) => {
-                  if (!isCryptoMethod) {
-                    return { ...prev, destination: event.target.value };
-                  }
-                  const nextDestination = buildCryptoDestination(
-                    prev.destination,
-                    cryptoDestinationKey,
-                    event.target.value
-                  );
-                  return { ...prev, destination: nextDestination };
-                })
-              }
-              rows={3}
-              placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
-            />
-          </label>
-          <div className="payment-methods-inline-group">
+          <div className="payment-methods-midline">
+            {isCryptoMethod && (
+              <div className="payment-methods-crypto-inline">
+                <span className="payment-methods-crypto-label">Tipo de cripto</span>
+                <div className="payment-methods-crypto-buttons">
+                  {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                    <button
+                      key={option.key}
+                      type="button"
+                      className={`payment-methods-crypto-button${
+                        cryptoDestinationKey === option.key ? " is-active" : ""
+                      }`}
+                      onClick={() => setCryptoDestinationKey(option.key)}
+                    >
+                      {option.label}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            )}
             <label className="payment-methods-markup">
               Markup (%)
               <div className="payment-methods-inline-field">
@@ -293,25 +291,27 @@ export default function PaymentMethodsPage() {
               />
             </label>
           </div>
-          {isCryptoMethod && (
-            <div className="payment-methods-crypto-selector">
-              <span className="payment-methods-crypto-label">Tipo de cripto</span>
-              <div className="payment-methods-crypto-buttons">
-                {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                  <button
-                    key={option.key}
-                    type="button"
-                    className={`payment-methods-crypto-button${
-                      cryptoDestinationKey === option.key ? " is-active" : ""
-                    }`}
-                    onClick={() => setCryptoDestinationKey(option.key)}
-                  >
-                    {option.label}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
+          <label className="payment-methods-destination">
+            Direcciones de destino
+            <textarea
+              value={destinationValue}
+              onChange={(event) =>
+                setForm((prev) => {
+                  if (!isCryptoMethod) {
+                    return { ...prev, destination: event.target.value };
+                  }
+                  const nextDestination = buildCryptoDestination(
+                    prev.destination,
+                    cryptoDestinationKey,
+                    event.target.value
+                  );
+                  return { ...prev, destination: nextDestination };
+                })
+              }
+              rows={3}
+              placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
+            />
+          </label>
           <label className="payment-methods-description">
             Descripción
             <input
