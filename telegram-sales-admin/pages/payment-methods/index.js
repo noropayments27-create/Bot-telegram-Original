@@ -3,6 +3,9 @@ import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
 import { IconPayments } from "../../components/PanelIcons";
+import GridLayout, { WidthProvider } from "react-grid-layout";
+
+const ResponsiveGridLayout = WidthProvider(GridLayout);
 
 const CRYPTO_DESTINATION_OPTIONS = [
   { key: "btc", label: "BTC" },
@@ -62,12 +65,36 @@ const emptyForm = {
   enabled: false,
 };
 
+const layoutStorageKey = "payment_methods_layout_v1";
+
+const defaultLayout = [
+  { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
+  { i: "destination", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
+  { i: "description", x: 0, y: 8, w: 8, h: 2, minW: 3, minH: 2 },
+  { i: "actions", x: 0, y: 10, w: 12, h: 2, minW: 4, minH: 2 },
+];
+
+const normalizeLayout = (saved) => {
+  if (!Array.isArray(saved)) {
+    return defaultLayout;
+  }
+  const savedMap = new Map(saved.map((item) => [item.i, item]));
+  return defaultLayout.map((item) => ({
+    ...item,
+    ...(savedMap.get(item.i) || {}),
+  }));
+};
+
 export default function PaymentMethodsPage() {
   const router = useRouter();
   const [methods, setMethods] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
+  const [layoutEditing, setLayoutEditing] = useState(false);
+  const [layout, setLayout] = useState(defaultLayout);
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -90,6 +117,43 @@ export default function PaymentMethodsPage() {
   useEffect(() => {
     loadMethods();
   }, []);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const raw = window.localStorage.getItem(layoutStorageKey);
+    if (!raw) {
+      return;
+    }
+    try {
+      const parsed = JSON.parse(raw);
+      setLayout(normalizeLayout(parsed));
+    } catch (err) {
+      window.localStorage.removeItem(layoutStorageKey);
+    }
+  }, []);
+
+  const persistLayout = (nextLayout) => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    window.localStorage.setItem(layoutStorageKey, JSON.stringify(nextLayout));
+  };
+
+  const handleLayoutChange = (nextLayout) => {
+    setLayout(nextLayout);
+    if (layoutEditing) {
+      persistLayout(nextLayout);
+    }
+  };
+
+  const handleResetLayout = () => {
+    setLayout(defaultLayout);
+    if (typeof window !== "undefined") {
+      window.localStorage.removeItem(layoutStorageKey);
+    }
+  };
 
   const handleEdit = (method) => {
     const selected = methods.find((item) => item.key === method.key) || method;
@@ -210,127 +274,176 @@ export default function PaymentMethodsPage() {
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
         <div className="payment-methods-form">
-          <label>
-            Key
-            <input
-              type="text"
-              value={form.method_key}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, method_key: event.target.value.toUpperCase() }))
-              }
-              disabled={Boolean(editingKey)}
-              placeholder="NEQUI"
-            />
-          </label>
-          <label>
-            Nombre
-            <input
-              type="text"
-              value={form.label}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, label: event.target.value }))
-              }
-              placeholder="Nequi"
-            />
-          </label>
-          <div className="payment-methods-midline">
-            {isCryptoMethod && (
-              <div className="payment-methods-crypto-inline">
-                <span className="payment-methods-crypto-label">Tipo de cripto</span>
-                <div className="payment-methods-crypto-buttons">
-                  {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                    <button
-                      key={option.key}
-                      type="button"
-                      className={`payment-methods-crypto-button${
-                        cryptoDestinationKey === option.key ? " is-active" : ""
-                      }`}
-                      onClick={() => setCryptoDestinationKey(option.key)}
-                    >
-                      {option.label}
-                    </button>
-                  ))}
-                </div>
-              </div>
+          <div className="payment-methods-layout-controls">
+            <button
+              type="button"
+              onClick={() => setLayoutEditing((prev) => !prev)}
+              className={layoutEditing ? "is-active" : ""}
+            >
+              {layoutEditing ? "Listo" : "Editar diseño"}
+            </button>
+            {layoutEditing && (
+              <button type="button" className="plain-button" onClick={handleResetLayout}>
+                Restablecer
+              </button>
             )}
-            <label className="payment-methods-markup">
-              Markup (%)
-              <div className="payment-methods-inline-field">
+          </div>
+          <ResponsiveGridLayout
+            className="payment-methods-grid"
+            cols={12}
+            rowHeight={32}
+            margin={[12, 12]}
+            layout={layout}
+            onLayoutChange={handleLayoutChange}
+            isDraggable={layoutEditing}
+            isResizable={layoutEditing}
+            draggableHandle=".pm-grid-handle"
+            compactType={null}
+            preventCollision
+          >
+            <div key="key" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <label>
+                Key
                 <input
                   type="text"
-                  inputMode="numeric"
-                  maxLength={2}
-                  value={form.markup}
+                  value={form.method_key}
                   onChange={(event) =>
                     setForm((prev) => ({
                       ...prev,
-                      markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                      method_key: event.target.value.toUpperCase(),
                     }))
                   }
-                  placeholder="0"
-                  className="payment-methods-percent-input"
+                  disabled={Boolean(editingKey)}
+                  placeholder="NEQUI"
                 />
-                <span className="payment-methods-percent-suffix">%</span>
-              </div>
-            </label>
-            <label className="payment-methods-order">
-              Orden
-              <input
-                type="text"
-                inputMode="numeric"
-                maxLength={1}
-                value={form.sort_order}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
-                  }))
-                }
-                placeholder="1"
-                className="payment-methods-order-input"
-              />
-            </label>
-          </div>
-          <label className="payment-methods-destination">
-            Direcciones de destino
-            <textarea
-              value={destinationValue}
-              onChange={(event) =>
-                setForm((prev) => {
-                  if (!isCryptoMethod) {
-                    return { ...prev, destination: event.target.value };
+              </label>
+            </div>
+            <div key="label" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <label>
+                Nombre
+                <input
+                  type="text"
+                  value={form.label}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, label: event.target.value }))
                   }
-                  const nextDestination = buildCryptoDestination(
-                    prev.destination,
-                    cryptoDestinationKey,
-                    event.target.value
-                  );
-                  return { ...prev, destination: nextDestination };
-                })
-              }
-              rows={3}
-              placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
-            />
-          </label>
-          <label className="payment-methods-description">
-            Descripción
-            <input
-              type="text"
-              value={form.description}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, description: event.target.value }))
-              }
-              placeholder="Descripción del método"
-            />
-          </label>
-          <div className="payment-methods-actions">
-            <button type="button" onClick={handleSave}>
-              {editingKey ? "Actualizar" : "Agregar"}
-            </button>
-            <button type="button" className="plain-button" onClick={handleClear}>
-              Limpiar
-            </button>
-          </div>
+                  placeholder="Nequi"
+                />
+              </label>
+            </div>
+            <div key="midline" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <div className="payment-methods-midline">
+                {isCryptoMethod && (
+                  <div className="payment-methods-crypto-inline">
+                    <span className="payment-methods-crypto-label">Tipo de cripto</span>
+                    <div className="payment-methods-crypto-buttons">
+                      {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          className={`payment-methods-crypto-button${
+                            cryptoDestinationKey === option.key ? " is-active" : ""
+                          }`}
+                          onClick={() => setCryptoDestinationKey(option.key)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
+                  </div>
+                )}
+                <label className="payment-methods-markup">
+                  Markup (%)
+                  <div className="payment-methods-inline-field">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={2}
+                      value={form.markup}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                        }))
+                      }
+                      placeholder="0"
+                      className="payment-methods-percent-input"
+                    />
+                    <span className="payment-methods-percent-suffix">%</span>
+                  </div>
+                </label>
+                <label className="payment-methods-order">
+                  Orden
+                  <input
+                    type="text"
+                    inputMode="numeric"
+                    maxLength={1}
+                    value={form.sort_order}
+                    onChange={(event) =>
+                      setForm((prev) => ({
+                        ...prev,
+                        sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
+                      }))
+                    }
+                    placeholder="1"
+                    className="payment-methods-order-input"
+                  />
+                </label>
+              </div>
+            </div>
+            <div key="destination" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <label className="payment-methods-destination">
+                Direcciones de destino
+                <textarea
+                  value={destinationValue}
+                  onChange={(event) =>
+                    setForm((prev) => {
+                      if (!isCryptoMethod) {
+                        return { ...prev, destination: event.target.value };
+                      }
+                      const nextDestination = buildCryptoDestination(
+                        prev.destination,
+                        cryptoDestinationKey,
+                        event.target.value
+                      );
+                      return { ...prev, destination: nextDestination };
+                    })
+                  }
+                  rows={3}
+                  placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
+                />
+              </label>
+            </div>
+            <div key="description" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <label className="payment-methods-description">
+                Descripción
+                <input
+                  type="text"
+                  value={form.description}
+                  onChange={(event) =>
+                    setForm((prev) => ({ ...prev, description: event.target.value }))
+                  }
+                  placeholder="Descripción del método"
+                />
+              </label>
+            </div>
+            <div key="actions" className="pm-grid-item">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <div className="payment-methods-actions">
+                <button type="button" onClick={handleSave}>
+                  {editingKey ? "Actualizar" : "Agregar"}
+                </button>
+                <button type="button" className="plain-button" onClick={handleClear}>
+                  Limpiar
+                </button>
+              </div>
+            </div>
+          </ResponsiveGridLayout>
         </div>
       </section>
 
