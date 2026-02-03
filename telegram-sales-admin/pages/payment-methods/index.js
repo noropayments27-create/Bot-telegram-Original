@@ -68,21 +68,18 @@ const emptyForm = {
 const layoutApiKey = "payment-methods";
 
 const defaultFormLayout = [
-  { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 1, minH: 1 },
-  { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 1, minH: 1 },
-  { i: "crypto", x: 6, y: 0, w: 3, h: 2, minW: 1, minH: 1 },
-  { i: "markup", x: 9, y: 0, w: 2, h: 2, minW: 1, minH: 1 },
-  { i: "order", x: 11, y: 0, w: 1, h: 2, minW: 1, minH: 1 },
-  { i: "destination", x: 0, y: 2, w: 8, h: 4, minW: 1, minH: 1 },
-  { i: "description", x: 0, y: 6, w: 8, h: 2, minW: 1, minH: 1 },
-  { i: "actionSave", x: 0, y: 8, w: 2, h: 2, minW: 1, minH: 1 },
-  { i: "actionClear", x: 2, y: 8, w: 2, h: 2, minW: 1, minH: 1 },
+  { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
+  { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
+  { i: "destination", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
+  { i: "description", x: 0, y: 8, w: 8, h: 2, minW: 3, minH: 2 },
+  { i: "actions", x: 0, y: 10, w: 12, h: 2, minW: 4, minH: 2 },
 ];
 
 const defaultPageLayout = [
-  { i: "header", x: 0, y: 0, w: 12, h: 2, minW: 1, minH: 1 },
-  { i: "form", x: 0, y: 2, w: 12, h: 12, minW: 1, minH: 1 },
-  { i: "list", x: 0, y: 14, w: 12, h: 12, minW: 1, minH: 1 },
+  { i: "header", x: 0, y: 0, w: 12, h: 2, minW: 6, minH: 2 },
+  { i: "form", x: 0, y: 2, w: 12, h: 12, minW: 6, minH: 6 },
+  { i: "list", x: 0, y: 14, w: 12, h: 12, minW: 6, minH: 6 },
 ];
 
 const normalizeLayout = (defaults, saved) => {
@@ -292,6 +289,17 @@ export default function PaymentMethodsPage() {
     }
   };
 
+  const handleToggle = async (key) => {
+    try {
+      const data = await apiFetch(`/admin/payment-methods/${key}/toggle`, {
+        method: "POST",
+      });
+      setMethods(Array.isArray(data?.methods) ? data.methods : []);
+    } catch (err) {
+      setError("No se pudo actualizar el método de pago.");
+    }
+  };
+
   return (
     <main className="page payment-methods-page">
       <div className="payment-methods-layout-controls">
@@ -382,72 +390,66 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="crypto" className="pm-grid-item">
+            <div key="midline" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-crypto-inline">
-                <span className="payment-methods-crypto-label">Tipo de cripto</span>
-                {isCryptoMethod ? (
-                  <div className="payment-methods-crypto-buttons">
-                    {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                      <button
-                        key={option.key}
-                        type="button"
-                        className={`payment-methods-crypto-button${
-                          cryptoDestinationKey === option.key ? " is-active" : ""
-                        }`}
-                        onClick={() => setCryptoDestinationKey(option.key)}
-                      >
-                        {option.label}
-                      </button>
-                    ))}
+              <div className="payment-methods-midline">
+                {isCryptoMethod && (
+                  <div className="payment-methods-crypto-inline">
+                    <span className="payment-methods-crypto-label">Tipo de cripto</span>
+                    <div className="payment-methods-crypto-buttons">
+                      {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                        <button
+                          key={option.key}
+                          type="button"
+                          className={`payment-methods-crypto-button${
+                            cryptoDestinationKey === option.key ? " is-active" : ""
+                          }`}
+                          onClick={() => setCryptoDestinationKey(option.key)}
+                        >
+                          {option.label}
+                        </button>
+                      ))}
+                    </div>
                   </div>
-                ) : (
-                  <span className="muted">Solo disponible para CRYPTO.</span>
                 )}
-              </div>
-            </div>
-            <div key="markup" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <label className="payment-methods-markup">
-                Markup (%)
-                <div className="payment-methods-inline-field">
+                <label className="payment-methods-markup">
+                  Markup (%)
+                  <div className="payment-methods-inline-field">
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      maxLength={2}
+                      value={form.markup}
+                      onChange={(event) =>
+                        setForm((prev) => ({
+                          ...prev,
+                          markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                        }))
+                      }
+                      placeholder="0"
+                      className="payment-methods-percent-input"
+                    />
+                    <span className="payment-methods-percent-suffix">%</span>
+                  </div>
+                </label>
+                <label className="payment-methods-order">
+                  Orden
                   <input
                     type="text"
                     inputMode="numeric"
-                    maxLength={2}
-                    value={form.markup}
+                    maxLength={1}
+                    value={form.sort_order}
                     onChange={(event) =>
                       setForm((prev) => ({
                         ...prev,
-                        markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                        sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
                       }))
                     }
-                    placeholder="0"
-                    className="payment-methods-percent-input"
+                    placeholder="1"
+                    className="payment-methods-order-input"
                   />
-                  <span className="payment-methods-percent-suffix">%</span>
-                </div>
-              </label>
-            </div>
-            <div key="order" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <label className="payment-methods-order">
-                Orden
-                <input
-                  type="text"
-                  inputMode="numeric"
-                  maxLength={1}
-                  value={form.sort_order}
-                  onChange={(event) =>
-                    setForm((prev) => ({
-                      ...prev,
-                      sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
-                    }))
-                  }
-                  placeholder="1"
-                  className="payment-methods-order-input"
-                />
-              </label>
+                </label>
+              </div>
             </div>
             <div key="destination" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
@@ -487,17 +489,12 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="actionSave" className="pm-grid-item">
+            <div key="actions" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-action">
+              <div className="payment-methods-actions">
                 <button type="button" onClick={handleSave}>
                   {editingKey ? "Actualizar" : "Agregar"}
                 </button>
-              </div>
-            </div>
-            <div key="actionClear" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-action">
                 <button type="button" className="plain-button" onClick={handleClear}>
                   Limpiar
                 </button>
@@ -539,6 +536,13 @@ export default function PaymentMethodsPage() {
                       <div className="payment-methods-row-actions">
                         <button type="button" onClick={() => handleEdit(method)}>
                           Editar
+                        </button>
+                        <button
+                          type="button"
+                          className="plain-button"
+                          onClick={() => handleToggle(method.key)}
+                        >
+                          {method.enabled ? "Desactivar" : "Activar"}
                         </button>
                         <button
                           type="button"
