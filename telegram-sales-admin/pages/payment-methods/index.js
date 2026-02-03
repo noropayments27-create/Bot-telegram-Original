@@ -41,14 +41,18 @@ export default function PaymentMethodsPage() {
   }, []);
 
   const handleEdit = (method) => {
-    setEditingKey(method.key);
+    const selected = methods.find((item) => item.key === method.key) || method;
+    const markupValue = String(selected.markup ?? "")
+      .replace(/\D/g, "")
+      .slice(0, 2);
+    setEditingKey(selected.key);
     setForm({
-      method_key: method.key || "",
-      label: method.label || "",
-      image_url: method.image_url || "",
-      markup: method.markup || "",
-      sort_order: method.sort_order ?? "",
-      enabled: Boolean(method.enabled),
+      method_key: selected.key ?? "",
+      label: selected.label ?? "",
+      image_url: selected.image_url ?? "",
+      markup: markupValue,
+      sort_order: selected.sort_order ?? "",
+      enabled: Boolean(selected.enabled),
     });
     setMessage("");
     setError("");
@@ -124,7 +128,10 @@ export default function PaymentMethodsPage() {
     <main className="page payment-methods-page">
       <section className="card payment-methods-card">
         <div className="payment-methods-header">
-          <h1 className="payment-methods-title-main">Métodos de pagos</h1>
+          <h1 className="payment-methods-title-main">
+            <span className="payment-methods-title-icon" aria-hidden="true">💳</span>
+            Métodos de pago
+          </h1>
         </div>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
@@ -155,12 +162,18 @@ export default function PaymentMethodsPage() {
           <label>
             Orden
             <input
-              type="number"
+              type="text"
+              inputMode="numeric"
+              maxLength={1}
               value={form.sort_order}
               onChange={(event) =>
-                setForm((prev) => ({ ...prev, sort_order: event.target.value }))
+                setForm((prev) => ({
+                  ...prev,
+                  sort_order: event.target.value.replace(/\D/g, "").slice(0, 1),
+                }))
               }
               placeholder="1"
+              className="payment-methods-order-input"
             />
           </label>
           <label className="payment-methods-checkbox">
@@ -173,7 +186,7 @@ export default function PaymentMethodsPage() {
             />
             Activo
           </label>
-          <label className="payment-methods-wide">
+          <label className="payment-methods-image">
             Imagen (URL)
             <input
               type="text"
@@ -184,16 +197,25 @@ export default function PaymentMethodsPage() {
               placeholder="https://..."
             />
           </label>
-          <label className="payment-methods-wide">
-            Markup (HTML)
-            <textarea
-              value={form.markup}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, markup: event.target.value }))
-              }
-              rows={4}
-              placeholder="Instrucciones, puedes usar {amount} o {total}"
-            />
+          <label className="payment-methods-markup">
+            Markup (%)
+            <div className="payment-methods-inline-field">
+              <input
+                type="text"
+                inputMode="numeric"
+                maxLength={2}
+                value={form.markup}
+                onChange={(event) =>
+                  setForm((prev) => ({
+                    ...prev,
+                    markup: event.target.value.replace(/\D/g, "").slice(0, 2),
+                  }))
+                }
+                placeholder="0"
+                className="payment-methods-percent-input"
+              />
+              <span className="payment-methods-percent-suffix">%</span>
+            </div>
           </label>
           <div className="payment-methods-actions">
             <button type="button" onClick={handleSave}>
