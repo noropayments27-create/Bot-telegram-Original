@@ -23,6 +23,7 @@ from ..config import (
     ADMIN_TELEGRAM_IDS,
 )
 from ..services.api_client import ApiClient
+from ..services.bot_assets import get_bot_asset_image
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from ..utils.main_view import (
@@ -51,12 +52,15 @@ async def _render_affiliate_view(
     *,
     push_history: bool = True,
 ) -> Message:
-    if BOT_AFFILIATE_PANEL_IMAGE_URL:
+    affiliate_image_url = await get_bot_asset_image(
+        api_client, "affiliate_panel_image_url", BOT_AFFILIATE_PANEL_IMAGE_URL
+    )
+    if affiliate_image_url:
         return await render_main_view_with_photo(
             message,
             user_id,
             text,
-            BOT_AFFILIATE_PANEL_IMAGE_URL,
+            affiliate_image_url,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
             push_history=push_history,
@@ -876,23 +880,13 @@ async def handle_affiliate_panel(callback: CallbackQuery, state: FSMContext) -> 
                 f"{t(locale, 'affiliate_stats_footer')}\n"
                 f"{t(locale, 'affiliate_stats_streak').format(days=daily_streak)}"
             )
-            if BOT_AFFILIATE_PANEL_IMAGE_URL:
-                await render_main_view_with_photo(
-                    callback.message,
-                    callback.from_user.id,
-                    text,
-                    BOT_AFFILIATE_PANEL_IMAGE_URL,
-                    reply_markup=_build_panel_keyboard(locale),
-                    parse_mode=ParseMode.HTML,
-                )
-            else:
-                await _render_affiliate_view(
-                    callback.message,
-                    callback.from_user.id,
-                    text,
-                    reply_markup=_build_panel_keyboard(locale),
-                    parse_mode=ParseMode.HTML,
-                )
+            await _render_affiliate_view(
+                callback.message,
+                callback.from_user.id,
+                text,
+                reply_markup=_build_panel_keyboard(locale),
+                parse_mode=ParseMode.HTML,
+            )
             await callback.answer()
             return
     except Exception:

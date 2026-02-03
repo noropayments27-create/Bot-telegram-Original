@@ -18,6 +18,7 @@ from aiogram.types import (
     Message,
 )
 from ..services.api_client import ApiClient
+from ..services.bot_assets import get_bot_asset_image
 from ..services.crypto_rates import usd_to_btc_rate, usd_to_ltc_rate
 from ..services.fx import usd_to_cop, usd_to_mxn
 from ..services.i18n import t
@@ -146,12 +147,15 @@ async def _render_shop_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: ParseMode | str | None = None,
 ) -> None:
-    if BOT_SHOP_SECTION_IMAGE_URL:
+    shop_image_url = await get_bot_asset_image(
+        api_client, "shop_section_image_url", BOT_SHOP_SECTION_IMAGE_URL
+    )
+    if shop_image_url:
         await render_main_view_with_photo(
             target,
             user_id,
             text,
-            BOT_SHOP_SECTION_IMAGE_URL,
+            shop_image_url,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
         )
@@ -172,12 +176,15 @@ async def _render_cart_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: ParseMode | str | None = None,
 ) -> None:
-    if BOT_CART_IMAGE_URL:
+    cart_image_url = await get_bot_asset_image(
+        api_client, "cart_image_url", BOT_CART_IMAGE_URL
+    )
+    if cart_image_url:
         await render_main_view_with_photo(
             target,
             user_id,
             text,
-            BOT_CART_IMAGE_URL,
+            cart_image_url,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
         )
@@ -199,7 +206,9 @@ async def _render_product_detail_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: ParseMode | str | None = None,
 ) -> None:
-    image_url = _get_product_image(product) or BOT_SHOP_SECTION_IMAGE_URL
+    image_url = _get_product_image(product) or await get_bot_asset_image(
+        api_client, "shop_section_image_url", BOT_SHOP_SECTION_IMAGE_URL
+    )
     if image_url:
         await render_main_view_with_photo(
             target,

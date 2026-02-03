@@ -11,21 +11,7 @@ const CRYPTO_DESTINATION_OPTIONS = [
   { key: "ltc", label: "LTC" },
 ];
 
-const CRYPTO_IMAGE_LABELS = {
-  btc: "Bitcoin",
-  usdt_tron: "Usdt Tron",
-  usdt_bsc: "Usdt Bsc",
-  ltc: "Ltc",
-};
-
 const emptyCryptoDestination = {
-  btc: "",
-  usdt_tron: "",
-  usdt_bsc: "",
-  ltc: "",
-};
-
-const emptyCryptoAssetImages = {
   btc: "",
   usdt_tron: "",
   usdt_bsc: "",
@@ -64,38 +50,6 @@ function buildCryptoDestination(currentValue, selectedKey, nextValue) {
   return JSON.stringify(next);
 }
 
-function parseCryptoAssetImages(value) {
-  if (!value) {
-    return { ...emptyCryptoAssetImages, legacy: "", isJson: false };
-  }
-  try {
-    const parsed = JSON.parse(value);
-    if (parsed && typeof parsed === "object") {
-      return {
-        ...emptyCryptoAssetImages,
-        ...parsed,
-        legacy: "",
-        isJson: true,
-      };
-    }
-  } catch (error) {
-    // Fall back to legacy text below.
-  }
-  return { ...emptyCryptoAssetImages, legacy: String(value), isJson: false };
-}
-
-function buildCryptoAssetImages(currentValue, selectedKey, nextValue) {
-  const parsed = parseCryptoAssetImages(currentValue);
-  const next = {
-    btc: parsed.btc || "",
-    usdt_tron: parsed.usdt_tron || "",
-    usdt_bsc: parsed.usdt_bsc || "",
-    ltc: parsed.ltc || "",
-  };
-  next[selectedKey] = nextValue;
-  return JSON.stringify(next);
-}
-
 const emptyForm = {
   method_key: "",
   label: "",
@@ -111,9 +65,6 @@ const emptyForm = {
 export default function PaymentMethodsPage() {
   const router = useRouter();
   const [methods, setMethods] = useState([]);
-  const [paymentMethodsImage, setPaymentMethodsImage] = useState("");
-  const [paymentMethodsImageStatus, setPaymentMethodsImageStatus] = useState("");
-  const [paymentMethodsImageError, setPaymentMethodsImageError] = useState("");
   const [form, setForm] = useState(emptyForm);
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
@@ -136,19 +87,8 @@ export default function PaymentMethodsPage() {
     }
   };
 
-  const loadPaymentMethodsImage = async () => {
-    try {
-      const data = await apiFetch("/admin/bot-assets");
-      setPaymentMethodsImage(data?.assets?.payment_methods_image_url || "");
-      setPaymentMethodsImageError("");
-    } catch (err) {
-      setPaymentMethodsImageError("No se pudo cargar la imagen del listado.");
-    }
-  };
-
   useEffect(() => {
     loadMethods();
-    loadPaymentMethodsImage();
   }, []);
 
   const handleEdit = (method) => {
@@ -159,9 +99,8 @@ export default function PaymentMethodsPage() {
     const isCrypto = String(selected.key || "").toUpperCase() === "CRYPTO";
     if (isCrypto) {
       const parsedDestination = parseCryptoDestination(selected.destination || "");
-      const parsedAssets = parseCryptoAssetImages(selected.asset_images || "");
       const firstMatch = CRYPTO_DESTINATION_OPTIONS.find(
-        (option) => parsedDestination[option.key] || parsedAssets[option.key]
+        (option) => parsedDestination[option.key]
       );
       setCryptoDestinationKey(firstMatch ? firstMatch.key : "usdt_bsc");
     }
@@ -201,8 +140,6 @@ export default function PaymentMethodsPage() {
         label: form.label.trim(),
         description: form.description.trim(),
         destination: form.destination.trim(),
-        asset_images: form.asset_images.trim(),
-        image_url: form.image_url.trim(),
         markup: form.markup,
         sort_order: form.sort_order === "" ? null : Number(form.sort_order),
         enabled: Boolean(form.enabled),
@@ -221,41 +158,16 @@ export default function PaymentMethodsPage() {
     }
   };
 
-  const handleSavePaymentMethodsImage = async () => {
-    setPaymentMethodsImageStatus("processing");
-    setPaymentMethodsImageError("");
-    try {
-      const trimmed = paymentMethodsImage.trim();
-      const data = await apiFetch("/admin/bot-assets/payment-methods-image", {
-        method: "POST",
-        body: JSON.stringify({ image_url: trimmed }),
-      });
-      setPaymentMethodsImage(data?.image_url || "");
-      setPaymentMethodsImageStatus("done");
-    } catch (err) {
-      setPaymentMethodsImageStatus("error");
-      setPaymentMethodsImageError("No se pudo guardar la imagen del listado.");
-    }
-  };
 
   const isCryptoMethod = form.method_key.trim().toUpperCase() === "CRYPTO";
   const cryptoDestination = isCryptoMethod
     ? parseCryptoDestination(form.destination)
-    : null;
-  const cryptoAssetImages = isCryptoMethod
-    ? parseCryptoAssetImages(form.asset_images)
     : null;
   const destinationValue = isCryptoMethod
     ? cryptoDestination.isJson
       ? cryptoDestination[cryptoDestinationKey] || ""
       : cryptoDestination.legacy || ""
     : form.destination;
-  const cryptoAssetImageValue = isCryptoMethod
-    ? cryptoAssetImages.isJson
-      ? cryptoAssetImages[cryptoDestinationKey] || ""
-      : cryptoAssetImages.legacy || ""
-    : "";
-  const cryptoImageLabel = CRYPTO_IMAGE_LABELS[cryptoDestinationKey] || "Cripto";
 
   const handleDelete = async (key) => {
     const confirmed = window.confirm("¿Eliminar este método de pago?");
@@ -297,30 +209,6 @@ export default function PaymentMethodsPage() {
         </div>
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
-        <div className="payment-methods-banner">
-          <label>
-            Imagen (URL) - Elige tu método
-            <input
-              type="text"
-              value={paymentMethodsImage}
-              onChange={(event) => setPaymentMethodsImage(event.target.value)}
-              placeholder="https://..."
-            />
-          </label>
-          <button
-            type="button"
-            onClick={handleSavePaymentMethodsImage}
-            disabled={paymentMethodsImageStatus === "processing"}
-          >
-            Guardar
-          </button>
-          {paymentMethodsImageStatus === "done" && (
-            <span className="muted">Imagen actualizada.</span>
-          )}
-          {paymentMethodsImageError && (
-            <span className="error">{paymentMethodsImageError}</span>
-          )}
-        </div>
         <div className="payment-methods-form">
           <label>
             Key
@@ -364,17 +252,6 @@ export default function PaymentMethodsPage() {
               }
               rows={3}
               placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
-            />
-          </label>
-          <label className="payment-methods-image">
-            Imagen (URL)
-            <input
-              type="text"
-              value={form.image_url}
-              onChange={(event) =>
-                setForm((prev) => ({ ...prev, image_url: event.target.value }))
-              }
-              placeholder="https://..."
             />
           </label>
           <div className="payment-methods-inline-group">
@@ -446,26 +323,6 @@ export default function PaymentMethodsPage() {
               placeholder="Descripción del método"
             />
           </label>
-          {isCryptoMethod && (
-            <label className="payment-methods-crypto-image">
-              Imagen {cryptoImageLabel} (URL)
-              <input
-                type="text"
-                value={cryptoAssetImageValue}
-                onChange={(event) =>
-                  setForm((prev) => ({
-                    ...prev,
-                    asset_images: buildCryptoAssetImages(
-                      prev.asset_images,
-                      cryptoDestinationKey,
-                      event.target.value
-                    ),
-                  }))
-                }
-                placeholder="https://..."
-              />
-            </label>
-          )}
           <div className="payment-methods-actions">
             <button type="button" onClick={handleSave}>
               {editingKey ? "Actualizar" : "Agregar"}

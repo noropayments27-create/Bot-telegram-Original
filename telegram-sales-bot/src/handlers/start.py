@@ -16,6 +16,7 @@ from ..config import (
     BOT_TO_API_SECRET,
 )
 from ..services.api_client import ApiClient
+from ..services.bot_assets import get_bot_asset_image
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -390,12 +391,15 @@ async def handle_home_community(callback: CallbackQuery) -> None:
             ]
         ]
     )
-    if BOT_COMMUNITY_IMAGE_URL:
+    community_image_url = await get_bot_asset_image(
+        api_client, "community_image_url", BOT_COMMUNITY_IMAGE_URL
+    )
+    if community_image_url:
         await render_main_view_with_photo(
             callback.message,
             callback.from_user.id,
             build_community_text(locale),
-            BOT_COMMUNITY_IMAGE_URL,
+            community_image_url,
             reply_markup=keyboard,
             parse_mode="HTML",
         )

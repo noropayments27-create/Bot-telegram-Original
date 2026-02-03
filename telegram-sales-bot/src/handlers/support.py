@@ -17,6 +17,7 @@ from ..config import (
     BOT_TO_API_SECRET,
 )
 from ..services.api_client import ApiClient
+from ..services.bot_assets import get_bot_asset_image
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from .menu import build_main_keyboard
@@ -109,12 +110,15 @@ async def _render_support_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
 ) -> None:
-    if BOT_SUPPORT_IMAGE_URL:
+    support_image_url = await get_bot_asset_image(
+        api_client, "support_image_url", BOT_SUPPORT_IMAGE_URL
+    )
+    if support_image_url:
         await render_main_view_with_photo(
             message,
             user_id,
             text,
-            BOT_SUPPORT_IMAGE_URL,
+            support_image_url,
             reply_markup=reply_markup,
             parse_mode=parse_mode,
         )

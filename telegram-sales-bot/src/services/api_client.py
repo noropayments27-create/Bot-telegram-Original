@@ -152,6 +152,19 @@ class ApiClient:
 
         return await _request_with_retry(_do)
 
+    async def get_bot_assets(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/assets"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url, headers=self._headers(), timeout=10
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
     async def get_affiliate_top(
         self, telegram_id: int, period: str = "week"
     ) -> Dict[str, Any]:

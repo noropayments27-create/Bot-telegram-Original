@@ -36,6 +36,7 @@ const {
 } = require("../services/maintenance");
 const {
   getBotAssets,
+  setBotAssets,
   setPaymentMethodsImage,
 } = require("../services/botAssets");
 const { ensureProductCategorySchema } = require("../services/productSchema");
@@ -1078,6 +1079,16 @@ router.get("/bot-assets", async (req, res, next) => {
   const pool = getPool();
   try {
     const assets = await getBotAssets(pool);
+    return res.json({ assets });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/bot-assets", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const assets = await setBotAssets(pool, req.body || {});
     return res.json({ assets });
   } catch (error) {
     return next(error);

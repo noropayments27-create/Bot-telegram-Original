@@ -119,23 +119,65 @@ async function upsertPaymentMethod(pool, payload) {
   if (!key) {
     return null;
   }
-  const label = payload?.label ? String(payload.label).trim() : null;
-  const description = payload?.description ? String(payload.description).trim() : null;
-  const destination = payload?.destination ? String(payload.destination).trim() : null;
-  const assetImagesRaw = payload?.asset_images;
-  const assetImages = assetImagesRaw
-    ? typeof assetImagesRaw === "string"
-      ? assetImagesRaw.trim()
-      : JSON.stringify(assetImagesRaw)
-    : null;
-  const imageUrl = payload?.image_url ? String(payload.image_url).trim() : null;
-  const markup = payload?.markup ? String(payload.markup) : null;
-  const sortOrderRaw = payload?.sort_order;
-  const sortOrder = Number.isFinite(Number(sortOrderRaw)) ? Number(sortOrderRaw) : null;
-  const enabled =
-    payload?.enabled === undefined || payload?.enabled === null
-      ? false
-      : Boolean(payload.enabled);
+  const currentRes = await pool.query(
+    `SELECT label, description, destination, asset_images, image_url, markup, sort_order, enabled
+     FROM payment_methods
+     WHERE method_key = $1`,
+    [key]
+  );
+  const current = currentRes.rows[0] || {};
+  const hasLabel = Object.prototype.hasOwnProperty.call(payload || {}, "label");
+  const label = hasLabel
+    ? payload?.label
+      ? String(payload.label).trim()
+      : null
+    : current.label || null;
+  const hasDescription = Object.prototype.hasOwnProperty.call(payload || {}, "description");
+  const description = hasDescription
+    ? payload?.description
+      ? String(payload.description).trim()
+      : null
+    : current.description || null;
+  const hasDestination = Object.prototype.hasOwnProperty.call(payload || {}, "destination");
+  const destination = hasDestination
+    ? payload?.destination
+      ? String(payload.destination).trim()
+      : null
+    : current.destination || null;
+  const hasAssetImages = Object.prototype.hasOwnProperty.call(payload || {}, "asset_images");
+  const assetImagesRaw = hasAssetImages ? payload?.asset_images : undefined;
+  const assetImages = hasAssetImages
+    ? assetImagesRaw
+      ? typeof assetImagesRaw === "string"
+        ? assetImagesRaw.trim()
+        : JSON.stringify(assetImagesRaw)
+      : null
+    : current.asset_images || null;
+  const hasImageUrl = Object.prototype.hasOwnProperty.call(payload || {}, "image_url");
+  const imageUrl = hasImageUrl
+    ? payload?.image_url
+      ? String(payload.image_url).trim()
+      : null
+    : current.image_url || null;
+  const hasMarkup = Object.prototype.hasOwnProperty.call(payload || {}, "markup");
+  const markup = hasMarkup
+    ? payload?.markup
+      ? String(payload.markup)
+      : null
+    : current.markup || null;
+  const hasSortOrder = Object.prototype.hasOwnProperty.call(payload || {}, "sort_order");
+  const sortOrderRaw = hasSortOrder ? payload?.sort_order : undefined;
+  const sortOrder = hasSortOrder
+    ? Number.isFinite(Number(sortOrderRaw))
+      ? Number(sortOrderRaw)
+      : null
+    : current.sort_order ?? null;
+  const hasEnabled = Object.prototype.hasOwnProperty.call(payload || {}, "enabled");
+  const enabled = hasEnabled
+    ? Boolean(payload.enabled)
+    : current.enabled === undefined
+    ? false
+    : Boolean(current.enabled);
   await pool.query(
     `INSERT INTO payment_methods (method_key, label, description, destination, asset_images, image_url, markup, sort_order, enabled)
      VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
