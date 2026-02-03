@@ -689,10 +689,11 @@ body.login-success {
 }
 
 .payment-methods-inline-group {
-  grid-column: span 3;
+  grid-column: span 1;
   display: flex;
   gap: 16px;
   align-items: flex-end;
+  flex-wrap: wrap;
 }
 
 .payment-methods-order {
@@ -720,6 +721,10 @@ body.login-success {
 }
 
 .payment-methods-description {
+  grid-column: span 2;
+}
+
+.payment-methods-destination {
   grid-column: span 2;
 }
 

@@ -8,6 +8,7 @@ const emptyForm = {
   method_key: "",
   label: "",
   description: "",
+  destination: "",
   image_url: "",
   markup: "",
   sort_order: "",
@@ -52,6 +53,7 @@ export default function PaymentMethodsPage() {
       method_key: selected.key ?? "",
       label: selected.label ?? "",
       description: selected.description ?? "",
+      destination: selected.destination ?? "",
       image_url: selected.image_url ?? "",
       markup: markupValue,
       sort_order: selected.sort_order ?? "",
@@ -80,6 +82,7 @@ export default function PaymentMethodsPage() {
         method_key: form.method_key.trim(),
         label: form.label.trim(),
         description: form.description.trim(),
+        destination: form.destination.trim(),
         image_url: form.image_url.trim(),
         markup: form.markup,
         sort_order: form.sort_order === "" ? null : Number(form.sort_order),
@@ -172,6 +175,17 @@ export default function PaymentMethodsPage() {
                 setForm((prev) => ({ ...prev, description: event.target.value }))
               }
               placeholder="Descripción del método"
+            />
+          </label>
+          <label className="payment-methods-destination">
+            Direcciones de destino
+            <textarea
+              value={form.destination}
+              onChange={(event) =>
+                setForm((prev) => ({ ...prev, destination: event.target.value }))
+              }
+              rows={3}
+              placeholder={"Número: 3000000000\nNombre: Juan Perez\nWallet: 0x..."}
             />
           </label>
           <label className="payment-methods-image">

@@ -78,8 +78,10 @@ _CATEGORY_TITLES = {
 _PAYMENT_METHOD_IMAGES = {
     "nequi": BOT_PAYMENT_NEQUI_IMAGE_URL,
     "binance": BOT_PAYMENT_BINANCE_IMAGE_URL,
+    "binance_id": BOT_PAYMENT_BINANCE_IMAGE_URL,
     "crypto": BOT_PAYMENT_CRYPTO_IMAGE_URL,
     "mp": BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
+    "mercadopago": BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
     "paypal": BOT_PAYMENT_PAYPAL_IMAGE_URL,
 }
 _DEFAULT_PAYMENT_METHODS = [
@@ -349,6 +351,69 @@ def _format_payment_method_title(
         label = label_map.get(key, t(locale, "payment_method_default"))
     emoji = emoji_map.get(key, "💳")
     return f"{emoji} <b>{html.escape(label)}</b>"
+
+
+def _build_destination_lines(
+    method_key: str,
+    method: Dict[str, Any] | None,
+    locale: str | None = None,
+) -> List[str]:
+    if method and method.get("destination"):
+        lines = []
+        for raw_line in str(method.get("destination")).splitlines():
+            line = raw_line.strip()
+            if line:
+                lines.append(html.escape(line))
+        if lines:
+            return lines
+    key = str(method_key or "").lower()
+    lines: List[str] = []
+    if key == "nequi":
+        if NEQUI_NUMBER:
+            lines.append(
+                t(locale, "payment_nequi_number").format(
+                    number=html.escape(NEQUI_NUMBER)
+                )
+            )
+        if NEQUI_NAME:
+            lines.append(
+                t(locale, "payment_nequi_name").format(
+                    name=html.escape(NEQUI_NAME)
+                )
+            )
+    elif key in {"binance", "binance_id"}:
+        if BINANCE_ID:
+            lines.append(
+                t(locale, "payment_binance_id").format(
+                    id=html.escape(BINANCE_ID)
+                )
+            )
+    elif key in {"mp", "mercadopago"}:
+        if MERCADOPAGO_ACCOUNT:
+            clabe = str(MERCADOPAGO_ACCOUNT).replace("CLABE:", "").strip()
+            lines.append(t(locale, "payment_mp_clabe"))
+            lines.append(f"<code>{html.escape(clabe)}</code>")
+    elif key == "paypal":
+        if PAYPAL_ACCOUNT:
+            lines.append(
+                t(locale, "payment_paypal_account").format(
+                    account=html.escape(PAYPAL_ACCOUNT)
+                )
+            )
+    elif key == "crypto":
+        if CRYPTO_WALLET_BTC:
+            lines.append(f"₿ BTC: <code>{html.escape(CRYPTO_WALLET_BTC)}</code>")
+        if CRYPTO_WALLET_USDT_TRON:
+            lines.append(
+                f"🪙 USDT Tron: <code>{html.escape(CRYPTO_WALLET_USDT_TRON)}</code>"
+            )
+        if CRYPTO_WALLET_USDT_BSC:
+            lines.append(
+                f"🪙 USDT BSC: <code>{html.escape(CRYPTO_WALLET_USDT_BSC)}</code>"
+            )
+        if CRYPTO_WALLET_LTC:
+            lines.append(f"🪙 LTC: <code>{html.escape(CRYPTO_WALLET_LTC)}</code>")
+    return lines
 async def _build_payment_instructions(
     method_key: str,
     base_total: Optional[float],
@@ -372,7 +437,6 @@ async def _build_payment_instructions(
     total_text = _format_payment_amount(total)
     amount_label_text = total_text if markup_percent else base_total_text
     summary_text = _build_products_only_summary(summary)
-    include_final_total = True
     instructions: List[str] = []
     description_line = ""
     if method and method.get("description"):
@@ -382,6 +446,49 @@ async def _build_payment_instructions(
                 description=html.escape(description_text)
             )
     title_line = _format_payment_method_title(method_key, method, locale)
+    destination_lines = _build_destination_lines(method_key, method, locale)
+    conversion_line = None
+    extra_lines: List[str] = []
+    method_key_normalized = str(method_key or "").lower()
+    if method_key_normalized == "nequi":
+        try:
+            rate = await usd_to_cop()
+            cop_amount = total * rate
+            conversion_line = t(locale, "payment_send_label").format(
+                amount=f"{cop_amount:,.0f} COP"
+            )
+        except Exception as exc:
+            print("[FX] Nequi COP error:", repr(exc))
+            conversion_line = t(locale, "payment_send_unavailable_cop")
+    elif method_key_normalized in {"mp", "mercadopago"}:
+        try:
+            rate = await usd_to_mxn()
+            mxn_amount = total * rate
+            conversion_line = t(locale, "payment_send_label").format(
+                amount=f"{mxn_amount:,.2f} MXN"
+            )
+        except Exception as exc:
+            print("[FX] MP MXN error:", repr(exc))
+            conversion_line = t(locale, "payment_send_unavailable_mxn")
+    elif method_key_normalized == "paypal":
+        paypal_total = total * 1.25
+        conversion_line = f"➡️ Total a Enviar: {_format_payment_amount(paypal_total)}"
+        extra_lines.extend(
+            [
+                t(locale, "payment_paypal_steps_title"),
+                "",
+                f"{t(locale, 'payment_paypal_note_title')} {t(locale, 'payment_paypal_note_body')}",
+                "",
+                t(locale, "payment_paypal_capture"),
+                "",
+                t(locale, "payment_paypal_forward"),
+                "",
+                t(locale, "payment_paypal_after"),
+                "",
+                t(locale, "payment_paypal_warning"),
+            ]
+        )
+
     if custom_markup:
         instructions.append(
             custom_markup
@@ -391,162 +498,33 @@ async def _build_payment_instructions(
         if description_line:
             instructions.append("")
             instructions.append(description_line)
-        instructions.append("")
-        instructions.append(t(locale, "payment_after_pay_global"))
-        return "\n".join(instructions)
-    if method_key == "nequi":
-        instructions.append(title_line)
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
-        instructions.append("")
-        if NEQUI_NUMBER:
-            instructions.append(
-                t(locale, "payment_nequi_number").format(
-                    number=html.escape(NEQUI_NUMBER)
-                )
-            )
-        if NEQUI_NAME:
-            instructions.append(
-                t(locale, "payment_nequi_name").format(
-                    name=html.escape(NEQUI_NAME)
-                )
-            )
-        if summary_text:
-            instructions.append("")
-            instructions.append(t(locale, "payment_products_title"))
-            instructions.append("")
-            instructions.append(summary_text)
-        instructions.append("")
-        instructions.append(
-            t(locale, "payment_amount_label").format(amount=amount_label_text)
-        )
-        try:
-            rate = await usd_to_cop()
-            cop_amount = total * rate
-            instructions.append(
-                t(locale, "payment_send_label").format(
-                    amount=f"{cop_amount:,.0f} COP"
-                )
-            )
-        except Exception as exc:
-            print("[FX] Nequi COP error:", repr(exc))
-            instructions.append(t(locale, "payment_send_unavailable_cop"))
-        include_final_total = False
-    elif method_key == "binance":
-        instructions.append(title_line)
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
-        instructions.append("")
-        if BINANCE_ID:
-            instructions.append(
-                t(locale, "payment_binance_id").format(
-                    id=html.escape(BINANCE_ID)
-                )
-            )
-        if summary_text:
-            instructions.append("")
-            instructions.append(t(locale, "payment_products_title"))
-            instructions.append("")
-            instructions.append(summary_text)
-        instructions.append("")
-        instructions.append(
-            t(locale, "payment_amount_label").format(amount=amount_label_text)
-        )
-        include_final_total = False
-    elif method_key == "crypto":
-        instructions.append(title_line)
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
-        if CRYPTO_WALLET_BTC:
-            instructions.append(f"Bitcoin: {html.escape(CRYPTO_WALLET_BTC)}")
-        if CRYPTO_WALLET_USDT_TRON:
-            instructions.append(f"USDT Tron: {html.escape(CRYPTO_WALLET_USDT_TRON)}")
-        if CRYPTO_WALLET_USDT_BSC:
-            instructions.append(f"USDT BSC: {html.escape(CRYPTO_WALLET_USDT_BSC)}")
-        if CRYPTO_WALLET_LTC:
-            instructions.append(f"LTC: {html.escape(CRYPTO_WALLET_LTC)}")
-    elif method_key == "mp":
-        instructions.append(title_line)
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
-        instructions.append("")
-        if MERCADOPAGO_ACCOUNT:
-            clabe = str(MERCADOPAGO_ACCOUNT).replace("CLABE:", "").strip()
-            instructions.append(t(locale, "payment_mp_clabe"))
-            instructions.append(f"<code>{html.escape(clabe)}</code>")
-        if summary_text:
-            instructions.append("")
-            instructions.append(t(locale, "payment_products_title"))
-            instructions.append("")
-            instructions.append(summary_text)
-        instructions.append("")
-        instructions.append(
-            t(locale, "payment_amount_label").format(amount=amount_label_text)
-        )
-        try:
-            rate = await usd_to_mxn()
-            mxn_amount = total * rate
-            instructions.append(
-                t(locale, "payment_send_label").format(
-                    amount=f"{mxn_amount:,.2f} MXN"
-                )
-            )
-        except Exception as exc:
-            print("[FX] MP MXN error:", repr(exc))
-            instructions.append(t(locale, "payment_send_unavailable_mxn"))
-        include_final_total = False
-    elif method_key == "paypal":
-        instructions.append(title_line)
-        if description_line:
-            instructions.append("")
-            instructions.append(description_line)
-        instructions.append("")
-        if PAYPAL_ACCOUNT:
-            instructions.append(
-                t(locale, "payment_paypal_account").format(
-                    account=html.escape(PAYPAL_ACCOUNT)
-                )
-            )
-        instructions.append("")
-        instructions.append(
-            t(locale, "payment_paypal_amount_note").format(amount=amount_label_text)
-        )
-        paypal_total = total * 1.25
-        total_text = _format_payment_amount(paypal_total)
-        instructions.append(f"➡️ Total a Enviar: {total_text}")
-        instructions.append("")
-        instructions.append(t(locale, "payment_paypal_steps_title"))
-        instructions.append("")
-        instructions.append(
-            f"{t(locale, 'payment_paypal_note_title')} {t(locale, 'payment_paypal_note_body')}"
-        )
-        instructions.append("")
-        instructions.append(t(locale, "payment_paypal_capture"))
-        instructions.append("")
-        instructions.append(t(locale, "payment_paypal_forward"))
-        instructions.append("")
-        instructions.append(t(locale, "payment_paypal_after"))
-        instructions.append("")
-        instructions.append(t(locale, "payment_paypal_warning"))
-        include_final_total = False
     else:
         instructions.append(title_line)
         if description_line:
             instructions.append("")
             instructions.append(description_line)
-    instructions.append("")
-    if summary_text and include_final_total:
-        instructions.append(summary_text)
+
+    if destination_lines:
         instructions.append("")
-    if include_final_total:
-        instructions.append(
-            t(locale, "payment_final_total").format(amount=total_text)
-        )
-        instructions.append(t(locale, "payment_final_note"))
+        instructions.extend(destination_lines)
+
+    if summary_text:
+        instructions.append("")
+        instructions.append(t(locale, "payment_products_title"))
+        instructions.append("")
+        instructions.append(summary_text)
+
+    instructions.append("")
+    instructions.append(
+        t(locale, "payment_amount_label").format(amount=amount_label_text)
+    )
+    if conversion_line:
+        instructions.append(conversion_line)
+
+    if extra_lines:
+        instructions.append("")
+        instructions.extend(extra_lines)
+
     instructions.append("")
     instructions.append(t(locale, "payment_after_pay_global"))
     return "\n".join(instructions)
