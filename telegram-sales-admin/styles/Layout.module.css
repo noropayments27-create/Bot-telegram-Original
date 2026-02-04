@@ -1,10 +1,23 @@
 .layout {
   min-height: 100vh;
-  zoom: 0.8;
 }
 
 .main {
   margin-left: 260px;
+}
+
+@supports (zoom: 1) {
+  .layout {
+    zoom: 0.8;
+  }
+}
+
+@supports not (zoom: 1) {
+  .main {
+    transform: scale(0.8);
+    transform-origin: top left;
+    width: 125%;
+  }
 }
 
 .overlay {
