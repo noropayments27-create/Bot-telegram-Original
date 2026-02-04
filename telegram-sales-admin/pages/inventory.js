@@ -1263,7 +1263,7 @@ export default function InventoryPage() {
                     </div>
                   </div>
                 ) : (
-                  <div className="create-product__description">
+                  <div className="create-product__description create-product__description--split">
                     <span>Descripción (máx 8 líneas)</span>
                     <div className="description-editor" role="textbox">
                       {createDescriptionLines.map((line, index) => (

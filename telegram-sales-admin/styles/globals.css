@@ -2017,9 +2017,9 @@ body.login-success {
 }
 
 .inventory-detail-grid .inventory-card {
-  max-width: 100%;
-  width: 100%;
-  margin: 0;
+  max-width: 520px;
+  width: 90%;
+  margin: 0 auto;
   align-self: stretch;
   min-height: 320px;
 }
@@ -2253,6 +2253,28 @@ body.login-success {
 
 .create-product__description {
   grid-column: 1 / -1;
+  display: grid;
+  gap: 8px;
+}
+
+.create-product__description--split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.create-product__description--split > span {
+  grid-column: 1 / -1;
+}
+
+.create-product__description--split > .description-editor {
+  grid-column: 1 / 2;
+}
+
+.create-product__description--split > .description-translation {
+  grid-column: 2 / 3;
+}
+
+.create-product__description--split .description-translation {
   display: grid;
   gap: 8px;
 }
