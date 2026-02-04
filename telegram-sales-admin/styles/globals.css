@@ -2334,7 +2334,7 @@ body.login-success {
   box-shadow:
     8px 8px 20px var(--shadow-dark),
     -6px -6px 12px var(--shadow-light);
-  z-index: 9999;
+  z-index: 2147483647;
   animation: toast-in 0.2s ease, toast-out 0.2s ease 2.8s forwards;
   display: flex;
   align-items: center;
