@@ -158,7 +158,18 @@ export default function PaymentMethodsPage() {
       setLayoutStatus("saved");
     } catch (err) {
       setLayoutStatus("error");
-      setLayoutError("No se pudo guardar el diseño.");
+      const status = err?.status ? ` (status ${err.status})` : "";
+      const payload =
+        typeof err?.payload === "string"
+          ? `: ${err.payload}`
+          : err?.payload
+          ? `: ${JSON.stringify(err.payload)}`
+          : "";
+      setLayoutError(`No se pudo guardar el diseño${status}${payload}`);
+      if (typeof window !== "undefined") {
+        // eslint-disable-next-line no-console
+        console.error("Layout save failed", err);
+      }
     } finally {
       setTimeout(() => setLayoutStatus(""), 1500);
     }
