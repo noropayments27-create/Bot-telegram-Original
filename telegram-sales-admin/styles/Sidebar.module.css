@@ -147,14 +147,14 @@
 }
 
 .usersCounterLabel {
-  font-size: 11px;
+  font-size: 13px;
   text-transform: uppercase;
   letter-spacing: 0.12em;
   color: #cfcfcf;
 }
 
 .usersCounterValue {
-  font-size: 20px;
+  font-size: 23px;
   font-weight: 800;
   color: var(--scarlet-red);
 }

@@ -2104,6 +2104,9 @@ body.login-success {
 
 .inventory-summary {
   margin-top: 16px;
+  transform: scale(1.2);
+  transform-origin: top left;
+  width: calc(100% / 1.2);
 }
 
 .summary-grid {
@@ -2291,6 +2294,25 @@ body.login-success {
 }
 
 .create-product__description--split .description-translation {
+  display: grid;
+  gap: 8px;
+}
+
+.product-edit__description--split {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 12px;
+}
+
+.product-edit__description--split > span {
+  grid-column: 1 / -1;
+}
+
+.product-edit__description--split > .description-editor {
+  grid-column: 1 / 2;
+}
+
+.product-edit__description--split > .description-translation {
+  grid-column: 2 / 3;
   display: grid;
   gap: 8px;
 }
