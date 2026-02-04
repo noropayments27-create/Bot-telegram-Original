@@ -73,7 +73,6 @@ const defaultFormLayout = [
   { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
   { i: "destination", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
   { i: "description", x: 0, y: 8, w: 8, h: 2, minW: 3, minH: 2 },
-  { i: "actions", x: 0, y: 10, w: 12, h: 2, minW: 4, minH: 2 },
 ];
 
 const defaultPageLayout = [
@@ -490,18 +489,15 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="actions" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-actions">
-                <button type="button" onClick={handleSave}>
-                  {editingKey ? "Actualizar" : "Agregar"}
-                </button>
-                <button type="button" className="plain-button" onClick={handleClear}>
-                  Limpiar
-                </button>
-              </div>
-            </div>
           </ResponsiveGridLayout>
+          <div className="payment-methods-actions-panel">
+            <button type="button" onClick={handleSave}>
+              {editingKey ? "Actualizar" : "Agregar"}
+            </button>
+            <button type="button" className="plain-button" onClick={handleClear}>
+              Limpiar
+            </button>
+          </div>
           </div>
         </section>
         <section key="list" className="card payment-methods-list-card pm-layout-card">

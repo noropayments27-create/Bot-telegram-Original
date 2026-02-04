@@ -639,12 +639,16 @@ body.login-success {
   display: flex;
   flex-direction: column;
   gap: 20px;
+  padding-top: 1.5cm;
 }
 
 .payment-methods-card {
   padding: 20px;
   min-width: 0;
   min-height: 0;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
 }
 
 .payment-methods-header {
@@ -667,6 +671,9 @@ body.login-success {
   display: flex;
   flex-direction: column;
   gap: 12px;
+  flex: 1 1 auto;
+  min-height: 0;
+  overflow: auto;
 }
 
 .payment-methods-banner {
@@ -704,10 +711,12 @@ body.login-success {
   display: flex;
   align-items: center;
   gap: 10px;
+  margin-top: 1.5cm;
 }
 
 .payment-methods-page-grid {
   width: 100%;
+  margin-top: 1.5cm;
 }
 
 .pm-layout-card {
@@ -741,6 +750,7 @@ body.login-success {
 
 .payment-methods-grid {
   width: 100%;
+  min-height: 0;
 }
 
 .pm-grid-item {
@@ -751,7 +761,7 @@ body.login-success {
   border: 1px solid rgba(255, 36, 0, 0.2);
   background: rgba(20, 20, 20, 0.65);
   padding: 10px;
-  overflow: hidden;
+  overflow: visible;
 }
 
 .pm-grid-handle {
@@ -873,6 +883,12 @@ body.login-success {
   gap: 10px;
 }
 
+.payment-methods-actions-panel {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+}
+
 .payment-methods-list-card {
   padding: 20px;
   min-width: 0;
@@ -896,6 +912,13 @@ body.login-success {
 
 .payment-methods-list-scroll table {
   min-width: 600px;
+}
+
+.payment-methods-list-scroll thead th {
+  position: sticky;
+  top: 0;
+  background: rgba(10, 10, 10, 0.95);
+  z-index: 2;
 }
 
 .payment-methods-row-disabled td {
