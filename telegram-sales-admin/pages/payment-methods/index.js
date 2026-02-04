@@ -371,26 +371,7 @@ export default function PaymentMethodsPage() {
             </div>
             <div key="midline" className="pm-grid-item">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
-              <div className="payment-methods-midline">
-                {isCryptoMethod && (
-                  <div className="payment-methods-crypto-inline">
-                    <span className="payment-methods-crypto-label">Tipo de cripto</span>
-                    <div className="payment-methods-crypto-buttons">
-                      {CRYPTO_DESTINATION_OPTIONS.map((option) => (
-                        <button
-                          key={option.key}
-                          type="button"
-                          className={`payment-methods-crypto-button${
-                            cryptoDestinationKey === option.key ? " is-active" : ""
-                          }`}
-                          onClick={() => setCryptoDestinationKey(option.key)}
-                        >
-                          {option.label}
-                        </button>
-                      ))}
-                    </div>
-                  </div>
-                )}
+              <div className="payment-methods-midline-grid">
                 <label className="payment-methods-markup">
                   Markup (%)
                   <div className="payment-methods-inline-field">
@@ -428,6 +409,22 @@ export default function PaymentMethodsPage() {
                     className="payment-methods-order-input"
                   />
                 </label>
+                {isCryptoMethod && (
+                  <div className="payment-methods-crypto-buttons">
+                    {CRYPTO_DESTINATION_OPTIONS.map((option) => (
+                      <button
+                        key={option.key}
+                        type="button"
+                        className={`payment-methods-crypto-button${
+                          cryptoDestinationKey === option.key ? " is-active" : ""
+                        }`}
+                        onClick={() => setCryptoDestinationKey(option.key)}
+                      >
+                        {option.label}
+                      </button>
+                    ))}
+                  </div>
+                )}
               </div>
             </div>
             <div key="destination" className="pm-grid-item">
