@@ -152,9 +152,16 @@ export default function PaymentMethodsPage() {
         }),
       });
       const layout = data?.layout || {};
-      const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
-      setPageLayout(nextPageLayout.filter((item) => item.i !== "header"));
-      setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
+      const savedPageLayout = normalizeLayout(
+        defaultPageLayout,
+        layout.page_layout
+      );
+      const savedFormLayout = normalizeLayout(
+        defaultFormLayout,
+        layout.form_layout
+      );
+      setPageLayout(savedPageLayout.filter((item) => item.i !== "header"));
+      setFormLayout(savedFormLayout);
       setLayoutStatus("saved");
     } catch (err) {
       setLayoutStatus("error");
