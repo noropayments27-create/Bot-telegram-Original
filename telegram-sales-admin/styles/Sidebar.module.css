@@ -122,14 +122,14 @@
 }
 
 .footer {
-  margin-top: auto;
+  margin-top: 0;
   display: grid;
   gap: 10px;
   font-size: 12px;
 }
 
 .usersCounter {
-  margin-top: 16px;
+  margin-top: auto;
   margin-bottom: 1cm;
   padding: 0;
   border-radius: 16px;
