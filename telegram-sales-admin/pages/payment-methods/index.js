@@ -294,27 +294,6 @@ export default function PaymentMethodsPage() {
 
   return (
     <main className="page payment-methods-page">
-      <div className="payment-methods-layout-controls">
-        <button
-          type="button"
-          onClick={handleToggleLayoutEditing}
-          className={layoutEditing ? "is-active" : ""}
-        >
-          {layoutEditing ? "Listo" : "Editar diseño"}
-        </button>
-        {layoutEditing && (
-          <>
-            <button type="button" onClick={handleSaveLayout}>
-              Guardar
-            </button>
-            <button type="button" className="plain-button" onClick={handleResetLayout}>
-              Restablecer
-            </button>
-          </>
-        )}
-        {layoutStatus === "saved" && <span className="muted">Diseño guardado.</span>}
-        {layoutError && <span className="error">{layoutError}</span>}
-      </div>
       <ResponsiveGridLayout
         className="payment-methods-page-grid"
         cols={12}
@@ -475,17 +454,18 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="description" className="pm-grid-item">
+            <div key="description" className="pm-grid-item pm-grid-item-textarea">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
               <label className="payment-methods-description">
                 Descripción
-                <input
+                <textarea
                   type="text"
                   value={form.description}
                   onChange={(event) =>
                     setForm((prev) => ({ ...prev, description: event.target.value }))
                   }
                   placeholder="Descripción del método"
+                  rows={3}
                 />
               </label>
             </div>
@@ -560,6 +540,27 @@ export default function PaymentMethodsPage() {
           </div>
         </section>
       </ResponsiveGridLayout>
+      <div className="payment-methods-layout-controls">
+        <button
+          type="button"
+          onClick={handleToggleLayoutEditing}
+          className={layoutEditing ? "is-active" : ""}
+        >
+          {layoutEditing ? "Listo" : "Editar diseño"}
+        </button>
+        {layoutEditing && (
+          <>
+            <button type="button" onClick={handleSaveLayout}>
+              Guardar
+            </button>
+            <button type="button" className="plain-button" onClick={handleResetLayout}>
+              Restablecer
+            </button>
+          </>
+        )}
+        {layoutStatus === "saved" && <span className="muted">Diseño guardado.</span>}
+        {layoutError && <span className="error">{layoutError}</span>}
+      </div>
     </main>
   );
 }

@@ -712,6 +712,17 @@ body.login-success {
   align-items: center;
   gap: 10px;
   margin-top: 1.5cm;
+  justify-content: center;
+}
+
+.pm-grid-item-textarea {
+  height: auto;
+}
+
+.pm-grid-item-textarea textarea {
+  height: auto;
+  min-height: 120px;
+  resize: vertical;
 }
 
 .payment-methods-page-grid {
