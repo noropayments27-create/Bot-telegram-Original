@@ -2017,9 +2017,10 @@ body.login-success {
 }
 
 .inventory-detail-grid .inventory-card {
-  max-width: 520px;
-  width: 90%;
+  max-width: 420px;
+  width: 50%;
   margin: 0 auto;
+  justify-self: center;
   align-self: stretch;
   min-height: 320px;
 }
