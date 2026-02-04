@@ -2165,6 +2165,10 @@ body.login-success {
   width: calc(100% / 1.2);
 }
 
+.inventory-product.inventory-card {
+  width: calc((100% / 1.2) * 1.25);
+}
+
 .inventory-list {
   margin-top: 16px;
 }
