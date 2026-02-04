@@ -466,7 +466,6 @@ export default function PaymentMethodsPage() {
               </label>
             </div>
             <div key="actions" className="pm-grid-item payment-methods-actions-grid">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
               <div className="payment-methods-actions-panel">
                 <button type="button" onClick={handleSave}>
                   {editingKey ? "Actualizar" : "Agregar"}
