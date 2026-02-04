@@ -833,7 +833,7 @@ body.login-success {
 .payment-methods-midline-grid .payment-methods-crypto-buttons {
   grid-column: 1 / 3;
   justify-content: flex-start;
-  margin-left: -0.5cm;
+  margin-left: -01.5cm;
 }
 
 .payment-methods-order {
@@ -899,7 +899,7 @@ body.login-success {
 }
 
 .payment-methods-crypto-button {
-  padding: 2.7px 5.4px;
+  padding: 2.8px 5.7px;
   font-size: 9px;
   border-radius: 999px;
 }
