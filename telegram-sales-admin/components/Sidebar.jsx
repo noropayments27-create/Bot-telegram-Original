@@ -356,47 +356,49 @@ export default function Sidebar({ open, onClose }) {
         <NotificationsBell variant="sidebar" />
       </div>
 
-      <nav className={styles.nav}>
-        {NAV_ITEMS.map((item) => {
-          const isActive =
-            router.pathname === item.href
-            || (item.href !== "/" && router.pathname.startsWith(item.href));
-          return (
-            <Link
-              key={item.href}
-              href={item.href}
-              className={`${styles.navItem} ${isActive ? styles.navItemActive : ""}`}
-              onClick={() => {
-                if (open && onClose) {
-                  onClose();
-                }
-              }}
-            >
-              {item.icon}
-              <span>{item.label}</span>
-            </Link>
-          );
-        })}
-      </nav>
+      <div className={styles.sidebarContent}>
+        <nav className={styles.nav}>
+          {NAV_ITEMS.map((item) => {
+            const isActive =
+              router.pathname === item.href
+              || (item.href !== "/" && router.pathname.startsWith(item.href));
+            return (
+              <Link
+                key={item.href}
+                href={item.href}
+                className={`${styles.navItem} ${isActive ? styles.navItemActive : ""}`}
+                onClick={() => {
+                  if (open && onClose) {
+                    onClose();
+                  }
+                }}
+              >
+                {item.icon}
+                <span>{item.label}</span>
+              </Link>
+            );
+          })}
+        </nav>
 
-      <div className={styles.usersCounter}>
-        <span className={styles.usersCounterLabel}>Usuarios Totales</span>
-        <span className={styles.usersCounterValue}>
-          {totalUsers === null ? "—" : totalUsers}
-        </span>
-      </div>
+        <div className={styles.usersCounter}>
+          <span className={styles.usersCounterLabel}>Usuarios Totales</span>
+          <span className={styles.usersCounterValue}>
+            {totalUsers === null ? "—" : totalUsers}
+          </span>
+        </div>
 
-      <div className={styles.footer}>
-        <button
-          type="button"
-          className={styles.logoutButton}
-          onClick={() => {
-            clearAuthToken();
-            router.replace("/login");
-          }}
-        >
-          Cerrar sesión
-        </button>
+        <div className={styles.footer}>
+          <button
+            type="button"
+            className={styles.logoutButton}
+            onClick={() => {
+              clearAuthToken();
+              router.replace("/login");
+            }}
+          >
+            Cerrar sesión
+          </button>
+        </div>
       </div>
     </aside>
   );

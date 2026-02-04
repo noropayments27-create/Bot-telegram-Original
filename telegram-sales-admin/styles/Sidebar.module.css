@@ -13,12 +13,19 @@
   padding: 24px 18px;
   z-index: 120;
   transition: transform 0.25s ease;
+  overflow: visible;
+}
+
+.sidebarContent {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
   overflow-y: auto;
   scrollbar-width: none;
   -ms-overflow-style: none;
 }
 
-.sidebar::-webkit-scrollbar {
+.sidebarContent::-webkit-scrollbar {
   width: 0;
   height: 0;
 }
