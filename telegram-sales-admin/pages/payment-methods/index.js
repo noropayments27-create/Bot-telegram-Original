@@ -76,9 +76,8 @@ const defaultFormLayout = [
 ];
 
 const defaultPageLayout = [
-  { i: "header", x: 0, y: 0, w: 12, h: 2, minW: 6, minH: 2 },
-  { i: "form", x: 0, y: 2, w: 12, h: 12, minW: 6, minH: 6 },
-  { i: "list", x: 0, y: 14, w: 12, h: 12, minW: 6, minH: 6 },
+  { i: "form", x: 0, y: 0, w: 12, h: 12, minW: 6, minH: 6 },
+  { i: "list", x: 0, y: 12, w: 12, h: 12, minW: 6, minH: 6 },
 ];
 
 const normalizeLayout = (defaults, saved) => {
@@ -131,7 +130,8 @@ export default function PaymentMethodsPage() {
       try {
         const data = await apiFetch(`/admin/layouts/${layoutApiKey}`);
         const layout = data?.layout || {};
-        setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
+        const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
+        setPageLayout(nextPageLayout.filter((item) => item.i !== "header"));
         setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
       } catch (err) {
         setLayoutError("No se pudo cargar el diseño.");
@@ -152,7 +152,8 @@ export default function PaymentMethodsPage() {
         }),
       });
       const layout = data?.layout || {};
-      setPageLayout(normalizeLayout(defaultPageLayout, layout.page_layout));
+      const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
+      setPageLayout(nextPageLayout.filter((item) => item.i !== "header"));
       setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
       setLayoutStatus("saved");
     } catch (err) {
@@ -191,7 +192,7 @@ export default function PaymentMethodsPage() {
   };
 
   const handleResetLayout = async () => {
-    setPageLayout(defaultPageLayout);
+    setPageLayout(defaultPageLayout.filter((item) => item.i !== "header"));
     setFormLayout(defaultFormLayout);
     await persistLayout(defaultPageLayout, defaultFormLayout);
   };
@@ -307,10 +308,7 @@ export default function PaymentMethodsPage() {
         compactType={null}
         preventCollision
       >
-        <section
-          key="header"
-          className="card payment-methods-card pm-layout-card payment-methods-header-card"
-        >
+        <section key="form" className="card payment-methods-card pm-layout-card">
           {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
           <div className="payment-methods-header">
             <h1 className="payment-methods-title-main">
@@ -320,9 +318,7 @@ export default function PaymentMethodsPage() {
           </div>
           {message && <p className="muted">{message}</p>}
           {error && <p className="error">{error}</p>}
-        </section>
-        <section key="form" className="card payment-methods-card pm-layout-card">
-          {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
+          <h3 className="payment-methods-section-title">Detalles</h3>
           <div className="payment-methods-form">
             <ResponsiveGridLayout
               className="payment-methods-grid"

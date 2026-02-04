@@ -683,6 +683,16 @@ body.login-success {
   justify-content: center;
   gap: 10px;
   margin-top: 0.6cm;
+  width: 100%;
+}
+
+.payment-methods-actions-grid {
+  display: flex;
+  justify-content: center;
+}
+
+.payment-methods-section-title {
+  margin: 12px 0 0;
 }
 
 .payment-methods-actions-grid {
