@@ -2020,7 +2020,7 @@ body.login-success {
 
 .inventory-detail-grid {
   display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.25fr);
   gap: 16px;
   margin-top: 0.8cm;
 }
@@ -2166,7 +2166,8 @@ body.login-success {
 }
 
 .inventory-product.inventory-card {
-  width: calc((100% / 1.2) * 1.25);
+  width: 100%;
+  max-width: none;
 }
 
 .inventory-list {
