@@ -1970,6 +1970,21 @@ body.login-success {
   margin-top: 0;
 }
 
+.inventory-search.inventory-card,
+.inventory-list.inventory-card {
+  width: 70%;
+  max-width: 1000px;
+  margin-left: auto;
+  margin-right: auto;
+}
+
+@media (max-width: 1200px) {
+  .inventory-search.inventory-card,
+  .inventory-list.inventory-card {
+    width: 100%;
+  }
+}
+
 .inventory-card {
   max-width: 100%;
   width: 100%;
