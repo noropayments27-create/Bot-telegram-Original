@@ -451,6 +451,17 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
+            <div key="actions" className="pm-grid-item payment-methods-actions-grid">
+              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+              <div className="payment-methods-actions-panel">
+                <button type="button" onClick={handleSave}>
+                  {editingKey ? "Actualizar" : "Agregar"}
+                </button>
+                <button type="button" className="plain-button" onClick={handleClear}>
+                  Limpiar
+                </button>
+              </div>
+            </div>
             <div key="description" className="pm-grid-item pm-grid-item-textarea">
               {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
               <label className="payment-methods-description">
@@ -467,14 +478,6 @@ export default function PaymentMethodsPage() {
               </label>
             </div>
           </ResponsiveGridLayout>
-          <div className="payment-methods-actions-panel">
-            <button type="button" onClick={handleSave}>
-              {editingKey ? "Actualizar" : "Agregar"}
-            </button>
-            <button type="button" className="plain-button" onClick={handleClear}>
-              Limpiar
-            </button>
-          </div>
           </div>
         </section>
         <section key="list" className="card payment-methods-list-card pm-layout-card">
