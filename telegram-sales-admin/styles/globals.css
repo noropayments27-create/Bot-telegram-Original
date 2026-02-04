@@ -2158,6 +2158,13 @@ body.login-success {
   margin-top: 16px;
 }
 
+.inventory-holds.inventory-card,
+.inventory-product.inventory-card {
+  transform: scale(1.2);
+  transform-origin: top left;
+  width: calc(100% / 1.2);
+}
+
 .inventory-list {
   margin-top: 16px;
 }
