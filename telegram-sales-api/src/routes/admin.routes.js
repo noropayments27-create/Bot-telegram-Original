@@ -176,6 +176,31 @@ let globalCommissionTimer = null;
 let globalCommissionEndsAt = null;
 let globalCommissionWatchStarted = false;
 
+async function getPaymentMethodMarkup(pool, paymentMethod) {
+  const rawKey = normalizeMethodKey(paymentMethod);
+  if (!rawKey) {
+    return null;
+  }
+  let key = rawKey;
+  if (["BTC", "USDT", "USDT_BSC", "USDT_TRON", "LTC"].includes(key)) {
+    key = "CRYPTO";
+  } else if (key === "MERCADO_PAGO") {
+    key = "MERCADOPAGO";
+  } else if (key === "BINANCE") {
+    key = "BINANCE_ID";
+  }
+  const res = await pool.query(
+    "SELECT markup FROM payment_methods WHERE method_key = $1",
+    [key]
+  );
+  const rawMarkup = res.rows[0]?.markup;
+  if (rawMarkup == null || rawMarkup === "") {
+    return null;
+  }
+  const value = Number(String(rawMarkup).trim());
+  return Number.isFinite(value) ? value : null;
+}
+
 async function notifyAffiliates(pool, message) {
   if (!message) {
     return;
@@ -457,6 +482,20 @@ async function updateAdminOrderNotifications(pool, orderId) {
         localTotal = await calculateLocalAmountForAdminNotify(subtotalUsd, paymentMethod);
       } catch (error) {
         console.error("Failed to calculate local total", error);
+      }
+    }
+    if (localTotal && localTotal.amount != null) {
+      try {
+        const markupPercent = await getPaymentMethodMarkup(pool, paymentMethod);
+        if (markupPercent) {
+          const nextAmount =
+            Number(localTotal.amount) * (1 + Number(markupPercent) / 100);
+          if (Number.isFinite(nextAmount)) {
+            localTotal = { ...localTotal, amount: nextAmount };
+          }
+        }
+      } catch (error) {
+        console.error("Failed to apply markup for admin notify", error);
       }
     }
 
