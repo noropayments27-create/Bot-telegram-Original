@@ -484,9 +484,10 @@ async function updateAdminOrderNotifications(pool, orderId) {
         console.error("Failed to calculate local total", error);
       }
     }
+    let markupPercent = null;
     if (localTotal && localTotal.amount != null) {
       try {
-        const markupPercent = await getPaymentMethodMarkup(pool, paymentMethod);
+        markupPercent = await getPaymentMethodMarkup(pool, paymentMethod);
         if (markupPercent) {
           const nextAmount =
             Number(localTotal.amount) * (1 + Number(markupPercent) / 100);
@@ -509,6 +510,7 @@ async function updateAdminOrderNotifications(pool, orderId) {
       payment,
       subtotalUsd,
       localTotal,
+      markupPercent,
     });
     const replyMarkup = buildOrderNotificationKeyboard({
       id: order.id,

@@ -195,6 +195,7 @@ function buildOrderNotificationCaption({
   payment,
   subtotalUsd,
   localTotal,
+  markupPercent,
 }) {
   const orderNumberText = formatOrderNumber(order?.order_number);
   const telegramId = user?.telegram_id ?? order?.telegram_id ?? "-";
@@ -238,6 +239,10 @@ function buildOrderNotificationCaption({
         localTotal.currency
       )} ${localTotal.currency}`
     );
+  }
+
+  if (markupPercent) {
+    lines.push(`🧮 Markup aplicado: ${markupPercent}%`);
   }
 
   lines.push(
