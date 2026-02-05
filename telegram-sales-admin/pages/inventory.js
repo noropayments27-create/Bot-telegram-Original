@@ -1371,7 +1371,7 @@ export default function InventoryPage() {
                     <div className="stock-toggle-group">
                       <button
                         type="button"
-                        className={`stock-toggle ${!createUnique && !createSimpleUnlimited ? "active" : ""}`}
+                        className={`stock-toggle ${!createOutOfStock && !createUnique && !createSimpleUnlimited ? "active" : ""}`}
                         onClick={() => setCreateStockToggle("stock")}
                         title="Stock limitado: descuenta el stock disponible."
                       >
@@ -1926,7 +1926,7 @@ export default function InventoryPage() {
                         <div className="stock-toggle-group">
                           <button
                             type="button"
-                            className={`stock-toggle ${!editUnique && !simpleUnlimited ? "active" : ""}`}
+                            className={`stock-toggle ${!editOutOfStock && !editUnique && !simpleUnlimited ? "active" : ""}`}
                             onClick={() => setStockToggle("stock")}
                             title="Stock limitado: descuenta el stock disponible."
                           >

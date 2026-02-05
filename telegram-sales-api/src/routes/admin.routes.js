@@ -1351,6 +1351,8 @@ router.post("/products", async (req, res, next) => {
     ? true
     : Boolean(req.body?.show_stock);
   const uniquePurchase = Boolean(req.body?.unique_purchase);
+  const outOfStockProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "out_of_stock");
+  const outOfStock = outOfStockProvided ? Boolean(req.body?.out_of_stock) : null;
   const outOfStock = req.body?.out_of_stock === undefined
     ? false
     : Boolean(req.body?.out_of_stock);
