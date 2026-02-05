@@ -184,13 +184,34 @@ function resolveMediaPayload(payload) {
     url: payload.url,
     path: payload.path,
     filename: payload.filename,
+    caption: payload.caption || "",
+    parse_mode: payload.caption ? "HTML" : undefined,
   };
+}
+
+function resolveTextMessages(payload) {
+  if (!payload || typeof payload !== "object") {
+    return [];
+  }
+  if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+    return payload.messages
+      .map((entry) => String(entry || "").trim())
+      .filter((entry) => entry.length > 0);
+  }
+  const text = payload.text || payload.message || payload.content || payload.body || "";
+  if (!text) {
+    return [];
+  }
+  return [String(text)];
 }
 
 async function deliverProductToTelegram({ telegramId, product, quantity, units, locale = "es" }) {
   let deliveriesCount = 0;
   const payload = normalizePayload(product.delivery_payload);
   const payloadEn = normalizePayload(product.delivery_payload_en);
+  const localizedPayload = locale === "en"
+    ? { ...payload, ...payloadEn }
+    : payload;
 
   if (product.stock_mode === "UNITS") {
     if (!Array.isArray(units) || units.length < quantity) {
@@ -206,19 +227,19 @@ async function deliverProductToTelegram({ telegramId, product, quantity, units, 
   }
 
   if (product.delivery_type === "TEXT") {
-    const text =
-      (locale === "en"
-        ? payloadEn.text || payloadEn.message || payloadEn.content || payloadEn.body
-        : null)
-      || payload.text || payload.message || payload.content || payload.body || "";
-    if (!text) {
+    const messages = resolveTextMessages(localizedPayload);
+    if (messages.length === 0) {
       throw new Error("DELIVERY_TEXT_EMPTY");
     }
-    const message =
-      quantity > 1 ? `x${quantity}\n\n${text}` : text;
-    await sendMessage(telegramId, message, { parse_mode: "HTML" });
-    deliveriesCount += 1;
-    await sleep(DELIVERY_MESSAGE_INTERVAL_MS);
+    const lines = [...messages];
+    if (quantity > 1) {
+      lines[0] = `x${quantity}\n\n${lines[0]}`;
+    }
+    for (const message of lines) {
+      await sendMessage(telegramId, message, { parse_mode: "HTML" });
+      deliveriesCount += 1;
+      await sleep(DELIVERY_MESSAGE_INTERVAL_MS);
+    }
     return deliveriesCount;
   }
 
@@ -260,7 +281,7 @@ async function deliverProductToTelegram({ telegramId, product, quantity, units, 
     await sleep(DELIVERY_MESSAGE_INTERVAL_MS);
   }
 
-  const mediaPayload = resolveMediaPayload(payload);
+  const mediaPayload = resolveMediaPayload(localizedPayload);
   if (product.delivery_type === "IMAGE") {
     await sendPhoto(telegramId, mediaPayload);
     deliveriesCount += 1;

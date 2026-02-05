@@ -61,6 +61,8 @@ export default function InventoryPage() {
     telegram_file_id: "",
     filename: "",
   });
+  const [createDeliveryMessages, setCreateDeliveryMessages] = useState([""]);
+  const [createDeliveryCaption, setCreateDeliveryCaption] = useState("");
   const [createDeliveryTextEn, setCreateDeliveryTextEn] = useState("");
   const [createDescription, setCreateDescription] = useState(
     Array.from({ length: 8 }, () => "⌾ ").join("\n")
@@ -90,6 +92,8 @@ export default function InventoryPage() {
     telegram_file_id: "",
     filename: "",
   });
+  const [editDeliveryMessages, setEditDeliveryMessages] = useState([""]);
+  const [editDeliveryCaption, setEditDeliveryCaption] = useState("");
   const [editDeliveryTextEn, setEditDeliveryTextEn] = useState("");
   const [toast, setToast] = useState("");
   const createDescRefs = useRef([]);
@@ -156,6 +160,55 @@ export default function InventoryPage() {
     const nextValue = lines.map((line) => `⌾ ${line}`).join("\n");
     setter(nextValue);
   };
+
+  const ensureDeliveryMessages = (payload) => {
+    if (!payload || typeof payload !== "object") {
+      return [""];
+    }
+    if (Array.isArray(payload.messages) && payload.messages.length > 0) {
+      return payload.messages.map((entry) => String(entry ?? ""));
+    }
+    const text =
+      payload.text
+      || payload.message
+      || payload.content
+      || payload.body
+      || "";
+    return [String(text)];
+  };
+
+  const sanitizeMessages = (messages) =>
+    (messages || [])
+      .map((entry) => String(entry || "").trim())
+      .filter((entry) => entry.length > 0);
+
+  const updateMessageAt = (setter, index, value) => {
+    setter((prev) => {
+      const next = [...prev];
+      next[index] = value;
+      return next;
+    });
+  };
+
+  const addMessage = (setter) => {
+    setter((prev) => [...prev, ""]);
+  };
+
+  const removeMessage = (setter, index) => {
+    setter((prev) => {
+      if (prev.length <= 1) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== index);
+    });
+  };
+
+  const buildMediaPayload = (payload) => ({
+    url: payload?.url || "",
+    expires_at: payload?.expires_at || "",
+    telegram_file_id: payload?.telegram_file_id || "",
+    filename: payload?.filename || "",
+  });
 
   const handleDescriptionLineKeyDown = (event, refs, index) => {
     if (event.key === "Tab" || event.key === "Enter") {
@@ -431,11 +484,20 @@ export default function InventoryPage() {
         || "",
       filename: data?.product?.delivery_payload?.filename || "",
     });
+    setEditDeliveryMessages(
+      ensureDeliveryMessages(data?.product?.delivery_payload)
+    );
+    setEditDeliveryCaption(
+      String(data?.product?.delivery_payload?.caption || "")
+    );
     setEditDeliveryTextEn(
       data?.product?.delivery_payload_en?.text
         || data?.product?.delivery_payload_en?.message
         || ""
     );
+    if (data?.product?.delivery_payload_en?.caption) {
+      setEditDeliveryCaption(String(data.product.delivery_payload_en.caption));
+    }
     if (data?.product?.stock_mode === "SIMPLE" && data?.product?.unique_purchase) {
       setSimpleStock("");
       setSimpleUnlimited(false);
@@ -629,9 +691,24 @@ export default function InventoryPage() {
       const trimmedNameEn = createNameEn.trim();
       const descriptionEnRaw = buildDescriptionPayload(createDescriptionEn);
       const descriptionEn = descriptionEnRaw || buildDescriptionPayload(createDescription);
+      const basePayload = buildMediaPayload(createDeliveryPayload);
+      const messages = sanitizeMessages(createDeliveryMessages);
+      const deliveryPayload = {
+        ...basePayload,
+        ...(messages.length > 1
+          ? { messages }
+          : { text: messages[0] || "" }),
+      };
+      const caption = createDeliveryCaption.trim();
+      if (caption) {
+        deliveryPayload.caption = caption;
+      }
       const deliveryPayloadEn = createDeliveryTextEn.trim()
         ? { text: createDeliveryTextEn.trim() }
         : null;
+      if (deliveryPayloadEn && caption) {
+        deliveryPayloadEn.caption = caption;
+      }
       const imageUrl = createImageUrl.trim();
       const data = await apiFetch("/admin/products", {
         method: "POST",
@@ -646,7 +723,7 @@ export default function InventoryPage() {
           unique_purchase: createUnique,
           out_of_stock: createOutOfStock,
           delivery_type: createDeliveryType,
-          delivery_payload: createDeliveryPayload,
+          delivery_payload: deliveryPayload,
           delivery_payload_en: deliveryPayloadEn,
           description: buildDescriptionPayload(createDescription),
           description_en: descriptionEn,
@@ -669,14 +746,16 @@ export default function InventoryPage() {
       setCreateDescription(Array.from({ length: 8 }, () => "⌾ ").join("\n"));
       setCreateDescriptionEn("");
       setCreateDeliveryType("TEXT");
-      setCreateDeliveryPayload({
-        text: "",
-        url: "",
-        expires_at: "",
-        telegram_file_id: "",
-        filename: "",
-      });
-      setCreateDeliveryTextEn("");
+    setCreateDeliveryPayload({
+      text: "",
+      url: "",
+      expires_at: "",
+      telegram_file_id: "",
+      filename: "",
+    });
+    setCreateDeliveryMessages([""]);
+    setCreateDeliveryCaption("");
+    setCreateDeliveryTextEn("");
       setCreateStep("details");
       setCreateOpen(false);
       notifyMessage("Producto creado");
@@ -873,9 +952,24 @@ export default function InventoryPage() {
     const trimmedNameEn = editNameEn.trim();
     const descriptionEnRaw = buildDescriptionPayload(editDescriptionEn);
     const descriptionEn = descriptionEnRaw || buildDescriptionPayload(editDescription);
+    const basePayload = buildMediaPayload(editDeliveryPayload);
+    const messages = sanitizeMessages(editDeliveryMessages);
+    const deliveryPayload = {
+      ...basePayload,
+      ...(messages.length > 1
+        ? { messages }
+        : { text: messages[0] || "" }),
+    };
+    const caption = editDeliveryCaption.trim();
+    if (caption) {
+      deliveryPayload.caption = caption;
+    }
     const deliveryPayloadEn = editDeliveryTextEn.trim()
       ? { text: editDeliveryTextEn.trim() }
       : null;
+    if (deliveryPayloadEn && caption) {
+      deliveryPayloadEn.caption = caption;
+    }
     const imageUrl = editImageUrl.trim();
     setEditIsFree(Number(normalizedPrice || 0) <= 0);
     try {
@@ -894,7 +988,7 @@ export default function InventoryPage() {
           out_of_stock: editOutOfStock,
           stock_mode: editStockMode,
           delivery_type: editDeliveryType,
-          delivery_payload: editDeliveryPayload,
+          delivery_payload: deliveryPayload,
           delivery_payload_en: deliveryPayloadEn,
         }),
       });
@@ -1177,19 +1271,40 @@ export default function InventoryPage() {
                         </select>
                       </label>
                       {createDeliveryType === "TEXT" && (
-                        <label>
-                          Texto de entrega
-                          <textarea
-                            rows={6}
-                            value={createDeliveryPayload.text || ""}
-                            onChange={(event) =>
-                              setCreateDeliveryPayload((prev) => ({
-                                ...prev,
-                                text: event.target.value,
-                              }))
-                            }
-                          />
-                        </label>
+                        <div className="delivery-messages">
+                          <span>Mensajes de entrega</span>
+                          {createDeliveryMessages.map((message, index) => (
+                            <div key={`create-delivery-${index}`} className="delivery-message-row">
+                              <textarea
+                                rows={4}
+                                value={message}
+                                onChange={(event) =>
+                                  updateMessageAt(
+                                    setCreateDeliveryMessages,
+                                    index,
+                                    event.target.value
+                                  )
+                                }
+                                placeholder={`Mensaje ${index + 1}`}
+                              />
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() => removeMessage(setCreateDeliveryMessages, index)}
+                                disabled={createDeliveryMessages.length <= 1}
+                              >
+                                Eliminar
+                              </button>
+                            </div>
+                          ))}
+                          <button
+                            type="button"
+                            className="ghost"
+                            onClick={() => addMessage(setCreateDeliveryMessages)}
+                          >
+                            Agregar mensaje
+                          </button>
+                        </div>
                       )}
                       {createDeliveryType === "TEXT" && (
                         <label>
@@ -1288,6 +1403,15 @@ export default function InventoryPage() {
                                   filename: event.target.value,
                                 }))
                               }
+                            />
+                          </label>
+                          <label>
+                            Texto para la entrega (opcional)
+                            <textarea
+                              rows={3}
+                              value={createDeliveryCaption}
+                              onChange={(event) => setCreateDeliveryCaption(event.target.value)}
+                              placeholder="Texto que acompaña la imagen/video"
                             />
                           </label>
                         </>
@@ -1994,19 +2118,40 @@ export default function InventoryPage() {
                           </select>
                         </label>
                         {editDeliveryType === "TEXT" && (
-                          <label>
-                            Texto de entrega
-                            <textarea
-                              rows={6}
-                              value={editDeliveryPayload.text || ""}
-                              onChange={(event) =>
-                                setEditDeliveryPayload((prev) => ({
-                                  ...prev,
-                                  text: event.target.value,
-                                }))
-                              }
-                            />
-                          </label>
+                          <div className="delivery-messages">
+                            <span>Mensajes de entrega</span>
+                            {editDeliveryMessages.map((message, index) => (
+                              <div key={`edit-delivery-${index}`} className="delivery-message-row">
+                                <textarea
+                                  rows={4}
+                                  value={message}
+                                  onChange={(event) =>
+                                    updateMessageAt(
+                                      setEditDeliveryMessages,
+                                      index,
+                                      event.target.value
+                                    )
+                                  }
+                                  placeholder={`Mensaje ${index + 1}`}
+                                />
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() => removeMessage(setEditDeliveryMessages, index)}
+                                  disabled={editDeliveryMessages.length <= 1}
+                                >
+                                  Eliminar
+                                </button>
+                              </div>
+                            ))}
+                            <button
+                              type="button"
+                              className="ghost"
+                              onClick={() => addMessage(setEditDeliveryMessages)}
+                            >
+                              Agregar mensaje
+                            </button>
+                          </div>
                         )}
                         {editDeliveryType === "TEXT" && (
                           <label>
@@ -2105,6 +2250,15 @@ export default function InventoryPage() {
                                     filename: event.target.value,
                                   }))
                                 }
+                              />
+                            </label>
+                            <label>
+                              Texto para la entrega (opcional)
+                              <textarea
+                                rows={3}
+                                value={editDeliveryCaption}
+                                onChange={(event) => setEditDeliveryCaption(event.target.value)}
+                                placeholder="Texto que acompaña la imagen/video"
                               />
                             </label>
                           </>
