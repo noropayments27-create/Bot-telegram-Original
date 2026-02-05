@@ -213,6 +213,7 @@ export default function InventoryPage() {
   };
 
   const setStockToggle = (mode) => {
+    setEditOutOfStock(false);
     if (mode === "stock") {
       setEditShowStock(true);
       setSimpleUnlimited(false);
@@ -238,6 +239,7 @@ export default function InventoryPage() {
   };
 
   const setCreateStockToggle = (mode) => {
+    setCreateOutOfStock(false);
     if (mode === "stock") {
       setCreateShowStock(true);
       setCreateSimpleUnlimited(false);
@@ -260,6 +262,28 @@ export default function InventoryPage() {
       setCreateUnique(true);
       setCreateSimpleStock("");
     }
+  };
+
+  const toggleCreateOutOfStock = () => {
+    setCreateOutOfStock((prev) => {
+      const next = !prev;
+      if (next) {
+        setCreateSimpleUnlimited(false);
+        setCreateUnique(false);
+      }
+      return next;
+    });
+  };
+
+  const toggleEditOutOfStock = () => {
+    setEditOutOfStock((prev) => {
+      const next = !prev;
+      if (next) {
+        setSimpleUnlimited(false);
+        setEditUnique(false);
+      }
+      return next;
+    });
   };
 
   const resolveErrorMessage = (err, fallback) => {
@@ -1372,7 +1396,7 @@ export default function InventoryPage() {
                       <button
                         type="button"
                         className={`stock-toggle ${createOutOfStock ? "active" : ""}`}
-                        onClick={() => setCreateOutOfStock((prev) => !prev)}
+                        onClick={toggleCreateOutOfStock}
                         title="Producto sin stock temporalmente."
                       >
                         Sin Stock
@@ -1386,7 +1410,7 @@ export default function InventoryPage() {
                       <button
                         type="button"
                         className={`stock-toggle ${createOutOfStock ? "active" : ""}`}
-                        onClick={() => setCreateOutOfStock((prev) => !prev)}
+                        onClick={toggleCreateOutOfStock}
                         title="Producto sin stock temporalmente."
                       >
                         Sin Stock
@@ -1927,7 +1951,7 @@ export default function InventoryPage() {
                           <button
                             type="button"
                             className={`stock-toggle ${editOutOfStock ? "active" : ""}`}
-                            onClick={() => setEditOutOfStock((prev) => !prev)}
+                            onClick={toggleEditOutOfStock}
                             title="Producto sin stock temporalmente."
                           >
                             Sin Stock
@@ -1942,7 +1966,7 @@ export default function InventoryPage() {
                         <button
                           type="button"
                           className={`stock-toggle ${editOutOfStock ? "active" : ""}`}
-                          onClick={() => setEditOutOfStock((prev) => !prev)}
+                          onClick={toggleEditOutOfStock}
                           title="Producto sin stock temporalmente."
                         >
                           Sin Stock
