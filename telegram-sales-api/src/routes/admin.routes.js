@@ -1489,6 +1489,8 @@ router.post("/products/:id/update", async (req, res, next) => {
     ? true
     : Boolean(req.body?.show_stock);
   const uniquePurchase = Boolean(req.body?.unique_purchase);
+  const outOfStockProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "out_of_stock");
+  const outOfStock = outOfStockProvided ? Boolean(req.body?.out_of_stock) : null;
 
   const stockMode = String(req.body?.stock_mode || "").toUpperCase();
   if (!allowedStockModes.includes(stockMode)) {
