@@ -324,7 +324,7 @@ MESSAGES = {
         "screenshot_received_already": "❌ No se pudo enviar, espera confirmación de tu primera imagen.",
         "wait_products_empty": "No hay mas productos disponibles.",
         "order_expired_notice": "⛔️ La orden actual ya no está disponible (expiró o fue cancelada) te redirijo al menú principal ⏳",
-        "product_out_of_stock": "📦 Sin stock disponible.",
+        "product_out_of_stock": "❌ Producto agotado por el momento.",
     },
     "en": {
         "access_restricted": "⛔️ Access restricted.\n\nIf you think this is a mistake, contact support and we'll help you. 🤝",
@@ -649,7 +649,7 @@ MESSAGES = {
         "screenshot_received_already": "❌ Could not send. Please wait for confirmation of your first image.",
         "wait_products_empty": "No more products available.",
         "order_expired_notice": "⛔️ The current order is no longer available (expired or canceled) redirecting to main menu ⏳",
-        "product_out_of_stock": "📦 Out of stock.",
+        "product_out_of_stock": "❌ Product out of stock for now.",
     },
 }
 

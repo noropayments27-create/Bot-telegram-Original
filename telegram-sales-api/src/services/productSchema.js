@@ -10,6 +10,7 @@ async function ensureProductCategorySchema(pool) {
      ADD COLUMN IF NOT EXISTS name_en text,
      ADD COLUMN IF NOT EXISTS description_en text,
      ADD COLUMN IF NOT EXISTS image_url text,
+     ADD COLUMN IF NOT EXISTS out_of_stock boolean NOT NULL DEFAULT false,
      ADD COLUMN IF NOT EXISTS delivery_payload_en jsonb,
      ADD COLUMN IF NOT EXISTS delivery_template_en text`
   );

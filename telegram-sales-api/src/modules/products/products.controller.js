@@ -67,6 +67,7 @@ async function listProducts(req, res, next) {
               p.image_url,
               p.price,
               p.is_active,
+              p.out_of_stock,
               p.delivery_type,
               p.delivery_payload,
               p.created_at,

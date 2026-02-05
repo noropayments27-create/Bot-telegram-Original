@@ -1351,6 +1351,11 @@ router.post("/products", async (req, res, next) => {
     ? true
     : Boolean(req.body?.show_stock);
   const uniquePurchase = Boolean(req.body?.unique_purchase);
+  const outOfStockProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "out_of_stock");
+  const outOfStock = outOfStockProvided ? Boolean(req.body?.out_of_stock) : null;
+  const outOfStock = req.body?.out_of_stock === undefined
+    ? false
+    : Boolean(req.body?.out_of_stock);
   let skuKey = typeof req.body?.sku_key === "string" && req.body.sku_key.trim()
     ? req.body.sku_key.trim()
     : "";
@@ -1388,8 +1393,8 @@ router.post("/products", async (req, res, next) => {
         `INSERT INTO products
           (sku_key, name, description, name_en, description_en, image_url, price, is_active,
            delivery_type, delivery_payload, delivery_payload_en, stock_mode, stock_qty, show_stock,
-           unique_purchase, category_key)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, $12, $13, $14, $15)
+           unique_purchase, out_of_stock, category_key)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, $12, $13, $14, $15, $16)
          RETURNING *`,
         [
           skuKey,
@@ -1406,6 +1411,7 @@ router.post("/products", async (req, res, next) => {
           stockQty,
           showStock,
           uniquePurchase,
+          outOfStock,
           categoryKey || "TIENDA",
         ]
       );
@@ -1533,6 +1539,7 @@ router.post("/products/:id/update", async (req, res, next) => {
              delivery_payload = COALESCE($11::jsonb, delivery_payload),
              delivery_payload_en = COALESCE($12::jsonb, delivery_payload_en),
              category_key = COALESCE($13, category_key),
+             out_of_stock = CASE WHEN $16 THEN $17 ELSE out_of_stock END,
              updated_at = now()
          WHERE id = $1
          RETURNING *`,
@@ -1552,6 +1559,8 @@ router.post("/products/:id/update", async (req, res, next) => {
           categoryKey || null,
           imageUrlProvided,
           imageUrl || null,
+          outOfStockProvided,
+          outOfStock,
         ]
       );
 
@@ -1826,6 +1835,7 @@ router.get("/stock/inspect", async (req, res, next) => {
         stock_mode: product.stock_mode,
         stock_qty: product.stock_qty,
         unique_purchase: product.unique_purchase,
+        out_of_stock: product.out_of_stock,
         delivery_type: product.delivery_type,
         delivery_payload: product.delivery_payload,
         delivery_payload_en: product.delivery_payload_en,

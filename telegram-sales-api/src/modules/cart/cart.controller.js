@@ -1,4 +1,5 @@
 const { getPool } = require("../../db");
+const { ensureProductCategorySchema } = require("../../services/productSchema");
 
 function normalizeTelegramId(value) {
   if (value === undefined || value === null) {
@@ -180,6 +181,7 @@ async function addToCart(req, res, next) {
   }
 
   const pool = getPool();
+  await ensureProductCategorySchema(pool);
   const client = await pool.connect();
 
   try {
@@ -195,6 +197,7 @@ async function addToCart(req, res, next) {
       `SELECT p.id,
               p.name,
               p.price,
+              p.out_of_stock,
               p.stock_mode,
               p.stock_qty,
               p.unique_purchase,
@@ -222,6 +225,14 @@ async function addToCart(req, res, next) {
     }
 
     const product = productRes.rows[0];
+    if (product.out_of_stock) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "OUT_OF_STOCK",
+        message: "❌ Producto agotado por el momento.",
+      });
+    }
     const cartItemRes = await client.query(
       `SELECT qty
        FROM cart_items
@@ -383,6 +394,7 @@ async function clearCart(req, res, next) {
   }
 
   const pool = getPool();
+  await ensureProductCategorySchema(pool);
   const client = await pool.connect();
 
   try {
@@ -436,6 +448,7 @@ async function checkoutCart(req, res, next) {
       `SELECT ci.*,
               p.name,
               p.price,
+              p.out_of_stock,
               p.stock_mode,
               p.stock_qty,
               p.unique_purchase
@@ -525,6 +538,17 @@ async function checkoutCart(req, res, next) {
 
     for (const item of itemsRes.rows) {
       const qty = Number(item.qty);
+      if (item.out_of_stock) {
+        console.log("[cart/checkout] out_of_stock:", {
+          product_id: item.product_id,
+        });
+        await client.query("ROLLBACK");
+        return res.status(409).json({
+          ok: false,
+          error: "OUT_OF_STOCK",
+          message: "❌ Producto agotado por el momento.",
+        });
+      }
       if (item.stock_mode === "SIMPLE") {
         if (item.unique_purchase) {
           continue;

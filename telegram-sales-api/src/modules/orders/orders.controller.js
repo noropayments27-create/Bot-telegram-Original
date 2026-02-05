@@ -5,6 +5,7 @@ const { getAffiliateLevel } = require("../../services/affiliateLevels");
 const { listPaymentMethods } = require("../../services/paymentMethods");
 const { getBotAssets } = require("../../services/botAssets");
 const { sendPhoto } = require("../../services/telegram");
+const { ensureProductCategorySchema } = require("../../services/productSchema");
 const {
   recordAdminOrderNotification,
   buildOrderNotificationCaption,
@@ -58,6 +59,7 @@ async function createOrder(req, res, next) {
   }
 
   const pool = getPool();
+  await ensureProductCategorySchema(pool);
   const client = await pool.connect();
 
   try {
@@ -78,6 +80,14 @@ async function createOrder(req, res, next) {
     if (!product.is_active) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "Product inactive" });
+    }
+    if (product.out_of_stock) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({
+        ok: false,
+        error: "OUT_OF_STOCK",
+        message: "❌ Producto agotado por el momento.",
+      });
     }
 
     const isFreeProduct = Number(product.price || 0) <= 0;

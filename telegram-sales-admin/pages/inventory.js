@@ -51,6 +51,7 @@ export default function InventoryPage() {
   const [createMode, setCreateMode] = useState("SIMPLE");
   const [createShowStock, setCreateShowStock] = useState(true);
   const [createUnique, setCreateUnique] = useState(false);
+  const [createOutOfStock, setCreateOutOfStock] = useState(false);
   const [createStep, setCreateStep] = useState("details");
   const [createDeliveryType, setCreateDeliveryType] = useState("TEXT");
   const [createDeliveryPayload, setCreateDeliveryPayload] = useState({
@@ -78,6 +79,7 @@ export default function InventoryPage() {
   const [editDescriptionEn, setEditDescriptionEn] = useState("");
   const [editShowStock, setEditShowStock] = useState(true);
   const [editUnique, setEditUnique] = useState(false);
+  const [editOutOfStock, setEditOutOfStock] = useState(false);
   const [editStockMode, setEditStockMode] = useState("SIMPLE");
   const [editStep, setEditStep] = useState("details");
   const [editDeliveryType, setEditDeliveryType] = useState("TEXT");
@@ -179,6 +181,7 @@ export default function InventoryPage() {
       createMode === "SIMPLE"
       && !createSimpleUnlimited
       && !createUnique
+      && !createOutOfStock
       && (createSimpleStock === "" || Number(createSimpleStock) <= 0)
     ) {
       notifyWarning("Ingresa el stock o marca Ilimitado/Unico.");
@@ -200,6 +203,7 @@ export default function InventoryPage() {
       editStockMode === "SIMPLE"
       && !simpleUnlimited
       && !editUnique
+      && !editOutOfStock
       && (simpleStock === "" || Number(simpleStock) <= 0)
     ) {
       notifyWarning("Ingresa el stock o marca Ilimitado/Unico.");
@@ -387,6 +391,7 @@ export default function InventoryPage() {
       data?.product?.show_stock === undefined ? true : Boolean(data.product.show_stock)
     );
     setEditUnique(Boolean(data?.product?.unique_purchase));
+    setEditOutOfStock(Boolean(data?.product?.out_of_stock));
     setEditStockMode(data?.product?.stock_mode || "SIMPLE");
     setEditDeliveryType(String(data?.product?.delivery_type || "TEXT").toUpperCase());
     setEditDeliveryPayload({
@@ -615,6 +620,7 @@ export default function InventoryPage() {
           stock_mode: createMode,
           show_stock: createShowStock,
           unique_purchase: createUnique,
+          out_of_stock: createOutOfStock,
           delivery_type: createDeliveryType,
           delivery_payload: createDeliveryPayload,
           delivery_payload_en: deliveryPayloadEn,
@@ -633,6 +639,7 @@ export default function InventoryPage() {
       setCreateMode("SIMPLE");
       setCreateShowStock(true);
       setCreateUnique(false);
+      setCreateOutOfStock(false);
       setCreateSimpleStock("");
       setCreateSimpleUnlimited(false);
       setCreateDescription(Array.from({ length: 8 }, () => "⌾ ").join("\n"));
@@ -860,6 +867,7 @@ export default function InventoryPage() {
           description_en: descriptionEn,
           show_stock: editShowStock,
           unique_purchase: editUnique,
+          out_of_stock: editOutOfStock,
           stock_mode: editStockMode,
           delivery_type: editDeliveryType,
           delivery_payload: editDeliveryPayload,
@@ -1360,6 +1368,28 @@ export default function InventoryPage() {
                         title="Compra unica por usuario y stock ilimitado."
                       >
                         Unico
+                      </button>
+                      <button
+                        type="button"
+                        className={`stock-toggle ${createOutOfStock ? "active" : ""}`}
+                        onClick={() => setCreateOutOfStock((prev) => !prev)}
+                        title="Producto sin stock temporalmente."
+                      >
+                        Sin Stock
+                      </button>
+                    </div>
+                  </div>
+                )}
+                {createMode !== "SIMPLE" && (
+                  <div className="simple-stock-row">
+                    <div className="stock-toggle-group">
+                      <button
+                        type="button"
+                        className={`stock-toggle ${createOutOfStock ? "active" : ""}`}
+                        onClick={() => setCreateOutOfStock((prev) => !prev)}
+                        title="Producto sin stock temporalmente."
+                      >
+                        Sin Stock
                       </button>
                     </div>
                   </div>
@@ -1894,9 +1924,31 @@ export default function InventoryPage() {
                           >
                             Unico
                           </button>
+                          <button
+                            type="button"
+                            className={`stock-toggle ${editOutOfStock ? "active" : ""}`}
+                            onClick={() => setEditOutOfStock((prev) => !prev)}
+                            title="Producto sin stock temporalmente."
+                          >
+                            Sin Stock
+                          </button>
                         </div>
                       </div>
                     </>
+                  )}
+                  {editStockMode !== "SIMPLE" && (
+                    <div className="simple-stock-row">
+                      <div className="stock-toggle-group">
+                        <button
+                          type="button"
+                          className={`stock-toggle ${editOutOfStock ? "active" : ""}`}
+                          onClick={() => setEditOutOfStock((prev) => !prev)}
+                          title="Producto sin stock temporalmente."
+                        >
+                          Sin Stock
+                        </button>
+                      </div>
+                    </div>
                   )}
                 </div>
                   {editStep === "delivery" && editStockMode === "SIMPLE" ? (

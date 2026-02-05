@@ -827,7 +827,9 @@ def format_products(
     lines = [t(locale, "shop_products_page").format(page=page), ""]
     for idx, item in enumerate(items, start=1):
         name = html.escape(str(item.get("display_name") or ""))
-        if item.get("unique_purchase") and item.get("already_purchased"):
+        if item.get("out_of_stock") or (
+            item.get("unique_purchase") and item.get("already_purchased")
+        ):
             name = f"<s>{name}</s>"
         lines.append(f"{idx}. {name}")
         stock_line = _build_stock_line(item)
@@ -843,7 +845,9 @@ def format_category_products(
     lines = [t(locale, "category_page_title").format(title=title, page=1), ""]
     for idx, item in enumerate(items, start=1):
         name = html.escape(str(item.get("display_name") or ""))
-        if item.get("unique_purchase") and item.get("already_purchased"):
+        if item.get("out_of_stock") or (
+            item.get("unique_purchase") and item.get("already_purchased")
+        ):
             name = f"<s>{name}</s>"
         lines.append(f"{idx}. {name}")
         stock_line = _build_stock_line(item)
@@ -898,6 +902,7 @@ def _normalize_product(product: Dict[str, Any]) -> Dict[str, Any]:
         "show_stock": product.get("show_stock"),
         "unique_purchase": product.get("unique_purchase"),
         "already_purchased": product.get("already_purchased"),
+        "out_of_stock": product.get("out_of_stock"),
         "created_at": product.get("created_at"),
     }
 def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str:
@@ -906,6 +911,8 @@ def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str
         return ""
     return f"{t(locale, 'product_code_label').format(code=code)}\n\n"
 def _build_stock_line(product: Dict[str, Any]) -> str:
+    if product.get("out_of_stock") is True:
+        return "📦 Sin Stock ❌"
     if product.get("show_stock") is not True:
         return ""
     if product.get("stock_is_unlimited") is True:
@@ -1252,6 +1259,9 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     product = items[index - 1]
+    if product.get("out_of_stock"):
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        return
     await state.update_data(selected_product_id=product["id"])
     text = (
         f"{product['display_name']}\n\n"
@@ -1297,6 +1307,9 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
     item = items[index - 1]
+    if item.get("out_of_stock"):
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        return
     await state.update_data(selected_product_id=item["id"])
     text = (
         f"{item['display_name']}\n\n"
@@ -1352,6 +1365,9 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
             reply_markup=build_detail_back_keyboard(page, locale),
         )
         await callback.answer()
+        return
+    if product.get("out_of_stock"):
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     order_payload = {
         "telegram_id": callback.from_user.id,
@@ -1430,6 +1446,9 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         )
         await callback.answer()
         return
+    if product.get("out_of_stock"):
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
+        return
     order_payload = {
         "telegram_id": callback.from_user.id,
         "product_id": product["id"],
@@ -1503,6 +1522,9 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     product = items[index - 1]
     if not product.get("id"):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
+        return
+    if product.get("out_of_stock"):
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     try:
         result = await api_client.add_to_cart(
@@ -1599,6 +1621,9 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     item = items[index - 1]
     if not item.get("id"):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
+        return
+    if item.get("out_of_stock"):
+        await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     try:
         result = await api_client.add_to_cart(
