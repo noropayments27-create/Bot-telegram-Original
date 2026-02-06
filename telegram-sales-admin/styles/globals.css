@@ -755,6 +755,9 @@ body.login-success {
 .payment-methods-page-grid {
   width: 100%;
   margin-top: 0.5cm;
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 20px;
 }
 
 .pm-layout-card {
@@ -789,6 +792,55 @@ body.login-success {
 .payment-methods-grid {
   width: 100%;
   min-height: 0;
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  gap: 12px;
+  grid-template-areas:
+    "key label midline midline"
+    "destination destination description description"
+    "actions actions description description";
+}
+
+.pm-grid-item-key {
+  grid-area: key;
+}
+
+.pm-grid-item-label {
+  grid-area: label;
+}
+
+.pm-grid-item-midline {
+  grid-area: midline;
+}
+
+.pm-grid-item-destination {
+  grid-area: destination;
+}
+
+.pm-grid-item-description {
+  grid-area: description;
+}
+
+.payment-methods-actions-grid {
+  grid-area: actions;
+}
+
+@media (max-width: 1100px) {
+  .payment-methods-page-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .payment-methods-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "key label"
+      "midline midline"
+      "destination destination"
+      "description description"
+      "actions actions";
+  }
 }
 
 .pm-grid-item {

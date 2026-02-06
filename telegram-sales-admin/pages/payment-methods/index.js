@@ -3,9 +3,6 @@ import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../../lib/api";
 import { IconPayments } from "../../components/PanelIcons";
-import GridLayout, { WidthProvider } from "react-grid-layout";
-
-const ResponsiveGridLayout = WidthProvider(GridLayout);
 
 const CRYPTO_DESTINATION_OPTIONS = [
   { key: "btc", label: "BTC" },
@@ -65,43 +62,12 @@ const emptyForm = {
   enabled: false,
 };
 
-const layoutApiKey = "payment-methods";
-
-const defaultFormLayout = [
-  { i: "key", x: 0, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-  { i: "label", x: 3, y: 0, w: 3, h: 2, minW: 2, minH: 2 },
-  { i: "midline", x: 0, y: 2, w: 12, h: 2, minW: 4, minH: 2 },
-  { i: "destination", x: 0, y: 4, w: 8, h: 4, minW: 4, minH: 3 },
-  { i: "description", x: 0, y: 8, w: 8, h: 2, minW: 3, minH: 2 },
-];
-
-const defaultPageLayout = [
-  { i: "form", x: 0, y: 0, w: 12, h: 12, minW: 6, minH: 6 },
-  { i: "list", x: 0, y: 12, w: 12, h: 12, minW: 6, minH: 6 },
-];
-
-const normalizeLayout = (defaults, saved) => {
-  if (!Array.isArray(saved)) {
-    return defaults;
-  }
-  const savedMap = new Map(saved.map((item) => [item.i, item]));
-  return defaults.map((item) => ({
-    ...item,
-    ...(savedMap.get(item.i) || {}),
-  }));
-};
-
 export default function PaymentMethodsPage() {
   const router = useRouter();
   const [methods, setMethods] = useState([]);
   const [form, setForm] = useState(emptyForm);
   const [editingKey, setEditingKey] = useState("");
   const [cryptoDestinationKey, setCryptoDestinationKey] = useState("usdt_bsc");
-  const [layoutEditing, setLayoutEditing] = useState(false);
-  const [formLayout, setFormLayout] = useState(defaultFormLayout);
-  const [pageLayout, setPageLayout] = useState(defaultPageLayout);
-  const [layoutStatus, setLayoutStatus] = useState("");
-  const [layoutError, setLayoutError] = useState("");
   const [message, setMessage] = useState("");
   const [error, setError] = useState("");
 
@@ -124,96 +90,6 @@ export default function PaymentMethodsPage() {
   useEffect(() => {
     loadMethods();
   }, []);
-
-  useEffect(() => {
-    const loadLayouts = async () => {
-      try {
-        const data = await apiFetch(`/admin/layouts/${layoutApiKey}`);
-        const layout = data?.layout || {};
-        const nextPageLayout = normalizeLayout(defaultPageLayout, layout.page_layout);
-        setPageLayout(nextPageLayout.filter((item) => item.i !== "header"));
-        setFormLayout(normalizeLayout(defaultFormLayout, layout.form_layout));
-      } catch (err) {
-        setLayoutError("No se pudo cargar el diseño.");
-      }
-    };
-    loadLayouts();
-  }, []);
-
-  const persistLayout = async (nextPageLayout, nextFormLayout) => {
-    try {
-      setLayoutStatus("saving");
-      setLayoutError("");
-      const data = await apiFetch(`/admin/layouts/${layoutApiKey}`, {
-        method: "POST",
-        body: JSON.stringify({
-          page_layout: nextPageLayout,
-          form_layout: nextFormLayout,
-        }),
-      });
-      const layout = data?.layout || {};
-      const savedPageLayout = normalizeLayout(
-        defaultPageLayout,
-        layout.page_layout
-      );
-      const savedFormLayout = normalizeLayout(
-        defaultFormLayout,
-        layout.form_layout
-      );
-      setPageLayout(savedPageLayout.filter((item) => item.i !== "header"));
-      setFormLayout(savedFormLayout);
-      setLayoutStatus("saved");
-    } catch (err) {
-      setLayoutStatus("error");
-      const status = err?.status ? ` (status ${err.status})` : "";
-      const payload =
-        typeof err?.payload === "string"
-          ? `: ${err.payload}`
-          : err?.payload
-          ? `: ${JSON.stringify(err.payload)}`
-          : "";
-      setLayoutError(`No se pudo guardar el diseño${status}${payload}`);
-      if (typeof window !== "undefined") {
-        // eslint-disable-next-line no-console
-        console.error("Layout save failed", err);
-      }
-    } finally {
-      setTimeout(() => setLayoutStatus(""), 1500);
-    }
-  };
-
-  const handlePageLayoutChange = (nextLayout) => {
-    if (!layoutEditing) {
-      return;
-    }
-    setPageLayout(nextLayout);
-  };
-
-  const handleFormLayoutChange = (nextLayout) => {
-    if (!layoutEditing) {
-      return;
-    }
-    setFormLayout(nextLayout);
-  };
-
-  const handleToggleLayoutEditing = async () => {
-    if (layoutEditing) {
-      setLayoutEditing(false);
-      await persistLayout(pageLayout, formLayout);
-      return;
-    }
-    setLayoutEditing(true);
-  };
-
-  const handleSaveLayout = async () => {
-    await persistLayout(pageLayout, formLayout);
-  };
-
-  const handleResetLayout = async () => {
-    setPageLayout(defaultPageLayout.filter((item) => item.i !== "header"));
-    setFormLayout(defaultFormLayout);
-    await persistLayout(defaultPageLayout, defaultFormLayout);
-  };
 
   const handleEdit = (method) => {
     const selected = methods.find((item) => item.key === method.key) || method;
@@ -313,21 +189,8 @@ export default function PaymentMethodsPage() {
 
   return (
     <main className="page payment-methods-page">
-      <ResponsiveGridLayout
-        className="payment-methods-page-grid"
-        cols={12}
-        rowHeight={32}
-        margin={[16, 16]}
-        layout={pageLayout}
-        onLayoutChange={handlePageLayoutChange}
-        isDraggable={layoutEditing}
-        isResizable={layoutEditing}
-        draggableHandle=".pm-layout-handle"
-        compactType={null}
-        preventCollision
-      >
-        <section key="form" className="card payment-methods-card pm-layout-card">
-          {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
+      <div className="payment-methods-page-grid">
+        <section className="card payment-methods-card">
           <div className="payment-methods-header">
             <h1 className="payment-methods-title-main">
               <IconPayments className="panel-icon" />
@@ -338,21 +201,8 @@ export default function PaymentMethodsPage() {
           {error && <p className="error">{error}</p>}
           <h3 className="payment-methods-section-title">Detalles</h3>
           <div className="payment-methods-form">
-            <ResponsiveGridLayout
-              className="payment-methods-grid"
-              cols={12}
-              rowHeight={32}
-              margin={[12, 12]}
-              layout={formLayout}
-              onLayoutChange={handleFormLayoutChange}
-              isDraggable={layoutEditing}
-              isResizable={layoutEditing}
-              draggableHandle=".pm-grid-handle"
-              compactType={null}
-              preventCollision
-            >
-            <div key="key" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+            <div className="payment-methods-grid">
+            <div className="pm-grid-item pm-grid-item-key">
               <label>
                 Key
                 <input
@@ -369,8 +219,7 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="label" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+            <div className="pm-grid-item pm-grid-item-label">
               <label>
                 Nombre
                 <input
@@ -383,8 +232,7 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="midline" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+            <div className="pm-grid-item pm-grid-item-midline">
               <div className="payment-methods-midline-grid">
                 <label className="payment-methods-markup">
                   Markup (%)
@@ -441,8 +289,7 @@ export default function PaymentMethodsPage() {
                 )}
               </div>
             </div>
-            <div key="destination" className="pm-grid-item">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+            <div className="pm-grid-item pm-grid-item-destination">
               <label className="payment-methods-destination">
                 Direcciones de destino
                 <textarea
@@ -465,7 +312,7 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-            <div key="actions" className="pm-grid-item payment-methods-actions-grid">
+            <div className="pm-grid-item payment-methods-actions-grid">
               <div className="payment-methods-actions-panel">
                 <button type="button" onClick={handleSave}>
                   {editingKey ? "Actualizar" : "Agregar"}
@@ -475,8 +322,7 @@ export default function PaymentMethodsPage() {
                 </button>
               </div>
             </div>
-            <div key="description" className="pm-grid-item pm-grid-item-textarea">
-              {layoutEditing && <div className="pm-grid-handle">⋮⋮</div>}
+            <div className="pm-grid-item pm-grid-item-textarea pm-grid-item-description">
               <label className="payment-methods-description">
                 Descripción
                 <textarea
@@ -490,11 +336,10 @@ export default function PaymentMethodsPage() {
                 />
               </label>
             </div>
-          </ResponsiveGridLayout>
+          </div>
           </div>
         </section>
-        <section key="list" className="card payment-methods-list-card pm-layout-card">
-          {layoutEditing && <div className="pm-layout-handle">⋮⋮</div>}
+        <section className="card payment-methods-list-card">
           <h3>Lista de métodos</h3>
           <div className="table-scroll payment-methods-list-scroll">
             <table style={{ width: "100%" }}>
@@ -552,27 +397,6 @@ export default function PaymentMethodsPage() {
             </table>
           </div>
         </section>
-      </ResponsiveGridLayout>
-      <div className="payment-methods-layout-controls">
-        <button
-          type="button"
-          onClick={handleToggleLayoutEditing}
-          className={layoutEditing ? "is-active" : ""}
-        >
-          {layoutEditing ? "Listo" : "Editar diseño"}
-        </button>
-        {layoutEditing && (
-          <>
-            <button type="button" onClick={handleSaveLayout}>
-              Guardar
-            </button>
-            <button type="button" className="plain-button" onClick={handleResetLayout}>
-              Restablecer
-            </button>
-          </>
-        )}
-        {layoutStatus === "saved" && <span className="muted">Diseño guardado.</span>}
-        {layoutError && <span className="error">{layoutError}</span>}
       </div>
     </main>
   );
