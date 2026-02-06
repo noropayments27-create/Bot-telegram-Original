@@ -755,6 +755,7 @@ body.login-success {
 .payment-methods-page-grid {
   width: 100%;
   margin-top: 1.5cm;
+  padding-top: 1.5cm;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
@@ -855,9 +856,16 @@ body.login-success {
   overflow: hidden;
 }
 
-.pm-grid-item-description textarea {
-  min-height: 120px;
-  height: auto;
+.pm-grid-item-destination,
+.pm-grid-item-description {
+  align-self: stretch;
+  height: 100%;
+}
+
+.pm-grid-item-description textarea,
+.pm-grid-item-destination textarea {
+  min-height: 140px;
+  height: 100%;
 }
 
 .payment-methods-actions-grid {
