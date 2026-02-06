@@ -803,22 +803,6 @@ body.login-success {
   overflow-x: hidden;
 }
 
-.pm-grid-item-description,
-.pm-grid-item-destination {
-  min-height: 180px;
-}
-
-.pm-grid-item-description textarea,
-.pm-grid-item-destination textarea {
-  min-height: 140px;
-}
-
-.payment-methods-card {
-  transform: scale(1.1);
-  transform-origin: top left;
-  width: calc(100% / 1.1);
-}
-
 .pm-grid-item-key {
   grid-area: key;
 }
