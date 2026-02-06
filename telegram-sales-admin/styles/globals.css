@@ -754,7 +754,7 @@ body.login-success {
 
 .payment-methods-page-grid {
   width: 100%;
-  margin-top: 0.5cm;
+  margin-top: 1.5cm;
   display: grid;
   grid-template-columns: repeat(2, minmax(0, 1fr));
   gap: 20px;
@@ -799,6 +799,7 @@ body.login-success {
     "key label midline midline"
     "destination destination description description"
     "actions actions description description";
+  overflow-x: hidden;
 }
 
 .pm-grid-item-key {
@@ -851,7 +852,30 @@ body.login-success {
   border: 1px solid rgba(255, 36, 0, 0.2);
   background: rgba(20, 20, 20, 0.65);
   padding: 10px;
+  overflow: hidden;
+}
+
+.pm-grid-item-description textarea {
+  min-height: 120px;
+  height: auto;
+}
+
+.payment-methods-actions-grid {
+  border: none;
+  background: transparent;
+  padding: 0;
   overflow: visible;
+}
+
+.payment-methods-actions-panel {
+  width: 100%;
+  display: flex;
+  justify-content: center;
+  gap: 12px;
+}
+
+.payment-methods-actions-panel button {
+  min-width: 110px;
 }
 
 .pm-grid-handle {
