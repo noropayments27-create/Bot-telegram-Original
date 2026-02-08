@@ -20,6 +20,21 @@
   }
 }
 
+@media (max-width: 960px) {
+  @supports (zoom: 1) {
+    .layout {
+      zoom: 1;
+    }
+  }
+
+  @supports not (zoom: 1) {
+    .main {
+      transform: none;
+      width: 100%;
+    }
+  }
+}
+
 .overlay {
   position: fixed;
   inset: 0;

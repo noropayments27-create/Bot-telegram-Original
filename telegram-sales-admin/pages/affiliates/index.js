@@ -842,8 +842,8 @@ export default function AffiliatesPage() {
               </div>
               <div className="affiliates-commission-card">
                 {globalCommissionError && <p className="error">{globalCommissionError}</p>}
-                <div className="form">
-                  <label>
+                <div className="form affiliates-commission-form">
+                  <label className="affiliates-commission-field">
                     <span className="commission-label">Comisión (%)</span>
                     <input
                       className="commission-input"
@@ -864,7 +864,7 @@ export default function AffiliatesPage() {
                       step="0.01"
                     />
                   </label>
-                  <label>
+                  <label className="affiliates-commission-field">
                     <span className="commission-label">Tiempo</span>
                     <div className="commission-duration">
                       <input
@@ -909,7 +909,7 @@ export default function AffiliatesPage() {
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
         <div className="table-scroll affiliates-table-scroll">
-          <table style={{ width: "100%", marginTop: "16px" }}>
+          <table className="affiliates-table" style={{ width: "100%", marginTop: "16px" }}>
             <thead>
               <tr>
                 <th align="left">Perfil</th>
@@ -1497,8 +1497,8 @@ export default function AffiliatesPage() {
                       {commissions.length === 0 ? (
                         <p className="muted">Sin comisiones.</p>
                       ) : (
-                        <div className="table-scroll affiliate-commissions-scroll">
-                          <table style={{ width: "100%", marginTop: "0px" }}>
+                        <div className="table-scroll affiliate-commissions-scroll affiliate-control-scroll">
+                          <table className="affiliate-control-table" style={{ width: "100%", marginTop: "0px" }}>
                             <thead>
                               <tr>
                                 <th align="left">Número</th>

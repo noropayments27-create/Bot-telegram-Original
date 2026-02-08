@@ -1339,8 +1339,9 @@ body.login-success {
 
 .affiliate-detail-actions {
   display: flex;
-  gap: 0.5cm;
+  gap: 10px;
   align-items: center;
+  flex-wrap: wrap;
 }
 
 .affiliate-detail-actions .plain-button {
@@ -1512,31 +1513,35 @@ body.login-success {
   background: #111;
   border-radius: 12px;
   border: 1px solid rgba(255, 36, 0, 0.25);
-  padding: 10px 12px;
+  padding: 8px 10px;
+  overflow-x: auto;
 }
 
 .affiliate-detail-row--header {
   display: grid;
-  grid-template-columns: 1.6fr repeat(7, minmax(80px, 1fr));
-  gap: 8px;
+  grid-template-columns: 1.25fr repeat(6, minmax(64px, 1fr));
+  gap: 6px;
   text-transform: uppercase;
   letter-spacing: 0.06em;
-  font-size: 10px;
+  font-size: 9px;
   color: #b8b8b8;
   border-bottom: 1px solid rgba(255, 36, 0, 0.2);
-  padding-bottom: 6px;
+  padding-bottom: 5px;
+  min-width: 720px;
 }
 
 .affiliate-detail-row--data {
   display: grid;
-  grid-template-columns: 1.6fr repeat(7, minmax(80px, 1fr));
-  gap: 8px;
+  grid-template-columns: 1.25fr repeat(6, minmax(64px, 1fr));
+  gap: 6px;
   align-items: center;
-  padding-top: 8px;
+  padding-top: 6px;
+  min-width: 720px;
+  font-size: 11px;
 }
 
 .affiliate-detail-table .affiliate-name-cell {
-  gap: 10px;
+  gap: 6px;
 }
 
 
@@ -1872,15 +1877,14 @@ body.login-success {
 }
 
 .affiliates-card {
-  max-width: 1100px; /* Controla el ancho máximo */
-  width: 100%; /* O usa un porcentaje para hacerla más o menos ancha */
+  max-width: 1100px;
+  width: 100%;
   margin-left: auto;
   margin-right: auto;
-  padding: 30px 30px;
-  margin-top: -60px; /* Para subirla más arriba, usa valores menores o negativos */
-  /* O también puedes usar */
+  padding: 26px;
+  margin-top: 0;
   position: relative;
-  top: -10px; /* Valores negativos la suben, positivos la bajan */
+  top: 0;
 }
 
 .affiliates-header {
@@ -1892,14 +1896,12 @@ body.login-success {
 }
 
 .affiliates-header-actions {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(180px, 230px) minmax(0, 1fr);
   align-items: flex-start;
   gap: 16px;
-  flex-wrap: nowrap;
-  margin-top: 0.3cm;
-  margin-left: 0;
+  margin-top: 8px;
   width: 100%;
-  justify-content: space-between;
 }
 
 .affiliates-title {
@@ -1919,23 +1921,24 @@ body.login-success {
 
 .affiliates-commission-card {
   max-width: none;
-  margin: 0.3cm 0;
-  padding: 10px 16px;
+  margin: 0;
+  padding: 12px 14px;
   border-radius: 14px;
   background: rgba(10, 10, 10, 0.6);
   border: 1px solid rgba(255, 77, 0, 0.5);
   box-shadow: 0 0 18px rgba(255, 77, 0, 0.15);
-  display: flex;
-  align-items: center;
-  gap: 16px;
+  display: grid;
+  gap: 10px;
 }
 
 .affiliates-filters {
-  margin-top: 0 !important;
-  margin-bottom: 0 !important;
-  margin-left: 0 !important;
-  display: flex;
-  margin-right: 0 !important;
+  margin: 0 !important;
+  display: grid;
+  width: 100%;
+}
+
+.affiliates-filters label {
+  width: 100%;
 }
 
 .affiliates-commission-header {
@@ -1947,11 +1950,11 @@ body.login-success {
 }
 
 .commission-input {
-  width: 60px;
+  width: 72px;
 }
 
 .commission-input-wide {
-  width: 90px;
+  width: 100px;
 }
 
 .commission-duration {
@@ -1960,14 +1963,18 @@ body.login-success {
   gap: 8px;
 }
 
-.affiliates-commission-card .form {
-  display: flex;
+.affiliates-commission-card .form,
+.affiliates-commission-form {
+  display: grid;
+  grid-template-columns: auto auto auto auto;
   align-items: center;
-  gap: 12px;
-  flex-wrap: nowrap;
+  gap: 10px;
+  margin: 0;
 }
 
-.affiliates-commission-card .form label {
+.affiliates-commission-card .form label,
+.affiliates-commission-form label,
+.affiliates-commission-field {
   margin: 0;
   display: flex;
   flex-direction: column;
@@ -1978,20 +1985,20 @@ body.login-success {
 .affiliates-commission-wrap {
   display: flex;
   flex-direction: column;
-  align-items: center;
-  gap: 0.2cm;
-  position: relative;
-  top: -2cm;
+  align-items: stretch;
+  gap: 8px;
+  min-width: 0;
 }
 
 .affiliates-commission-title {
   display: flex;
   align-items: center;
-  justify-content: center;
+  justify-content: flex-start;
   gap: 8px;
   color: var(--scarlet-red);
-  font-size: 24px;
+  font-size: 22px;
   font-weight: 700;
+  margin: 0;
 }
 
 .commission-label {
@@ -2039,17 +2046,17 @@ body.login-success {
 
 .affiliates-table-scroll {
   max-height: 480px;
-  overflow-y: auto;
+  overflow: auto;
   background: rgba(12, 12, 12, 0.92);
   border: 1px solid rgba(255, 36, 0, 0.35);
   border-radius: 14px;
   padding: 6px 8px;
-  margin-top: -1.5cm;
+  margin-top: 14px;
 }
 
 .affiliates-status-select {
-  width: fit-content;
-  min-width: 140px;
+  width: 100%;
+  min-width: 0;
 }
 
 .affiliate-center {
@@ -2058,6 +2065,17 @@ body.login-success {
 
 .affiliates-table-scroll table {
   color: #f2f2f2;
+  min-width: 960px;
+  margin-top: 0 !important;
+}
+
+.affiliates-table th,
+.affiliates-table td {
+  white-space: nowrap;
+}
+
+.affiliates-table .affiliate-name-cell {
+  min-width: 210px;
 }
 
 .affiliate-username {
@@ -3749,13 +3767,35 @@ button:disabled {
 .affiliates-page .orders-detail-wrap {
   grid-template-columns: 1fr;
   max-width: 1100px;
+  width: 100%;
   margin-left: auto;
   margin-right: auto;
 }
 
 .affiliates-page .orders-detail-card {
   font-size: 14px;
-  line-height: 1.1;
+  line-height: 1.35;
+  overflow: hidden;
+}
+
+.affiliates-page .affiliate-detail-table {
+  padding: 7px 8px;
+}
+
+.affiliates-page .affiliate-detail-row--header {
+  grid-template-columns: 1.2fr repeat(6, minmax(60px, 1fr));
+  min-width: 680px;
+}
+
+.affiliates-page .affiliate-detail-row--data {
+  grid-template-columns: 1.2fr repeat(6, minmax(60px, 1fr));
+  min-width: 680px;
+}
+
+.affiliates-page .affiliate-detail-table .affiliate-avatar {
+  width: 32px;
+  height: 32px;
+  font-size: 8.5px;
 }
 
 .affiliates-page .orders-detail-grid {
@@ -3778,6 +3818,159 @@ button:disabled {
 
 .affiliates-page .orders-detail-subseparator {
   margin: 6px 0;
+}
+
+.affiliates-page .affiliates-table {
+  font-size: 12px;
+}
+
+.affiliates-page .affiliates-table thead th {
+  font-size: 10px;
+  padding: 7px 6px;
+  letter-spacing: 0.05em;
+}
+
+.affiliates-page .affiliates-table tbody td {
+  padding: 8px 6px;
+  line-height: 1.2;
+}
+
+.affiliates-page .affiliates-table .affiliate-name-cell {
+  gap: 6px;
+  min-width: 138px;
+}
+
+.affiliates-page .affiliates-table .affiliate-avatar {
+  width: 38px;
+  height: 38px;
+  font-size: 10px;
+}
+
+.affiliates-page .affiliates-table .orders-copy {
+  font-size: 11px;
+}
+
+.affiliates-page .affiliates-table-scroll table {
+  min-width: 840px;
+}
+
+.affiliates-page .affiliate-commissions-scroll {
+  max-height: 320px;
+  padding: 4px 6px;
+}
+
+.affiliates-page .affiliate-commissions-scroll table {
+  margin-top: 0 !important;
+  font-size: 10.5px;
+}
+
+.affiliates-page .affiliate-commissions-scroll thead th {
+  font-size: 9px;
+  padding: 5px 4px;
+  letter-spacing: 0.04em;
+}
+
+.affiliates-page .affiliate-commissions-scroll tbody td {
+  padding: 5px 4px;
+  line-height: 1.15;
+}
+
+.affiliates-page .truncate-id {
+  max-width: 118px;
+}
+
+.affiliates-page .affiliates-filters label {
+  gap: 5px;
+  font-size: 13px;
+}
+
+.affiliates-page .affiliates-commission-title {
+  font-size: 20px;
+  gap: 6px;
+}
+
+.affiliates-page .affiliates-commission-card {
+  padding: 8px 10px;
+  gap: 6px;
+}
+
+.affiliates-page .affiliates-commission-form {
+  gap: 7px;
+}
+
+.affiliates-page .affiliates-commission-field {
+  gap: 3px;
+}
+
+.affiliates-page .affiliates-commission-field .commission-label {
+  font-size: 9px;
+}
+
+.affiliates-page .affiliates-commission-form .commission-input,
+.affiliates-page .affiliates-commission-form .commission-input-wide,
+.affiliates-page .affiliates-commission-form select {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.affiliates-page .affiliates-commission-form > button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.affiliates-page .affiliates-commission-card .muted {
+  margin-bottom: 0;
+  font-size: 11px;
+}
+
+.affiliates-page .affiliate-adjustment-form {
+  gap: 6px;
+  max-width: 100%;
+}
+
+.affiliates-page .affiliate-adjustment-row {
+  gap: 8px;
+}
+
+.affiliates-page .affiliate-adjustment-row .commission-input {
+  min-height: 34px;
+  padding: 6px 10px;
+  border-radius: 10px;
+  font-size: 13px;
+}
+
+.affiliates-page .affiliate-adjustment-actions {
+  gap: 8px;
+  margin-top: 6px;
+  margin-bottom: 6px;
+}
+
+.affiliates-page .affiliate-adjustment-actions button {
+  min-height: 34px;
+  padding: 6px 10px;
+  font-size: 13px;
+}
+
+.affiliates-page .affiliate-control-scroll {
+  max-height: 260px;
+  padding: 3px 5px;
+}
+
+.affiliates-page .affiliate-control-table {
+  font-size: 10px;
+}
+
+.affiliates-page .affiliate-control-table thead th {
+  font-size: 8px;
+  padding: 4px 3px;
+}
+
+.affiliates-page .affiliate-control-table tbody td {
+  padding: 4px 3px;
+  line-height: 1.1;
 }
 
 .affiliate-adjustment-form {
@@ -3823,6 +4016,233 @@ button:disabled {
   text-overflow: ellipsis;
   white-space: nowrap;
   vertical-align: top;
+}
+
+@media (max-width: 960px) {
+  .affiliates-page .orders-detail-wrap {
+    margin-top: 14px;
+  }
+
+  .affiliates-page .orders-detail-card {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .affiliates-page .affiliates-card {
+    padding: 18px;
+    margin-top: 0;
+    top: 0;
+  }
+
+  .affiliates-page .affiliates-title {
+    font-size: 24px;
+  }
+
+  .affiliates-page .affiliates-header-actions {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .affiliates-page .affiliates-filters {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .affiliates-page .affiliates-commission-wrap {
+    width: 100%;
+  }
+
+  .affiliates-page .affiliates-commission-title {
+    justify-content: center;
+    font-size: 19px;
+  }
+
+  .affiliates-page .affiliates-commission-card {
+    padding: 7px 8px;
+  }
+
+  .affiliates-page .affiliates-commission-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 6px;
+  }
+
+  .affiliates-page .affiliates-commission-field {
+    width: 100%;
+  }
+
+  .affiliates-page .commission-duration {
+    width: 100%;
+  }
+
+  .affiliates-page .commission-input,
+  .affiliates-page .commission-input-wide {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .affiliates-page .affiliates-commission-form > button {
+    width: 100%;
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .affiliates-page .affiliates-table-scroll {
+    max-height: none;
+    margin-top: 12px;
+  }
+
+  .affiliates-page .affiliates-table-scroll table {
+    min-width: 900px;
+  }
+
+  .affiliates-page .orders-detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .affiliates-page .affiliate-detail-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .affiliates-page .affiliate-adjustment-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions button {
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .affiliates-page .affiliate-control-scroll {
+    max-height: 240px;
+  }
+}
+
+@media (max-width: 640px) {
+  .affiliates-page .affiliates-table {
+    font-size: 11px;
+  }
+
+  .affiliates-page .affiliates-table thead th {
+    font-size: 9px;
+    padding: 6px 5px;
+  }
+
+  .affiliates-page .affiliates-table tbody td {
+    padding: 6px 5px;
+  }
+
+  .affiliates-page .affiliates-table .affiliate-name-cell {
+    min-width: 120px;
+    gap: 5px;
+  }
+
+  .affiliates-page .affiliates-table .affiliate-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 8.5px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll {
+    max-height: 290px;
+    padding: 4px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll table {
+    font-size: 10px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll thead th {
+    font-size: 8px;
+    padding: 4px 3px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll tbody td {
+    padding: 4px 3px;
+  }
+
+  .affiliates-page .truncate-id {
+    max-width: 94px;
+  }
+
+  .affiliates-page .orders-detail-card {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .affiliates-page .affiliates-card {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .affiliates-page .affiliates-title {
+    font-size: 20px;
+  }
+
+  .affiliates-page .affiliates-commission-form {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .affiliates-page .commission-duration {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .affiliates-page .affiliates-table-scroll {
+    padding: 6px;
+  }
+
+  .affiliates-page .affiliates-table-scroll table {
+    min-width: 820px;
+  }
+
+  .affiliates-page .affiliate-detail-table {
+    padding: 8px;
+  }
+
+  .affiliates-page .affiliate-detail-row--header,
+  .affiliates-page .affiliate-detail-row--data {
+    min-width: 640px;
+  }
+
+  .affiliates-page .orders-detail-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions {
+    grid-template-columns: 1fr;
+    gap: 6px;
+  }
+
+  .affiliates-page .affiliate-control-scroll {
+    max-height: 220px;
+    padding: 2px 4px;
+  }
+
+  .affiliates-page .affiliate-control-table {
+    font-size: 9px;
+  }
+
+  .affiliates-page .affiliate-control-table thead th,
+  .affiliates-page .affiliate-control-table tbody td {
+    padding: 3px 2px;
+  }
 }
 
 .images-page {

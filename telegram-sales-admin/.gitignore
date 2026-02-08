@@ -1,5 +1,6 @@
 node_modules/
 .next/
+.next_bak_*/
 out/
 .env.local
 .DS_Store
