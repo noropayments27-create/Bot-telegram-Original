@@ -174,6 +174,7 @@ export default function OrderDetail() {
     totals.subtotal_usd !== undefined && totals.subtotal_usd !== null
       ? totals.subtotal_usd
       : order.unit_price_at_purchase;
+  const markupPercent = totals.markup_percent;
   const localTotal = detail.local_total;
 
   const formatUsdValue = (value) => {
@@ -185,7 +186,8 @@ export default function OrderDetail() {
       return String(value);
     }
     return numericValue.toLocaleString("en-US", {
-      maximumFractionDigits: 0,
+      minimumFractionDigits: 0,
+      maximumFractionDigits: 2,
     });
   };
 
@@ -238,7 +240,10 @@ export default function OrderDetail() {
         <div className="detail-section">
           <h3 className="icon-inline"><IconOrders className="panel-icon" /> Detalle</h3>
           <p>Estado: {order.status}</p>
-          <p>Precio (USD): {formatUsdValue(subtotalUsd)}</p>
+          <p>Subtotal (USD): {formatUsdValue(subtotalUsd)}</p>
+          {markupPercent !== undefined && markupPercent !== null && (
+            <p>Markup aplicado: {markupPercent}%</p>
+          )}
           {localTotal && (
             <p>
               Total {localTotal.currency}:{" "}
@@ -271,7 +276,7 @@ export default function OrderDetail() {
                 </p>
               );
             })}
-            <p>Total: ${formatUsdValue(subtotalUsd)}</p>
+            <p>Subtotal: ${formatUsdValue(subtotalUsd)}</p>
           </>
         ) : (
           <p>No hay productos registrados.</p>

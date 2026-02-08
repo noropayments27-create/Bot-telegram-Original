@@ -17,7 +17,6 @@ from aiogram.types import (
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
-    BOT_AFFILIATE_PANEL_IMAGE_URL,
     BOT_TO_API_SECRET,
     BOT_USERNAME,
     ADMIN_TELEGRAM_IDS,
@@ -52,9 +51,7 @@ async def _render_affiliate_view(
     *,
     push_history: bool = True,
 ) -> Message:
-    affiliate_image_url = await get_bot_asset_image(
-        api_client, "affiliate_panel_image_url", BOT_AFFILIATE_PANEL_IMAGE_URL
-    )
+    affiliate_image_url = await get_bot_asset_image(api_client, "affiliate_panel_image_url")
     if affiliate_image_url:
         return await render_main_view_with_photo(
             message,

@@ -6,6 +6,53 @@ const DEFAULT_METHODS = [
   { key: "PAYPAL", label: "Paypal", sort_order: 5 },
 ];
 
+const FALLBACK_NEQUI_NUMBER = process.env.NEQUI_NUMBER || "3009545964";
+const FALLBACK_NEQUI_NAME = process.env.NEQUI_NAME || "Jos**** Mar**";
+const FALLBACK_BINANCE_ID = process.env.BINANCE_ID || "65088471";
+const FALLBACK_MERCADOPAGO_ACCOUNT =
+  process.env.MERCADOPAGO_ACCOUNT || "CLABE: 722969013143608335";
+const FALLBACK_PAYPAL_ACCOUNT =
+  process.env.PAYPAL_ACCOUNT || "Noropayments@gmail.com";
+const FALLBACK_CRYPTO_BTC =
+  process.env.CRYPTO_WALLET_BTC || "15EedPYZDUXezTGoN9CSUfueFdRUm5yYGr";
+const FALLBACK_CRYPTO_USDT_TRON =
+  process.env.CRYPTO_WALLET_USDT_TRON || "TZFPjLa8j1FSXD95tY6x5pVZuCPWp5R8pn";
+const FALLBACK_CRYPTO_USDT_BSC =
+  process.env.CRYPTO_WALLET_USDT_BSC || "0xa39b3bb9a576f9d4c11761fbef01d383fae3443d";
+const FALLBACK_CRYPTO_LTC =
+  process.env.CRYPTO_WALLET_LTC || "LM7pkJYTequoTAKMHodp6Z7yg4RTwNfSeY";
+
+function buildMethodFallbackDestination(methodKey) {
+  const key = normalizeMethodKey(methodKey);
+  if (!key) return null;
+  if (key === "NEQUI") {
+    const parts = [];
+    if (FALLBACK_NEQUI_NUMBER) parts.push(`Numero: ${FALLBACK_NEQUI_NUMBER}`);
+    if (FALLBACK_NEQUI_NAME) parts.push(`Nombre: ${FALLBACK_NEQUI_NAME}`);
+    return parts.length > 0 ? parts.join("\n") : null;
+  }
+  if (key === "BINANCE_ID") {
+    return FALLBACK_BINANCE_ID ? `ID: ${FALLBACK_BINANCE_ID}` : null;
+  }
+  if (key === "MERCADOPAGO") {
+    return FALLBACK_MERCADOPAGO_ACCOUNT || null;
+  }
+  if (key === "PAYPAL") {
+    return FALLBACK_PAYPAL_ACCOUNT ? `Cuenta: ${FALLBACK_PAYPAL_ACCOUNT}` : null;
+  }
+  if (key === "CRYPTO") {
+    const payload = {
+      btc: FALLBACK_CRYPTO_BTC || "",
+      usdt_tron: FALLBACK_CRYPTO_USDT_TRON || "",
+      usdt_bsc: FALLBACK_CRYPTO_USDT_BSC || "",
+      ltc: FALLBACK_CRYPTO_LTC || "",
+    };
+    const hasAny = Object.values(payload).some((value) => Boolean(String(value).trim()));
+    return hasAny ? JSON.stringify(payload) : null;
+  }
+  return null;
+}
+
 async function ensurePaymentMethodsSchema(pool) {
   await pool.query(
     `CREATE TABLE IF NOT EXISTS payment_methods (
@@ -43,6 +90,28 @@ async function ensurePaymentMethodsSchema(pool) {
        VALUES ${placeholders}
        ON CONFLICT (method_key) DO NOTHING`,
       values
+    );
+  }
+  // Backfill missing values from legacy bot defaults without overriding existing custom settings.
+  for (const item of DEFAULT_METHODS) {
+    const fallbackDestination = buildMethodFallbackDestination(item.key);
+    await pool.query(
+      `UPDATE payment_methods
+       SET label = CASE
+             WHEN label IS NULL OR btrim(label) = '' THEN $2
+             ELSE label
+           END,
+           sort_order = COALESCE(sort_order, $3),
+           destination = CASE
+             WHEN (destination IS NULL OR btrim(destination) = '')
+               AND $4::text IS NOT NULL
+               AND btrim(COALESCE($4::text, '')) <> ''
+             THEN $4::text
+             ELSE destination
+           END,
+           updated_at = now()
+       WHERE method_key = $1`,
+      [item.key, item.label, item.sort_order, fallbackDestination]
     );
   }
 }

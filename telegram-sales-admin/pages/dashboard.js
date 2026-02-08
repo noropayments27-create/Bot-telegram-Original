@@ -132,12 +132,41 @@ function useCountUp(value, options = {}) {
 
 export default function Dashboard() {
   const navCards = [
-    { href: "/orders", label: "Ordenes", key: "orders" },
-    { href: "/inventory", label: "Inventario", key: "inventory" },
-    { href: "/tickets", label: "Tickets", key: "tickets" },
-    { href: "/broadcasts", label: "Difusiones" },
-    { href: "/payouts", label: "Pagos", key: "payouts" },
-    { href: "/affiliates", label: "Afiliados", key: "affiliates" },
+    {
+      href: "/orders",
+      label: "Ordenes",
+      key: "orders",
+      tooltip: "Revisar ordenes nuevas, validar pagos y gestionar estados.",
+    },
+    {
+      href: "/inventory",
+      label: "Inventario",
+      key: "inventory",
+      tooltip: "Administrar productos, stock y disponibilidad.",
+    },
+    {
+      href: "/tickets",
+      label: "Tickets",
+      key: "tickets",
+      tooltip: "Responder soporte y seguimiento de conversaciones.",
+    },
+    {
+      href: "/broadcasts",
+      label: "Difusiones",
+      tooltip: "Crear y enviar anuncios masivos a usuarios.",
+    },
+    {
+      href: "/payouts",
+      label: "Pagos",
+      key: "payouts",
+      tooltip: "Gestionar retiros y pagos pendientes.",
+    },
+    {
+      href: "/affiliates",
+      label: "Afiliados",
+      key: "affiliates",
+      tooltip: "Control de afiliados, comisiones y solicitudes.",
+    },
   ];
   const [stats, setStats] = useState({
     customers: 0,
@@ -334,7 +363,6 @@ export default function Dashboard() {
             <h1 className="icon-inline">
               <IconDashboard className="panel-icon" /> Panel Principal
             </h1>
-            <p className="muted">Accesos directos</p>
           </div>
           <div className="dashboard-reset">
             <input
@@ -418,6 +446,9 @@ export default function Dashboard() {
                 key={item.href}
                 href={item.href}
                 className={`nav-card ${hasAlert ? "nav-card--alert" : ""}`}
+                data-tooltip={item.tooltip || ""}
+                title={item.tooltip || item.label}
+                aria-label={`${item.label}. ${item.tooltip || ""}`}
               >
                 {countValue !== null && (
                   <div className="nav-card__count">{countValue}</div>
@@ -468,6 +499,9 @@ export default function Dashboard() {
       </section>
       <div className="payment-methods-panel">
         <h3 className="payment-methods-title">Bloqueo de metodos de pago</h3>
+        <p className="payment-methods-subtitle">
+          Activa o desactiva metodos temporalmente. Los cambios se aplican al bot en tiempo real.
+        </p>
         {paymentMethodsError && <p className="error">{paymentMethodsError}</p>}
         <div className="payment-methods-row">
           {paymentMethodLabels.map((method) => {

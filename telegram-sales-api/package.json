@@ -10,8 +10,8 @@
     "seed:catalog": "node seeds/seed_catalog.js"
   },
   "dependencies": {
-    "cors": "^2.8.5",
     "bcryptjs": "^3.0.3",
+    "cors": "^2.8.5",
     "dotenv": "^16.4.5",
     "express": "^4.19.2",
     "helmet": "^7.1.0",
@@ -19,6 +19,7 @@
     "morgan": "^1.10.0",
     "pg": "^8.16.3",
     "playwright": "^1.57.0",
+    "tesseract.js": "^7.0.0",
     "zod": "^3.23.8"
   },
   "devDependencies": {

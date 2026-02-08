@@ -8,8 +8,8 @@ const LEVELS = [
 ];
 
 function getBaseLevelIndex(salesTotal, earningsTotal) {
-  if (salesTotal >= 100 && earningsTotal >= 600) return 5;
-  if (salesTotal >= 70 && earningsTotal >= 500) return 4;
+  if (salesTotal >= 200 && earningsTotal >= 800) return 5;
+  if (salesTotal >= 100 && earningsTotal >= 500) return 4;
   if (salesTotal >= 40 && earningsTotal >= 200) return 3;
   if (salesTotal >= 20 && earningsTotal >= 50) return 2;
   if (salesTotal >= 2 && earningsTotal >= 5) return 1;

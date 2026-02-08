@@ -8,6 +8,7 @@ const {
   getLoginRequest,
   setLoginDecision,
   REQUEST_TTL_SECONDS,
+  createAdminToken,
 } = require("../services/adminAuth");
 const {
   getFilePath,
@@ -45,7 +46,6 @@ const { consumeStockForOrder, releaseStockForOrder } = require("../services/stoc
 const { deliverOrderToTelegram } = require("../services/delivery");
 const { getAffiliateLevel } = require("../services/affiliateLevels");
 const { getAdminLayout, setAdminLayout } = require("../services/adminLayouts");
-const env = require("../config/env");
 const bcrypt = require("bcryptjs");
 
 let payoutReceiptSchemaReady = false;
@@ -127,6 +127,40 @@ const AFFILIATE_MESSAGES = {
   },
 };
 
+function buildAffiliateRankUpMessage(levelKey) {
+  if (levelKey === "BRONCE") {
+    return (
+      "🎉 ¡Felicidades! Subiste a <b>Afiliado Bronce</b> 🥉\n\n" +
+      "Beneficios próximos: mejores comisiones y materiales."
+    );
+  }
+  if (levelKey === "PLATA") {
+    return (
+      "🎉 ¡Felicidades! Subiste a <b>Afiliado Plata</b> 🥈\n\n" +
+      "Beneficios próximos: mejores comisiones, bonos y materiales."
+    );
+  }
+  if (levelKey === "ORO") {
+    return (
+      "🏆 ¡Increíble! Subiste a <b>Afiliado Oro</b> 🥇\n\n" +
+      "Beneficios próximos: comisiones VIP, prioridad y bonos especiales."
+    );
+  }
+  if (levelKey === "DIAMANTE") {
+    return (
+      "💎 ¡Excelente! Subiste a <b>Afiliado Diamante</b> 💎\n\n" +
+      "Beneficios próximos: bonos premium y soporte prioritario."
+    );
+  }
+  if (levelKey === "ELITE") {
+    return (
+      "👑 ¡Legendario! Subiste a <b>Afiliado Elite</b> 👑\n\n" +
+      "Beneficios próximos: recompensas elite y beneficios exclusivos."
+    );
+  }
+  return "";
+}
+
 const router = express.Router();
 
 const DELIVERY_START_DELAY_MS = Math.max(
@@ -199,6 +233,47 @@ async function getPaymentMethodMarkup(pool, paymentMethod) {
   }
   const value = Number(String(rawMarkup).trim());
   return Number.isFinite(value) ? value : null;
+}
+
+async function resolveTotalsWithMarkup(pool, subtotalUsd, paymentMethod, localTotal = null) {
+  const baseSubtotal = Number.isFinite(Number(subtotalUsd))
+    ? Number(Number(subtotalUsd).toFixed(2))
+    : 0;
+  const methodKey = normalizeMethodKey(paymentMethod);
+  let markupPercent = null;
+  let totalUsd = baseSubtotal;
+  let localTotalWithMarkup = localTotal;
+
+  if (methodKey && localTotal && localTotal.amount != null) {
+    try {
+      const markup = await getPaymentMethodMarkup(pool, methodKey);
+      if (markup != null && Number.isFinite(Number(markup))) {
+        const localCurrency = String(localTotal.currency || "")
+          .trim()
+          .toUpperCase();
+        const localAmount = Number(localTotal.amount);
+        const isDollarEquivalent =
+          localCurrency === "USD" || localCurrency === "USDT";
+        if (Number.isFinite(localAmount) && !isDollarEquivalent) {
+          markupPercent = Number(markup);
+          const factor = 1 + markupPercent / 100;
+          localTotalWithMarkup = {
+            ...localTotal,
+            amount: localAmount * factor,
+          };
+        }
+      }
+    } catch (error) {
+      console.error("Failed to resolve totals with markup", error);
+    }
+  }
+
+  return {
+    subtotalUsd: baseSubtotal,
+    totalUsd,
+    markupPercent,
+    localTotal: localTotalWithMarkup,
+  };
 }
 
 async function notifyAffiliates(pool, message) {
@@ -484,21 +559,12 @@ async function updateAdminOrderNotifications(pool, orderId) {
         console.error("Failed to calculate local total", error);
       }
     }
-    let markupPercent = null;
-    if (localTotal && localTotal.amount != null) {
-      try {
-        markupPercent = await getPaymentMethodMarkup(pool, paymentMethod);
-        if (markupPercent) {
-          const nextAmount =
-            Number(localTotal.amount) * (1 + Number(markupPercent) / 100);
-          if (Number.isFinite(nextAmount)) {
-            localTotal = { ...localTotal, amount: nextAmount };
-          }
-        }
-      } catch (error) {
-        console.error("Failed to apply markup for admin notify", error);
-      }
-    }
+    const totalsWithMarkup = await resolveTotalsWithMarkup(
+      pool,
+      subtotalUsd,
+      paymentMethod,
+      localTotal
+    );
 
     const caption = buildOrderNotificationCaption({
       order,
@@ -508,9 +574,9 @@ async function updateAdminOrderNotifications(pool, orderId) {
       },
       items,
       payment,
-      subtotalUsd,
-      localTotal,
-      markupPercent,
+      subtotalUsd: totalsWithMarkup.subtotalUsd,
+      localTotal: totalsWithMarkup.localTotal,
+      markupPercent: totalsWithMarkup.markupPercent,
     });
     const replyMarkup = buildOrderNotificationKeyboard({
       id: order.id,
@@ -538,6 +604,22 @@ function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const pageSize = Math.min(Math.max(parseInt(query.page_size, 10) || 20, 1), 100);
   return { page, pageSize, offset: (page - 1) * pageSize };
+}
+
+function parseOrderLookupRef(rawValue) {
+  const ref = String(rawValue || "").trim();
+  if (!ref) {
+    return { ref: "", orderNumber: null };
+  }
+  if (!/^[0-9]+$/.test(ref)) {
+    return { ref, orderNumber: null };
+  }
+  const normalized = ref.replace(/^0+/, "") || "0";
+  const parsed = Number.parseInt(normalized, 10);
+  if (!Number.isFinite(parsed) || parsed < 0) {
+    return { ref, orderNumber: null };
+  }
+  return { ref, orderNumber: parsed };
 }
 
 async function recalcSkuKeys(client) {
@@ -755,7 +837,9 @@ function buildReceiptMessage(
   paymentProof,
   locale = "es",
   subtotalUsd,
+  totalUsd,
   localTotal,
+  markupPercent,
   commissionAmount,
   referredBy
 ) {
@@ -769,6 +853,7 @@ function buildReceiptMessage(
     ? String(order.order_number).padStart(5, "0")
     : "-";
   const priceNumber = Number(price || 0);
+  const totalUsdNumber = Number(totalUsd ?? priceNumber);
   const priceText =
     Number.isFinite(priceNumber) && priceNumber <= 0
       ? "Gratis"
@@ -794,6 +879,18 @@ function buildReceiptMessage(
     lines.push("");
     lines.push(`${translations.reference}: ${paymentProof.screenshot_file_id}`);
   }
+  if (markupPercent != null && Number.isFinite(Number(markupPercent))) {
+    lines.push("");
+    lines.push(`🧮 Markup aplicado: ${Number(markupPercent)}%`);
+  }
+  if (Number.isFinite(totalUsdNumber) && Math.abs(totalUsdNumber - priceNumber) > 0.0001) {
+    lines.push(
+      `${translations.total}: $${totalUsdNumber.toLocaleString(
+        locale === "es" ? "es-CO" : "en-US",
+        { maximumFractionDigits: 2, minimumFractionDigits: 0 }
+      )} USD`
+    );
+  }
   if (localTotal && localTotal.currency && localTotal.amount != null) {
     const currency = localTotal.currency;
     const amount =
@@ -803,7 +900,7 @@ function buildReceiptMessage(
             .replace(/\.?0+$/, "");
     lines.push("");
     lines.push(`${translations.total_in} ${currency}: ${amount} ${currency}`);
-    const rateBase = Number(price) || 0;
+    const rateBase = totalUsdNumber || 0;
     if (rateBase > 0) {
       const rateValue = Number(localTotal.amount) / rateBase;
       if (Number.isFinite(rateValue) && rateValue > 0) {
@@ -1036,6 +1133,31 @@ router.post("/auth/start", async (req, res) => {
   });
 
   return res.json({ request_id: requestId, expires_in: REQUEST_TTL_SECONDS });
+});
+
+router.post("/auth/direct", async (req, res) => {
+  const { password } = req.body || {};
+  const expectedPasswordHash = (process.env.ADMIN_PASSWORD_HASH || "").trim();
+  const expectedPasswordPlain = (process.env.ADMIN_PASSWORD || "").trim();
+
+  if (!expectedPasswordHash && !expectedPasswordPlain) {
+    return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
+  }
+
+  const providedPassword = String(password || "");
+  let passwordOk = false;
+  if (expectedPasswordHash) {
+    passwordOk = await bcrypt.compare(providedPassword, expectedPasswordHash);
+  }
+  if (!passwordOk && expectedPasswordPlain) {
+    passwordOk = providedPassword === expectedPasswordPlain;
+  }
+  if (!passwordOk) {
+    return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+  }
+
+  const token = createAdminToken({ sub: "admin", mode: "direct" }, 60 * 10);
+  return res.json({ token });
 });
 
 router.get("/auth/status", (req, res) => {
@@ -2566,8 +2688,119 @@ router.get("/orders/status-counts", async (req, res, next) => {
   }
 });
 
+router.get("/logs", async (req, res, next) => {
+  const category = String(req.query.category || "payments").trim().toLowerCase();
+  const parsedLimit = Number.parseInt(String(req.query.limit || "10"), 10);
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.min(Math.max(parsedLimit, 1), 50)
+    : 10;
+  const pool = getPool();
+
+  try {
+    if (category === "payments") {
+      const actions = ["ORDER_MARK_PAID", "ORDER_REJECT", "ORDER_REFUND"];
+      const logsRes = await pool.query(
+        `SELECT created_at,
+                admin_action AS action,
+                entity_id::text AS ref_id,
+                meta
+         FROM audit_logs
+         WHERE admin_action = ANY($1::text[])
+         ORDER BY created_at DESC
+         LIMIT $2`,
+        [actions, limit]
+      );
+      const items = logsRes.rows.map((row) => ({
+        created_at: row.created_at,
+        action: row.action,
+        ref_id: row.ref_id,
+        message: row.meta ? JSON.stringify(row.meta) : "",
+      }));
+      return res.json({ category, limit, items });
+    }
+
+    if (category === "support") {
+      await ensureTicketSchema(pool);
+      await ensureSupportBanSchema(pool);
+      const logsRes = await pool.query(
+        `WITH ticket_events AS (
+           SELECT tm.created_at,
+                  'TICKET_MESSAGE'::text AS action,
+                  t.id::text AS ref_id,
+                  CASE
+                    WHEN tm.telegram_file_id IS NOT NULL
+                      AND (tm.message_text IS NULL OR tm.message_text = '')
+                    THEN '[image]'
+                    ELSE COALESCE(tm.message_text, '')
+                  END AS message
+           FROM ticket_messages tm
+           JOIN tickets t ON t.id = tm.ticket_id
+         ),
+         support_ban_events AS (
+           SELECT sb.banned_at AS created_at,
+                  'SUPPORT_BAN'::text AS action,
+                  sb.telegram_id::text AS ref_id,
+                  COALESCE(sb.reason, 'support ban') AS message
+           FROM support_bans sb
+         )
+         SELECT created_at, action, ref_id, message
+         FROM (
+           SELECT * FROM ticket_events
+           UNION ALL
+           SELECT * FROM support_ban_events
+         ) events
+         ORDER BY created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+      return res.json({ category, limit, items: logsRes.rows });
+    }
+
+    if (category === "errors") {
+      await ensureBroadcastSchema(pool);
+      const logsRes = await pool.query(
+        `WITH broadcast_failures AS (
+           SELECT COALESCE(sent_at, created_at) AS created_at,
+                  'BROADCAST_FAILED'::text AS action,
+                  id::text AS ref_id,
+                  COALESCE(message_text, '') AS message
+           FROM broadcasts
+           WHERE status = 'FAILED'
+         ),
+         payment_rejections AS (
+           SELECT COALESCE(op.reviewed_by_admin_at, o.created_at) AS created_at,
+                  'PAYMENT_REJECTED'::text AS action,
+                  o.id::text AS ref_id,
+                  COALESCE(op.payment_method, '') AS message
+           FROM order_payments op
+           JOIN orders o ON o.id = op.order_id
+           WHERE op.review_status = 'REJECTED'
+         )
+         SELECT created_at, action, ref_id, message
+         FROM (
+           SELECT * FROM broadcast_failures
+           UNION ALL
+           SELECT * FROM payment_rejections
+         ) events
+         ORDER BY created_at DESC
+         LIMIT $1`,
+        [limit]
+      );
+      return res.json({ category, limit, items: logsRes.rows });
+    }
+
+    return res.status(400).json({ error: "CATEGORY_INVALID" });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/orders/:id", async (req, res, next) => {
-  const orderId = req.params.id;
+  const { ref: orderLookupRef, orderNumber: orderLookupNumber } =
+    parseOrderLookupRef(req.params.id);
+  if (!orderLookupRef) {
+    return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
+  }
   const pool = getPool();
 
   try {
@@ -2580,13 +2813,15 @@ router.get("/orders/:id", async (req, res, next) => {
        JOIN users u ON u.id = o.user_id
        LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
        JOIN products p ON p.id = o.product_id
-       WHERE o.id = $1`,
-      [orderId]
+       WHERE (o.id::text = $1 OR ($2::bigint IS NOT NULL AND o.order_number = $2))`,
+      [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
       return res.status(404).json({ error: "ORDER_NOT_FOUND" });
     }
+    const order = orderRes.rows[0];
+    const orderId = order.id;
 
     const paymentRes = await pool.query(
       "SELECT * FROM order_payments WHERE order_id = $1",
@@ -2639,7 +2874,6 @@ router.get("/orders/:id", async (req, res, next) => {
       [orderId]
     );
 
-    const order = orderRes.rows[0];
     const items = itemsRes.rows.map((row) => ({
       product_id: row.product_id,
       code: row.code,
@@ -2679,6 +2913,12 @@ router.get("/orders/:id", async (req, res, next) => {
         console.error("Failed to calculate local total", error);
       }
     }
+    const totalsWithMarkup = await resolveTotalsWithMarkup(
+      pool,
+      subtotalUsd,
+      paymentMethod,
+      localTotal
+    );
 
     return res.json({
       order: {
@@ -2707,9 +2947,11 @@ router.get("/orders/:id", async (req, res, next) => {
       payment: paymentRes.rows[0] || null,
       commission,
       totals: {
-        subtotal_usd: subtotalUsd,
+        subtotal_usd: totalsWithMarkup.subtotalUsd,
+        total_usd: totalsWithMarkup.totalUsd,
+        markup_percent: totalsWithMarkup.markupPercent,
       },
-      local_total: localTotal,
+      local_total: totalsWithMarkup.localTotal,
     });
   } catch (error) {
     next(error);
@@ -2918,6 +3160,12 @@ router.get("/orders/:id/receipt", async (req, res, next) => {
     } catch (err) {
       console.error("Failed to calculate local total", err);
     }
+    const totalsWithMarkup = await resolveTotalsWithMarkup(
+      pool,
+      subtotal,
+      order.payment_method,
+      localTotal
+    );
 
     const receiptPng = await renderReceiptPng({
       orderId: order.id,
@@ -2926,11 +3174,11 @@ router.get("/orders/:id/receipt", async (req, res, next) => {
       username: order.telegram_username,
       dateTime: formatBogotaDate(order.paid_at || new Date()),
       items,
-      subtotal,
+      subtotal: totalsWithMarkup.subtotalUsd,
       commission: commissionAmount,
-      total: subtotal,
+      total: totalsWithMarkup.totalUsd,
       referredBy,
-      localTotal,
+      localTotal: totalsWithMarkup.localTotal,
       locale: "es",
     });
 
@@ -3080,6 +3328,12 @@ router.get("/orders/:id/receipt/download", async (req, res, next) => {
     } catch (err) {
       console.error("Failed to calculate local total", err);
     }
+    const totalsWithMarkup = await resolveTotalsWithMarkup(
+      pool,
+      subtotal,
+      order.payment_method,
+      localTotal
+    );
 
     const receiptPng = await renderReceiptPng({
       orderId: order.id,
@@ -3088,11 +3342,11 @@ router.get("/orders/:id/receipt/download", async (req, res, next) => {
       username: order.telegram_username,
       dateTime: formatBogotaDate(order.paid_at || new Date()),
       items,
-      subtotal,
+      subtotal: totalsWithMarkup.subtotalUsd,
       commission: commissionAmount,
-      total: subtotal,
+      total: totalsWithMarkup.totalUsd,
       referredBy,
-      localTotal,
+      localTotal: totalsWithMarkup.localTotal,
       locale: "es",
     });
 
@@ -3259,9 +3513,15 @@ router.post("/stats/reset", async (req, res, next) => {
 });
 
 router.post("/orders/:id/mark-paid", async (req, res, next) => {
-  const orderId = req.params.id;
+  const { ref: orderLookupRef, orderNumber: orderLookupNumber } =
+    parseOrderLookupRef(req.params.id);
+  if (!orderLookupRef) {
+    return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
+  }
   const pool = getPool();
   const client = await pool.connect();
+  let affiliateLevelBefore = null;
+  let commissionInserted = false;
   try {
     await client.query("BEGIN");
 
@@ -3278,9 +3538,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
        LEFT JOIN order_payments op ON op.order_id = o.id
-       WHERE o.id = $1
+       WHERE (o.id::text = $1 OR ($2::bigint IS NOT NULL AND o.order_number = $2))
        FOR UPDATE OF o`,
-      [orderId]
+      [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
@@ -3289,6 +3549,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     }
 
     const order = orderRes.rows[0];
+    const orderId = order.id;
 
     if (order.status !== "WAITING_PAYMENT") {
       await client.query("ROLLBACK");
@@ -3407,13 +3668,13 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       }
       let baseRate = 0.2;
       let boostEffective = boostRate;
+      affiliateLevelBefore = getAffiliateLevel({
+        salesTotal,
+        earningsTotal,
+        daysSinceLastSale,
+      });
       if (salesTotal > 0) {
-        const currentLevel = getAffiliateLevel({
-          salesTotal,
-          earningsTotal,
-          daysSinceLastSale,
-        });
-        baseRate = currentLevel.rate;
+        baseRate = affiliateLevelBefore.rate;
       } else {
         boostEffective = 0;
       }
@@ -3428,8 +3689,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
          ON CONFLICT (order_id) DO NOTHING`,
         [order.id, order.affiliate_id, rate, amount]
       );
+      commissionInserted = commissionInsertRes.rowCount > 0;
 
-      if (commissionInsertRes.rowCount > 0 && amount > 0) {
+      if (commissionInserted && amount > 0) {
         const debtRes = await client.query(
           `SELECT affiliate_debt
            FROM affiliates
@@ -3529,46 +3791,45 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
           } catch (err) {
             console.error("Affiliate commission notification failed", err);
           }
-          const salesRes = await pool.query(
-            `SELECT COUNT(*)::int AS count
-             FROM commissions
-             WHERE affiliate_id = $1
-               AND status != 'REFUNDED'`,
-            [order.affiliate_id]
-          );
-          const salesCount = salesRes.rows[0]?.count || 0;
-          const earningsRes = await pool.query(
-            `SELECT COALESCE(SUM(amount - COALESCE(refunded_amount, 0)), 0) AS total
-             FROM commissions
-             WHERE affiliate_id = $1
-               AND status != 'REFUNDED'`,
-            [order.affiliate_id]
-          );
-          const earningsTotal = Number(earningsRes.rows[0]?.total || 0);
-          let rankMessage = "";
-          if (salesCount === 2 && earningsTotal >= 5) {
-            rankMessage =
-              "🎉 ¡Felicidades! Subiste a <b>Afiliado Bronce</b> 🥉\n\n" +
-              "Beneficios próximos: mejores comisiones y materiales.";
-          } else if (salesCount === 20 && earningsTotal >= 50) {
-            rankMessage =
-              "🎉 ¡Felicidades! Subiste a <b>Afiliado Plata</b> 🥈\n\n" +
-              "Beneficios próximos: mejores comisiones, bonos y materiales.";
-          } else if (salesCount === 40 && earningsTotal >= 200) {
-            rankMessage =
-              "🏆 ¡Increíble! Subiste a <b>Afiliado Oro</b> 🥇\n\n" +
-              "Beneficios próximos: comisiones VIP, prioridad y bonos especiales.";
-          } else if (salesCount === 70 && earningsTotal >= 500) {
-            rankMessage =
-              "💎 ¡Excelente! Subiste a <b>Afiliado Diamante</b> 💎\n\n" +
-              "Beneficios próximos: bonos premium y soporte prioritario.";
-          } else if (salesCount === 100 && earningsTotal >= 600) {
-            rankMessage =
-              "👑 ¡Legendario! Subiste a <b>Afiliado Elite</b> 👑\n\n" +
-              "Beneficios próximos: recompensas elite y beneficios exclusivos.";
-          }
-          if (rankMessage) {
-            await sendMessage(affiliateTelegramId, rankMessage, { parse_mode: "HTML" });
+          if (commissionInserted && affiliateLevelBefore) {
+            const levelStatsRes = await pool.query(
+              `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
+                      COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
+                      MAX(c.earned_at) AS last_sale_at
+               FROM commissions c
+               LEFT JOIN (
+                 SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+                 FROM order_items
+                 GROUP BY order_id
+               ) oi ON oi.order_id = c.order_id
+               WHERE c.affiliate_id = $1
+                 AND c.status != 'REFUNDED'`,
+              [order.affiliate_id]
+            );
+            const levelStats = levelStatsRes.rows[0] || {};
+            const newSalesTotal = Number(levelStats.sales_count || 0);
+            const newEarningsTotal = Number(levelStats.earnings_total || 0);
+            let newDaysSinceLastSale = null;
+            if (levelStats.last_sale_at) {
+              const lastSaleTime = new Date(levelStats.last_sale_at).getTime();
+              newDaysSinceLastSale = Math.max(
+                Math.floor((Date.now() - lastSaleTime) / (24 * 60 * 60 * 1000)),
+                0
+              );
+            }
+            const affiliateLevelAfter = getAffiliateLevel({
+              salesTotal: newSalesTotal,
+              earningsTotal: newEarningsTotal,
+              daysSinceLastSale: newDaysSinceLastSale,
+            });
+            if (affiliateLevelAfter.index > affiliateLevelBefore.index) {
+              const rankMessage = buildAffiliateRankUpMessage(affiliateLevelAfter.key);
+              if (rankMessage) {
+                await sendMessage(affiliateTelegramId, rankMessage, {
+                  parse_mode: "HTML",
+                });
+              }
+            }
           }
         }
       } catch (err) {
@@ -3667,13 +3928,21 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       } catch (err) {
         console.error("Failed to calculate local total", err);
       }
+      const totalsWithMarkup = await resolveTotalsWithMarkup(
+        pool,
+        subtotal,
+        order.payment_method,
+        localTotal
+      );
 
       receipt = buildReceiptMessage(
         order,
         paymentRes.rows[0],
         userLocale,
-        subtotal,
-        localTotal,
+        totalsWithMarkup.subtotalUsd,
+        totalsWithMarkup.totalUsd,
+        totalsWithMarkup.localTotal,
+        totalsWithMarkup.markupPercent,
         commissionAmount,
         referredBy
       );
@@ -3685,11 +3954,11 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         username: order.telegram_username,
         dateTime: formatBogotaDate(order.paid_at || new Date()),
         items,
-        subtotal,
+        subtotal: totalsWithMarkup.subtotalUsd,
         commission: commissionAmount,
-        total: subtotal,
+        total: totalsWithMarkup.totalUsd,
         referredBy,
-        localTotal,
+        localTotal: totalsWithMarkup.localTotal,
         locale: userLocale,
       });
 
@@ -3977,7 +4246,11 @@ router.post("/orders/:id/refund", async (req, res, next) => {
 });
 
 router.post("/orders/:id/reject", async (req, res, next) => {
-  const orderId = req.params.id;
+  const { ref: orderLookupRef, orderNumber: orderLookupNumber } =
+    parseOrderLookupRef(req.params.id);
+  if (!orderLookupRef) {
+    return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
+  }
   const { mode, reason } = req.body || {};
   const pool = getPool();
   const client = await pool.connect();
@@ -3993,9 +4266,9 @@ router.post("/orders/:id/reject", async (req, res, next) => {
       `SELECT o.*, u.telegram_id
        FROM orders o
        JOIN users u ON u.id = o.user_id
-       WHERE o.id = $1
+       WHERE (o.id::text = $1 OR ($2::bigint IS NOT NULL AND o.order_number = $2))
        FOR UPDATE`,
-      [orderId]
+      [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
@@ -4003,6 +4276,7 @@ router.post("/orders/:id/reject", async (req, res, next) => {
       return res.status(404).json({ error: "ORDER_NOT_FOUND" });
     }
 
+    const orderId = orderRes.rows[0].id;
     const paymentRes = await client.query(
       "SELECT * FROM order_payments WHERE order_id = $1",
       [orderId]
@@ -5136,20 +5410,31 @@ router.post("/affiliates/:id/invoices", async (req, res, next) => {
     };
 
     if (affiliate.telegram_id) {
-      sendPhoto(affiliate.telegram_id, {
-        url: env.AFFILIATE_INVOICE_IMAGE_URL || "https://i.ibb.co/hJL9BQSr/FACTURA.png",
-        caption: message,
-        parse_mode: "HTML",
-        reply_markup: replyMarkup,
-      }).catch((err) => {
-        console.error("Affiliate invoice photo failed", err);
+      const assets = await getBotAssets(pool);
+      const invoiceImageUrl = assets.affiliate_invoice_image_url || null;
+      if (invoiceImageUrl) {
+        sendPhoto(affiliate.telegram_id, {
+          url: invoiceImageUrl,
+          caption: message,
+          parse_mode: "HTML",
+          reply_markup: replyMarkup,
+        }).catch((err) => {
+          console.error("Affiliate invoice photo failed", err);
+          sendMessage(affiliate.telegram_id, message, {
+            parse_mode: "HTML",
+            reply_markup: replyMarkup,
+          }).catch((fallbackErr) => {
+            console.error("Affiliate invoice notification failed", fallbackErr);
+          });
+        });
+      } else {
         sendMessage(affiliate.telegram_id, message, {
           parse_mode: "HTML",
           reply_markup: replyMarkup,
         }).catch((fallbackErr) => {
           console.error("Affiliate invoice notification failed", fallbackErr);
         });
-      });
+      }
     }
 
     await pool.query(

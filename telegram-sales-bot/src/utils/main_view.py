@@ -1,13 +1,89 @@
+import logging
 from typing import Dict, Optional
 
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.enums import ParseMode
 from aiogram.types import InlineKeyboardMarkup, InputMediaPhoto, Message
 
+logger = logging.getLogger(__name__)
+
 _MAIN_MESSAGE_BY_USER: Dict[int, int] = {}
 _LAST_VIEW_BY_USER: Dict[int, Dict[str, object]] = {}
 _VIEW_HISTORY_BY_USER: Dict[int, list[Dict[str, object]]] = {}
 _MAX_HISTORY = 20
+
+
+def _get_keyboard_stats(reply_markup: Optional[InlineKeyboardMarkup]) -> tuple[int, int]:
+    if not reply_markup:
+        return 0, 0
+    inline_keyboard = getattr(reply_markup, "inline_keyboard", None) or []
+    buttons = 0
+    max_callback_len = 0
+    for row in inline_keyboard:
+        for button in row:
+            buttons += 1
+            callback_data = getattr(button, "callback_data", None)
+            if callback_data:
+                callback_len = len(str(callback_data))
+                if callback_len > max_callback_len:
+                    max_callback_len = callback_len
+    return buttons, max_callback_len
+
+
+def _log_telegram_error(
+    action: str,
+    error: Exception,
+    *,
+    user_id: int,
+    chat_id: int,
+    message_id: Optional[int],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup],
+    photo: Optional[str] = None,
+) -> None:
+    buttons, max_callback_len = _get_keyboard_stats(reply_markup)
+    logger.warning(
+        "telegram_ui_error action=%s user_id=%s chat_id=%s message_id=%s text_len=%s photo=%s buttons=%s max_callback_len=%s error=%s",
+        action,
+        user_id,
+        chat_id,
+        message_id,
+        len(text or ""),
+        bool(photo),
+        buttons,
+        max_callback_len,
+        str(error),
+    )
+
+
+async def _drop_main_message(
+    bot,
+    *,
+    user_id: int,
+    chat_id: int,
+    message_id: Optional[int],
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup],
+    photo: Optional[str] = None,
+    action: str = "drop_main_message.delete",
+) -> None:
+    if not message_id:
+        return
+    try:
+        await bot.delete_message(chat_id=chat_id, message_id=message_id)
+    except TelegramBadRequest as exc:
+        _log_telegram_error(
+            action,
+            exc,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+            photo=photo,
+        )
+    finally:
+        _MAIN_MESSAGE_BY_USER.pop(user_id, None)
 
 
 def set_main_message_id(user_id: int, message_id: int) -> None:
@@ -22,7 +98,6 @@ def _record_view_state(
     photo: Optional[str] = None,
     *,
     push_history: bool = True,
-    keep_photo: bool = False,
 ) -> None:
     previous = _LAST_VIEW_BY_USER.get(user_id)
     if push_history and previous:
@@ -30,8 +105,6 @@ def _record_view_state(
         history.append(previous)
         if len(history) > _MAX_HISTORY:
             history.pop(0)
-    if keep_photo and photo is None and previous:
-        photo = previous.get("photo")  # type: ignore[assignment]
     _LAST_VIEW_BY_USER[user_id] = {
         "text": text,
         "reply_markup": reply_markup,
@@ -86,28 +159,15 @@ async def try_edit_main_view(
         error_text = str(exc).lower()
         if "message is not modified" in error_text:
             return True
-        if "message to edit not found" not in error_text and "message can't be edited" not in error_text:
-            try:
-                await bot.edit_message_caption(
-                    chat_id=chat_id,
-                    message_id=message_id,
-                    caption=text,
-                    reply_markup=reply_markup,
-                    parse_mode=parse_mode,
-                )
-                _record_view_state(
-                    user_id,
-                    text,
-                    reply_markup,
-                    parse_mode,
-                    push_history=push_history,
-                    keep_photo=True,
-                )
-                return True
-            except TelegramBadRequest as caption_exc:
-                caption_error = str(caption_exc).lower()
-                if "message is not modified" in caption_error:
-                    return True
+        _log_telegram_error(
+            "try_edit_main_view.edit_text",
+            exc,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message_id,
+            text=text,
+            reply_markup=reply_markup,
+        )
         return False
 
 
@@ -122,9 +182,6 @@ async def render_main_view(
 ) -> Message:
     chat_id = message.chat.id
     message_id = _MAIN_MESSAGE_BY_USER.get(user_id)
-
-    def _should_fallback_to_new_message(error_text: str) -> bool:
-        return "caption is too long" in error_text or "message is too long" in error_text
 
     if message_id:
         try:
@@ -143,36 +200,38 @@ async def render_main_view(
             error_text = str(exc).lower()
             if "message is not modified" in error_text:
                 return message
-            if "message to edit not found" not in error_text and "message can't be edited" not in error_text:
-                try:
-                    await message.bot.edit_message_caption(
-                        chat_id=chat_id,
-                        message_id=message_id,
-                        caption=text,
-                        reply_markup=reply_markup,
-                        parse_mode=parse_mode,
-                    )
-                    _record_view_state(
-                        user_id,
-                        text,
-                        reply_markup,
-                        parse_mode,
-                        push_history=push_history,
-                        keep_photo=True,
-                    )
-                    return message
-                except TelegramBadRequest as caption_exc:
-                    caption_error = str(caption_exc).lower()
-                    if "message is not modified" in caption_error:
-                        return message
-                    if (
-                        "message to edit not found" not in caption_error
-                        and "message can't be edited" not in caption_error
-                        and not _should_fallback_to_new_message(caption_error)
-                    ):
-                        return message
+            _log_telegram_error(
+                "render_main_view.edit_text",
+                exc,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+            )
+            await _drop_main_message(
+                message.bot,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                action="render_main_view.delete_after_edit_text_error",
+            )
 
-    sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    try:
+        sent = await message.answer(text, reply_markup=reply_markup, parse_mode=parse_mode)
+    except TelegramBadRequest as answer_exc:
+        _log_telegram_error(
+            "render_main_view.answer",
+            answer_exc,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message.message_id if message else None,
+            text=text,
+            reply_markup=reply_markup,
+        )
+        raise
     if sent:
         _MAIN_MESSAGE_BY_USER[user_id] = sent.message_id
         _record_view_state(
@@ -216,8 +275,26 @@ async def render_main_view_with_photo(
             error_text = str(exc).lower()
             if "message is not modified" in error_text:
                 return message
-            if "message to edit not found" in error_text or "message can't be edited" in error_text:
-                _MAIN_MESSAGE_BY_USER.pop(user_id, None)
+            _log_telegram_error(
+                "render_main_view_with_photo.edit_media",
+                exc,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                photo=photo,
+            )
+            await _drop_main_message(
+                message.bot,
+                user_id=user_id,
+                chat_id=chat_id,
+                message_id=message_id,
+                text=text,
+                reply_markup=reply_markup,
+                photo=photo,
+                action="render_main_view_with_photo.delete_after_edit_media_error",
+            )
 
     try:
         sent = await message.answer_photo(
@@ -237,7 +314,17 @@ async def render_main_view_with_photo(
                 push_history=push_history,
             )
         return sent
-    except TelegramBadRequest:
+    except TelegramBadRequest as photo_exc:
+        _log_telegram_error(
+            "render_main_view_with_photo.answer_photo",
+            photo_exc,
+            user_id=user_id,
+            chat_id=chat_id,
+            message_id=message.message_id if message else None,
+            text=text,
+            reply_markup=reply_markup,
+            photo=photo,
+        )
         sent = await message.answer(
             text,
             reply_markup=reply_markup,

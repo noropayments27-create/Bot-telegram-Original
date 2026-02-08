@@ -2,10 +2,11 @@ const { getPool } = require("../../db");
 const { consumeStockForOrder, releaseStockForOrder } = require("../../services/stock");
 const { deliverOrderToTelegram } = require("../../services/delivery");
 const { getAffiliateLevel } = require("../../services/affiliateLevels");
-const { listPaymentMethods } = require("../../services/paymentMethods");
+const { listPaymentMethods, normalizeMethodKey } = require("../../services/paymentMethods");
 const { getBotAssets } = require("../../services/botAssets");
 const { sendPhoto } = require("../../services/telegram");
 const { ensureProductCategorySchema } = require("../../services/productSchema");
+const { validatePaymentProofScreenshot } = require("../../services/paymentProofValidation");
 const {
   recordAdminOrderNotification,
   buildOrderNotificationCaption,
@@ -17,6 +18,70 @@ const ORDER_STATUS_PENDING = "CREATED"; // maps to PENDING_PAYMENT
 const ORDER_STATUS_WAITING_CONFIRMATION = "WAITING_PAYMENT"; // maps to WAITING_CONFIRMATION
 const ORDER_STATUS_PAID = "PAID";
 const ORDER_STATUS_REJECTED = "CANCELLED"; // maps to REJECTED
+
+async function getPaymentMethodMarkup(pool, paymentMethod) {
+  const rawKey = normalizeMethodKey(paymentMethod);
+  if (!rawKey) {
+    return null;
+  }
+  let key = rawKey;
+  if (["BTC", "USDT", "USDT_BSC", "USDT_TRON", "LTC"].includes(key)) {
+    key = "CRYPTO";
+  } else if (key === "MERCADO_PAGO") {
+    key = "MERCADOPAGO";
+  } else if (key === "BINANCE") {
+    key = "BINANCE_ID";
+  }
+  const res = await pool.query(
+    "SELECT markup FROM payment_methods WHERE method_key = $1",
+    [key]
+  );
+  const rawMarkup = res.rows[0]?.markup;
+  if (rawMarkup == null || rawMarkup === "") {
+    return null;
+  }
+  const value = Number(String(rawMarkup).trim());
+  return Number.isFinite(value) ? value : null;
+}
+
+async function resolveTotalsWithMarkup(pool, subtotalUsd, paymentMethod, localTotal = null) {
+  const baseSubtotal = Number.isFinite(Number(subtotalUsd))
+    ? Number(Number(subtotalUsd).toFixed(2))
+    : 0;
+  const methodKey = normalizeMethodKey(paymentMethod);
+  let markupPercent = null;
+  let localTotalWithMarkup = localTotal;
+
+  if (methodKey && localTotal && localTotal.amount != null) {
+    try {
+      const markup = await getPaymentMethodMarkup(pool, methodKey);
+      if (markup != null && Number.isFinite(Number(markup))) {
+        const localCurrency = String(localTotal.currency || "")
+          .trim()
+          .toUpperCase();
+        const localAmount = Number(localTotal.amount);
+        const isDollarEquivalent =
+          localCurrency === "USD" || localCurrency === "USDT";
+        if (Number.isFinite(localAmount) && !isDollarEquivalent) {
+          markupPercent = Number(markup);
+          const factor = 1 + markupPercent / 100;
+          localTotalWithMarkup = {
+            ...localTotal,
+            amount: localAmount * factor,
+          };
+        }
+      }
+    } catch (error) {
+      console.error("Failed to resolve totals with markup (orders.controller)", error);
+    }
+  }
+
+  return {
+    subtotalUsd: baseSubtotal,
+    localTotal: localTotalWithMarkup,
+    markupPercent,
+  };
+}
 
 function parseAdminTelegramIds() {
   const value = process.env.ADMIN_TELEGRAM_IDS || "";
@@ -509,6 +574,20 @@ async function submitPaymentProof(req, res, next) {
         .json({ error: "SCREENSHOT_ALREADY_SUBMITTED" });
     }
 
+    const proofValidation = await validatePaymentProofScreenshot(
+      screenshotFileId,
+      paymentMethod
+    );
+    if (proofValidation && proofValidation.valid === false) {
+      await client.query("ROLLBACK");
+      return res.status(422).json({
+        error: "PAYMENT_PROOF_NOT_VALID",
+        message:
+          "⚠️ La imagen no parece un comprobante de pago. Envía una captura donde se vea método y monto.",
+        details: proofValidation,
+      });
+    }
+
     const paymentRes = await client.query(
       `INSERT INTO order_payments (
          order_id,
@@ -591,6 +670,12 @@ async function submitPaymentProof(req, res, next) {
           console.error("Failed to calculate local total", error);
         }
       }
+      const totalsWithMarkup = await resolveTotalsWithMarkup(
+        pool,
+        subtotalUsd,
+        paymentMethod,
+        localTotal
+      );
 
       const caption = buildOrderNotificationCaption({
         order: updatedOrder,
@@ -600,8 +685,9 @@ async function submitPaymentProof(req, res, next) {
         },
         items,
         payment: paymentRow,
-        subtotalUsd,
-        localTotal,
+        subtotalUsd: totalsWithMarkup.subtotalUsd,
+        localTotal: totalsWithMarkup.localTotal,
+        markupPercent: totalsWithMarkup.markupPercent,
       });
       const replyMarkup = buildOrderNotificationKeyboard({
         id: updatedOrder.id,

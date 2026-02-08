@@ -8,7 +8,6 @@ import logging
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
-    BOT_COMMUNITY_IMAGE_URL,
     ADMIN_TELEGRAM_IDS,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
@@ -159,7 +158,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         locale = await get_user_locale(
             api_client, message.from_user.id, message.from_user.language_code
         )
-        await message.answer(t(locale, "access_code_prompt"))
+        await message.answer(t(locale, "access_code_prompt"), parse_mode="HTML")
         await state.set_state(AccessStates.awaiting_code)
         return
 
@@ -391,9 +390,7 @@ async def handle_home_community(callback: CallbackQuery) -> None:
             ]
         ]
     )
-    community_image_url = await get_bot_asset_image(
-        api_client, "community_image_url", BOT_COMMUNITY_IMAGE_URL
-    )
+    community_image_url = await get_bot_asset_image(api_client, "community_image_url")
     if community_image_url:
         await render_main_view_with_photo(
             callback.message,

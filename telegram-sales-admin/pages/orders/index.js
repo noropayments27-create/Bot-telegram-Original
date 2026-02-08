@@ -109,7 +109,8 @@ function formatUsdValue(value) {
     return String(value);
   }
   return numericValue.toLocaleString("en-US", {
-    maximumFractionDigits: 0,
+    minimumFractionDigits: 0,
+    maximumFractionDigits: 2,
   });
 }
 
@@ -538,7 +539,10 @@ export default function OrdersPage() {
       return;
     }
     const totalUsd = Number(
-      detail.totals?.subtotal_usd ?? order.unit_price_at_purchase ?? 0
+      detail.totals?.subtotal_usd
+      ?? detail.totals?.total_usd
+      ?? order.unit_price_at_purchase
+      ?? 0
     );
     const alreadyRefunded = Number(order.refunded_amount || 0);
     const remaining = Math.max(totalUsd - alreadyRefunded, 0);
@@ -858,12 +862,16 @@ export default function OrdersPage() {
                         <h3>Detalle</h3>
                         <p>Estado: {formatOrderStatus(detail.order.status)}</p>
                         <p>
-                          Total USD: $
+                          Subtotal USD: $
                           {formatUsdValue(
                             detail.totals?.subtotal_usd ??
                               detail.order.unit_price_at_purchase
                           )}
                         </p>
+                        {detail.totals?.markup_percent !== null
+                          && detail.totals?.markup_percent !== undefined && (
+                          <p>Markup aplicado: {detail.totals.markup_percent}%</p>
+                        )}
                         {detail.local_total && (
                           <p className="orders-detail-total-line">
                             <span>Total {detail.local_total.currency}:</span>
@@ -950,7 +958,7 @@ export default function OrdersPage() {
                                 );
                               })}
                               <p>
-                                Total: $
+                                Subtotal: $
                                 {formatUsdValue(
                                   detail.totals?.subtotal_usd ??
                                     detail.order.unit_price_at_purchase

@@ -1,5 +1,6 @@
 const ADMIN_PANEL_URL =
-  "https://fierce-elke-1noropayments-f3bf4dd6.koyeb.app/login";
+  process.env.ADMIN_PANEL_URL
+  || "http://localhost:3000";
 
 async function ensureAdminOrderNotificationSchema(pool) {
   await pool.query(
@@ -265,7 +266,7 @@ function buildOrderNotificationKeyboard(order) {
   return {
     inline_keyboard: [
       [
-        { text: "Panel Admin", url: ADMIN_PANEL_URL },
+        { text: "Panel Admin", callback_data: `admin_panel:${orderId}` },
         { text: "Banear Usuario", callback_data: `admin_ban:${telegramId}:${orderId}` },
       ],
     ],

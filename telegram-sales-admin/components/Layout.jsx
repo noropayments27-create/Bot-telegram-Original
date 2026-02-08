@@ -16,7 +16,7 @@ export default function Layout({ children }) {
   return (
     <div className={styles.layout}>
       <Sidebar open={open} onClose={() => setOpen(false)} />
-      <TopBar onMenu={() => setOpen(true)} />
+      <TopBar onMenu={() => setOpen(true)} sidebarOpen={open} />
       {open && <div className={styles.overlay} onClick={() => setOpen(false)} />}
       <main className={styles.main}>{children}</main>
     </div>

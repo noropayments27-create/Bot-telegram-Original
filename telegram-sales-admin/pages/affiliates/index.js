@@ -178,8 +178,8 @@ export default function AffiliatesPage() {
 
   const getAffiliateLevel = (salesTotal, earningsTotal, lastSaleAt) => {
     let baseIndex = 0;
-    if (salesTotal >= 100 && earningsTotal >= 600) baseIndex = 5;
-    else if (salesTotal >= 70 && earningsTotal >= 500) baseIndex = 4;
+    if (salesTotal >= 200 && earningsTotal >= 800) baseIndex = 5;
+    else if (salesTotal >= 100 && earningsTotal >= 500) baseIndex = 4;
     else if (salesTotal >= 40 && earningsTotal >= 200) baseIndex = 3;
     else if (salesTotal >= 20 && earningsTotal >= 50) baseIndex = 2;
     else if (salesTotal >= 2 && earningsTotal >= 5) baseIndex = 1;

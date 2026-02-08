@@ -10,7 +10,6 @@ from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMar
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
-    BOT_SUPPORT_IMAGE_URL,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
@@ -28,6 +27,7 @@ router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _IMAGE_DUPLICATE_TTL_SECONDS = 24 * 60 * 60
 _SUPPORT_IMAGE_CACHE: Dict[int, Dict[str, float]] = {}
+_PAYMENT_WAITING_PHOTO_STATE = "PaymentStates:waiting_photo"
 
 
 class SupportStates(StatesGroup):
@@ -110,9 +110,7 @@ async def _render_support_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: str | None = None,
 ) -> None:
-    support_image_url = await get_bot_asset_image(
-        api_client, "support_image_url", BOT_SUPPORT_IMAGE_URL
-    )
+    support_image_url = await get_bot_asset_image(api_client, "support_image_url")
     if support_image_url:
         await render_main_view_with_photo(
             message,
@@ -398,6 +396,9 @@ async def handle_support_message(message: Message, state: FSMContext) -> None:
 async def handle_support_photo(message: Message, state: FSMContext) -> None:
     if not message.photo or not message.from_user:
         return
+    current_state = await state.get_state()
+    if current_state == _PAYMENT_WAITING_PHOTO_STATE:
+        return
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
@@ -420,7 +421,7 @@ async def handle_support_photo(message: Message, state: FSMContext) -> None:
     active = await api_client.get_active_ticket(message.from_user.id)
     ticket = active.get("ticket")
     if not ticket:
-        await message.answer(t(locale, "support_no_active_ticket"))
+        await message.answer(t(locale, "image_upload_restricted"), parse_mode="HTML")
         await state.clear()
         return
     if not ticket.get("allow_image"):
@@ -455,6 +456,9 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
         return
     if not message.document.mime_type or not message.document.mime_type.startswith("image/"):
         return
+    current_state = await state.get_state()
+    if current_state == _PAYMENT_WAITING_PHOTO_STATE:
+        return
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
@@ -477,7 +481,7 @@ async def handle_support_document(message: Message, state: FSMContext) -> None:
     active = await api_client.get_active_ticket(message.from_user.id)
     ticket = active.get("ticket")
     if not ticket:
-        await message.answer(t(locale, "support_no_active_ticket"))
+        await message.answer(t(locale, "image_upload_restricted"), parse_mode="HTML")
         await state.clear()
         return
     if not ticket.get("allow_image"):

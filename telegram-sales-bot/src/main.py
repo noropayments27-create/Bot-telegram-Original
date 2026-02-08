@@ -5,7 +5,16 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from .config import TELEGRAM_BOT_TOKEN
-from .handlers import admin_actions, admin_auth, affiliates, lang, start, shop, support
+from .handlers import (
+    admin_actions,
+    admin_auth,
+    admin_commands,
+    affiliates,
+    lang,
+    start,
+    shop,
+    support,
+)
 from .middlewares.ban_guard import BanGuardMiddleware
 from .middlewares.access_code import AccessCodeMiddleware
 from .middlewares.maintenance_guard import MaintenanceGuardMiddleware
@@ -36,6 +45,7 @@ async def main() -> None:
     dp.include_router(support.router)
     dp.include_router(admin_auth.router)
     dp.include_router(admin_actions.router)
+    dp.include_router(admin_commands.router)
     dp.include_router(affiliates.router)
 
     await dp.start_polling(bot)

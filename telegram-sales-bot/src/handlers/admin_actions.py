@@ -1,7 +1,17 @@
+from urllib.parse import quote
+from urllib.parse import urlparse
+
+import httpx
 from aiogram import F, Router
-from aiogram.types import CallbackQuery
+from aiogram.exceptions import TelegramBadRequest
+from aiogram.fsm.context import FSMContext
+from aiogram.fsm.state import State, StatesGroup
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+import logging
+import time
 
 from ..config import (
+    ADMIN_PANEL_LOCAL_URL,
     ADMIN_TELEGRAM_IDS,
     API_BASE_URL,
     API_TOKEN,
@@ -17,6 +27,238 @@ from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
+logger = logging.getLogger(__name__)
+
+
+class AdminPanelAccessStates(StatesGroup):
+    awaiting_password = State()
+
+
+_ADMIN_PANEL_PENDING_TTL_SECONDS = 180
+_admin_panel_pending: dict[int, dict[str, str | float]] = {}
+
+
+def _set_admin_panel_pending(admin_id: int, order_id: str) -> None:
+    _admin_panel_pending[admin_id] = {
+        "order_id": order_id,
+        "expires_at": time.time() + _ADMIN_PANEL_PENDING_TTL_SECONDS,
+    }
+
+
+def _get_admin_panel_pending(admin_id: int) -> dict[str, str | float] | None:
+    pending = _admin_panel_pending.get(admin_id)
+    if not pending:
+        return None
+    expires_at = float(pending.get("expires_at") or 0)
+    if expires_at <= time.time():
+        _admin_panel_pending.pop(admin_id, None)
+        return None
+    return pending
+
+
+def _clear_admin_panel_pending(admin_id: int) -> None:
+    _admin_panel_pending.pop(admin_id, None)
+
+
+def _should_handle_admin_panel_password_fallback(message: Message) -> bool:
+    user = message.from_user
+    if not user or user.id not in ADMIN_TELEGRAM_IDS:
+        return False
+    text = (message.text or "").strip()
+    if not text or text.startswith("/"):
+        return False
+    return _get_admin_panel_pending(user.id) is not None
+
+
+def _build_admin_panel_access_url(token: str, order_id: str | None = None) -> str:
+    base = str(ADMIN_PANEL_LOCAL_URL or "").strip()
+    if not base:
+        base = "http://localhost:3000"
+    base = base.rstrip("/")
+    login_base = base if base.endswith("/telegram-login") else f"{base}/telegram-login"
+    url = f"{login_base}?token={quote(token)}"
+    if order_id:
+        url += f"&orderId={quote(order_id)}"
+    return url
+
+
+def _is_local_url(url: str) -> bool:
+    try:
+        parsed = urlparse(url)
+    except Exception:
+        return False
+    host = (parsed.hostname or "").strip().lower()
+    return host in {"localhost", "127.0.0.1", "::1"}
+
+
+@router.callback_query(F.data.startswith("admin_panel:"))
+async def handle_admin_panel_access(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    wait_seconds = check_global_rate_limit(
+        callback.from_user.id,
+        BOT_RATE_LIMIT_SECONDS,
+        BOT_RATE_LIMIT_ENABLED,
+        BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
+    )
+    if wait_seconds > 0:
+        await callback.answer(
+            t(locale, "rate_limit_wait").format(seconds=wait_seconds),
+            show_alert=True,
+        )
+        return
+    if callback.from_user.id not in ADMIN_TELEGRAM_IDS:
+        await callback.answer(t(locale, "admin_not_authorized"), show_alert=True)
+        return
+
+    parts = callback.data.split(":")
+    order_id = parts[1] if len(parts) > 1 else ""
+    _set_admin_panel_pending(callback.from_user.id, order_id)
+    await state.set_state(AdminPanelAccessStates.awaiting_password)
+    await state.update_data(admin_panel_order_id=order_id)
+    logger.info(
+        "admin_panel_access_requested admin_id=%s order_id=%s",
+        callback.from_user.id,
+        order_id,
+    )
+    await callback.message.answer(t(locale, "admin_panel_password_prompt"))
+    await callback.answer()
+
+
+async def _process_admin_panel_password(
+    message: Message, state: FSMContext, password: str
+) -> None:
+    if not message.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, message.from_user.id, message.from_user.language_code
+    )
+    if message.from_user.id not in ADMIN_TELEGRAM_IDS:
+        _clear_admin_panel_pending(message.from_user.id)
+        await state.clear()
+        await message.answer(t(locale, "admin_not_authorized"))
+        return
+
+    text = password.strip()
+    if not text:
+        return
+    if text.lower() == "/cancel":
+        _clear_admin_panel_pending(message.from_user.id)
+        await state.clear()
+        await message.answer("Proceso cancelado.")
+        return
+
+    logger.info(
+        "admin_panel_password_received admin_id=%s text_len=%s",
+        message.from_user.id,
+        len(text),
+    )
+
+    # Best-effort: remove password message from chat.
+    try:
+        await message.delete()
+    except Exception:
+        pass
+
+    try:
+        result = await api_client.admin_auth_direct(text)
+    except httpx.HTTPStatusError as exc:
+        if exc.response.status_code == 401:
+            logger.warning(
+                "admin_panel_password_invalid admin_id=%s",
+                message.from_user.id,
+            )
+            await message.answer(t(locale, "admin_panel_password_invalid"))
+            return
+        logger.exception(
+            "admin_panel_password_api_error admin_id=%s status=%s",
+            message.from_user.id,
+            exc.response.status_code,
+        )
+        _clear_admin_panel_pending(message.from_user.id)
+        await state.clear()
+        await message.answer("❌ No se pudo validar la clave con la API.")
+        return
+    except Exception:
+        logger.exception(
+            "admin_panel_password_connection_error admin_id=%s",
+            message.from_user.id,
+        )
+        _clear_admin_panel_pending(message.from_user.id)
+        await state.clear()
+        await message.answer("❌ Error de conexión validando la clave del panel.")
+        return
+
+    token = str(result.get("token") or "").strip()
+    if not token:
+        logger.error(
+            "admin_panel_password_missing_token admin_id=%s",
+            message.from_user.id,
+        )
+        _clear_admin_panel_pending(message.from_user.id)
+        await state.clear()
+        await message.answer("❌ No se recibió token de acceso.")
+        return
+
+    data = await state.get_data()
+    state_order_id = str(data.get("admin_panel_order_id") or "").strip()
+    pending = _get_admin_panel_pending(message.from_user.id) or {}
+    pending_order_id = str(pending.get("order_id") or "").strip()
+    order_id = state_order_id or pending_order_id or None
+    access_url = _build_admin_panel_access_url(token, order_id)
+    logger.info(
+        "admin_panel_password_valid admin_id=%s order_id=%s",
+        message.from_user.id,
+        order_id or "",
+    )
+    _clear_admin_panel_pending(message.from_user.id)
+    await state.clear()
+    if _is_local_url(access_url):
+        # Telegram no acepta localhost en botones inline URL.
+        await message.answer(
+            f"{t(locale, 'admin_panel_access_ready')}\n\n"
+            "⚠️ Telegram no permite botón con URL local.\n"
+            "Copia y abre este enlace en tu navegador local:\n"
+            f"`{access_url}`",
+            parse_mode="Markdown",
+        )
+        return
+
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "admin_panel_access_button"),
+                    url=access_url,
+                )
+            ]
+        ]
+    )
+    try:
+        await message.answer(t(locale, "admin_panel_access_ready"), reply_markup=keyboard)
+    except TelegramBadRequest:
+        await message.answer(
+            f"{t(locale, 'admin_panel_access_ready')}\n\n"
+            "⚠️ Telegram rechazó el botón URL.\n"
+            "Abre este enlace manualmente:\n"
+            f"`{access_url}`",
+            parse_mode="Markdown",
+        )
+
+
+@router.message(AdminPanelAccessStates.awaiting_password)
+async def handle_admin_panel_password(message: Message, state: FSMContext) -> None:
+    await _process_admin_panel_password(message, state, message.text or "")
+
+
+@router.message(F.text, _should_handle_admin_panel_password_fallback)
+async def handle_admin_panel_password_fallback(
+    message: Message, state: FSMContext
+) -> None:
+    await _process_admin_panel_password(message, state, message.text or "")
 
 
 @router.callback_query(F.data.startswith("admin_ban:"))

@@ -11,6 +11,7 @@
   background: rgba(0, 0, 0, 0.7);
   border-bottom: 1px solid rgba(255, 36, 0, 0.2);
   z-index: 140;
+  isolation: isolate;
 }
 
 .menuButton {
@@ -23,23 +24,54 @@
   display: inline-flex;
   align-items: center;
   justify-content: center;
+  flex-direction: column;
+  gap: 5px;
   cursor: pointer;
+  padding: 0 8px;
 }
 
-.menuButton svg {
+.menuLine {
+  display: block;
   width: 20px;
-  height: 20px;
+  height: 2px;
+  border-radius: 999px;
+  background: #ffffff;
 }
 
 .title {
+  position: absolute;
+  left: 50%;
+  transform: translateX(-50%);
+  font-family: "BenguiatBold", serif;
   font-weight: 700;
-  font-size: 16px;
-  color: #FFFFFF;
+  font-size: 20px;
+  letter-spacing: 0.02em;
+  color: #ffffff;
+  text-align: center;
+  pointer-events: none;
+  white-space: nowrap;
+}
+
+.rightSlot {
+  min-width: 42px;
+  min-height: 42px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: flex-end;
 }
 
 
 @media (max-width: 960px) {
   .topBar {
     display: flex;
+  }
+}
+
+@media (max-width: 520px) {
+  .title {
+    font-size: 17px;
+    max-width: 70vw;
+    overflow: hidden;
+    text-overflow: ellipsis;
   }
 }

@@ -8,7 +8,11 @@ import "react-resizable/css/styles.css";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
-  const useLayout = router.pathname !== "/login";
+  const useLayout = (
+    router.pathname !== "/login"
+    && router.pathname !== "/telegram-access"
+    && router.pathname !== "/telegram-login"
+  );
 
   useEffect(() => {
     if (typeof window === "undefined") {

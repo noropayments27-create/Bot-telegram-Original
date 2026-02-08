@@ -6,12 +6,13 @@ import { IconImages } from "../components/PanelIcons";
 
 const BOT_IMAGE_FIELDS = [
   { key: "main_image_url", label: "Inicio" },
-  { key: "shop_section_image_url", label: "Tienda" },
-  { key: "cart_image_url", label: "Carrito" },
-  { key: "community_image_url", label: "Comunidad" },
-  { key: "affiliate_panel_image_url", label: "Afiliados" },
-  { key: "support_image_url", label: "Soporte" },
-  { key: "payment_methods_image_url", label: "Elige método" },
+  { key: "shop_section_image_url", label: "Panel: Tienda" },
+  { key: "cart_image_url", label: "Panel: Carrito" },
+  { key: "community_image_url", label: "Panel: Comunidad" },
+  { key: "affiliate_panel_image_url", label: "Panel: Afiliados" },
+  { key: "affiliate_invoice_image_url", label: "Factura afiliado" },
+  { key: "support_image_url", label: "Panel: Soporte" },
+  { key: "payment_methods_image_url", label: "Panel: Elige método de pago" },
 ];
 
 const CRYPTO_ASSET_OPTIONS = [
@@ -27,6 +28,7 @@ const emptyAssets = {
   cart_image_url: "",
   community_image_url: "",
   affiliate_panel_image_url: "",
+  affiliate_invoice_image_url: "",
   support_image_url: "",
   payment_methods_image_url: "",
 };

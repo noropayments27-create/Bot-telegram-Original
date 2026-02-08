@@ -3,6 +3,7 @@ import html
 import json
 import re
 import time
+from contextlib import suppress
 from datetime import datetime
 from typing import Any, Dict, List, Optional, Set
 import httpx
@@ -26,20 +27,9 @@ from ..services.user_locale import get_user_locale
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
-    BOT_CART_IMAGE_URL,
-    BOT_PAYMENT_BINANCE_IMAGE_URL,
-    BOT_PAYMENT_CRYPTO_IMAGE_URL,
-    BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
-    BOT_PAYMENT_NEQUI_IMAGE_URL,
-    BOT_PAYMENT_PAYPAL_IMAGE_URL,
-    BOT_CRYPTO_BTC_IMAGE_URL,
-    BOT_CRYPTO_USDT_TRON_IMAGE_URL,
-    BOT_CRYPTO_USDT_BSC_IMAGE_URL,
-    BOT_CRYPTO_LTC_IMAGE_URL,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
-    BOT_SHOP_SECTION_IMAGE_URL,
     BOT_TO_API_SECRET,
     BINANCE_ID,
     CRYPTO_WALLET_BTC,
@@ -64,6 +54,7 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _IMAGE_DUPLICATE_TTL_SECONDS = 24 * 60 * 60
 _PAYMENT_IMAGE_CACHE: Dict[int, Dict[str, float]] = {}
+_ANALYSIS_PROGRESS_STEPS = [7, 15, 24, 33, 42, 51, 60, 69, 77, 84, 90, 95, 97]
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 _PAGE_SIZE = 9
 _CATEGORY_KEYS = {
@@ -77,15 +68,6 @@ _CATEGORY_TITLES = {
     "vip": "💬 VIP",
     "programas": "💻 Programas y Web",
 }
-_PAYMENT_METHOD_IMAGES = {
-    "nequi": BOT_PAYMENT_NEQUI_IMAGE_URL,
-    "binance": BOT_PAYMENT_BINANCE_IMAGE_URL,
-    "binance_id": BOT_PAYMENT_BINANCE_IMAGE_URL,
-    "crypto": BOT_PAYMENT_CRYPTO_IMAGE_URL,
-    "mp": BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
-    "mercadopago": BOT_PAYMENT_MERCADOPAGO_IMAGE_URL,
-    "paypal": BOT_PAYMENT_PAYPAL_IMAGE_URL,
-}
 _DEFAULT_PAYMENT_METHODS = [
     {"key": "NEQUI", "label": t(None, "btn_method_nequi"), "enabled": True},
     {"key": "BINANCE_ID", "label": t(None, "btn_method_binance"), "enabled": True},
@@ -93,12 +75,6 @@ _DEFAULT_PAYMENT_METHODS = [
     {"key": "MERCADOPAGO", "label": t(None, "btn_method_mp"), "enabled": True},
     {"key": "PAYPAL", "label": t(None, "btn_method_paypal"), "enabled": True},
 ]
-_CRYPTO_ASSET_IMAGES = {
-    "btc": BOT_CRYPTO_BTC_IMAGE_URL,
-    "usdt_tron": BOT_CRYPTO_USDT_TRON_IMAGE_URL,
-    "usdt_bsc": BOT_CRYPTO_USDT_BSC_IMAGE_URL,
-    "ltc": BOT_CRYPTO_LTC_IMAGE_URL,
-}
 class PaymentStates(StatesGroup):
     waiting_photo = State()
 
@@ -113,12 +89,61 @@ def _is_duplicate_user_image(
     user_cache = cache.get(user_id, {})
     if user_cache:
         user_cache = {key: ts for key, ts in user_cache.items() if ts >= cutoff}
-    if unique_id in user_cache:
-        cache[user_id] = user_cache
-        return True
+    cache[user_id] = user_cache
+    return unique_id in user_cache
+
+
+def _remember_user_image(
+    cache: Dict[int, Dict[str, float]], user_id: int, unique_id: str
+) -> None:
+    if not unique_id:
+        return
+    now = time.time()
+    cutoff = now - _IMAGE_DUPLICATE_TTL_SECONDS
+    user_cache = cache.get(user_id, {})
+    if user_cache:
+        user_cache = {key: ts for key, ts in user_cache.items() if ts >= cutoff}
     user_cache[unique_id] = now
     cache[user_id] = user_cache
-    return False
+
+
+def _build_progress_bar(percent: int, width: int = 12) -> str:
+    safe_percent = max(0, min(100, int(percent)))
+    filled = round((safe_percent / 100) * width)
+    return f"[{'█' * filled}{'░' * (width - filled)}] {safe_percent}%"
+
+
+def _build_analysis_notice_text(locale: str | None, percent: int) -> str:
+    return f"{t(locale, 'payment_screenshot_analyzing')}\n{_build_progress_bar(percent)}"
+
+
+async def _animate_analysis_notice(notice: Message, locale: str | None) -> None:
+    index = 0
+    while True:
+        percent = _ANALYSIS_PROGRESS_STEPS[index]
+        try:
+            await notice.edit_text(_build_analysis_notice_text(locale, percent))
+        except Exception:
+            pass
+        await asyncio.sleep(0.9)
+        if index < len(_ANALYSIS_PROGRESS_STEPS) - 1:
+            index += 1
+
+
+async def _cleanup_analysis_notice(
+    notice: Message,
+    animation_task: asyncio.Task[Any] | None,
+) -> None:
+    if animation_task:
+        animation_task.cancel()
+        with suppress(asyncio.CancelledError):
+            await animation_task
+    try:
+        await notice.delete()
+    except Exception:
+        pass
+
+
 def _format_usd_amount(amount: float) -> str:
     formatted = f"{amount:,.2f}".rstrip("0").rstrip(".")
     return formatted
@@ -147,9 +172,7 @@ async def _render_shop_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: ParseMode | str | None = None,
 ) -> None:
-    shop_image_url = await get_bot_asset_image(
-        api_client, "shop_section_image_url", BOT_SHOP_SECTION_IMAGE_URL
-    )
+    shop_image_url = await get_bot_asset_image(api_client, "shop_section_image_url")
     if shop_image_url:
         await render_main_view_with_photo(
             target,
@@ -176,9 +199,7 @@ async def _render_cart_view(
     reply_markup: InlineKeyboardMarkup | None = None,
     parse_mode: ParseMode | str | None = None,
 ) -> None:
-    cart_image_url = await get_bot_asset_image(
-        api_client, "cart_image_url", BOT_CART_IMAGE_URL
-    )
+    cart_image_url = await get_bot_asset_image(api_client, "cart_image_url")
     if cart_image_url:
         await render_main_view_with_photo(
             target,
@@ -207,7 +228,7 @@ async def _render_product_detail_view(
     parse_mode: ParseMode | str | None = None,
 ) -> None:
     image_url = _get_product_image(product) or await get_bot_asset_image(
-        api_client, "shop_section_image_url", BOT_SHOP_SECTION_IMAGE_URL
+        api_client, "shop_section_image_url"
     )
     if image_url:
         await render_main_view_with_photo(
@@ -231,7 +252,7 @@ async def _render_product_detail_view(
 def _get_payment_method_image(method_key: str, method: Dict[str, Any] | None = None) -> str | None:
     if method and method.get("image_url"):
         return str(method.get("image_url"))
-    return _PAYMENT_METHOD_IMAGES.get(method_key)
+    return None
 
 
 def _get_product_image(product: Dict[str, Any]) -> str | None:
@@ -253,7 +274,7 @@ def _get_crypto_asset_image(
             value = str(data.get(asset_key) or "").strip()
             if value:
                 return value
-    return _CRYPTO_ASSET_IMAGES.get(asset_key)
+    return None
 
 
 async def _get_payment_methods() -> List[Dict[str, Any]]:
@@ -1002,7 +1023,7 @@ async def build_payment_methods_keyboard(
         item for item in methods if bool(item.get("enabled", True))
     ]
     rows: List[List[InlineKeyboardButton]] = []
-    for method in enabled_methods:
+    for method_index, method in enumerate(enabled_methods, start=1):
         key = str(method.get("key") or "").lower()
         label = method.get("label") or key.upper()
         if not key:
@@ -1011,7 +1032,7 @@ async def build_payment_methods_keyboard(
             [
                 InlineKeyboardButton(
                     text=str(label),
-                    callback_data=f"order:method:{order_id}:{page}:{index}:{key}",
+                    callback_data=f"order:method:{order_id}:{method_index}",
                 )
             ]
         )
@@ -1923,9 +1944,37 @@ async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> Non
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _, _, order_id, page_text, index_text, method_key = callback.data.split(":", 5)
-    page = int(page_text)
-    index = int(index_text)
+    parts = callback.data.split(":")
+    if len(parts) < 4:
+        await callback.answer(t(locale, "payment_method_unavailable"), show_alert=True)
+        return
+    order_id = parts[2]
+    page = 1
+    index = 1
+    method_key = ""
+    # Backward compatible with previous callback format:
+    # order:method:{order_id}:{page}:{index}:{method_key}
+    if len(parts) >= 6:
+        method_key = parts[5]
+        try:
+            page = int(parts[3])
+            index = int(parts[4])
+        except ValueError:
+            page = 1
+            index = 1
+    else:
+        selector = parts[3]
+        if selector.isdigit():
+            methods = await _get_payment_methods()
+            enabled_methods = [item for item in methods if bool(item.get("enabled", True))]
+            selected = int(selector)
+            if 1 <= selected <= len(enabled_methods):
+                method_key = str(enabled_methods[selected - 1].get("key") or "")
+        else:
+            method_key = selector
+    if not method_key:
+        await callback.answer(t(locale, "payment_method_unavailable"), show_alert=True)
+        return
     if not await guard_order_payable_or_redirect(
         api_client, order_id, callback.message, state, locale
     ):
@@ -2222,8 +2271,18 @@ async def _process_payment_proof(
         "screenshot_unique_id": screenshot_unique_id,
         "payment_method": payment_method,
     }
+    analyzing_notice = await message.answer(_build_analysis_notice_text(locale, 3))
+    analysis_animation_task: asyncio.Task[Any] | None = asyncio.create_task(
+        _animate_analysis_notice(analyzing_notice, locale)
+    )
     try:
         await api_client.submit_payment_proof(order_id, payload)
+    except httpx.TimeoutException:
+        await message.answer(t(locale, "payment_screenshot_timeout"))
+        return
+    except httpx.RequestError:
+        await message.answer(t(locale, "payment_screenshot_network_error"))
+        return
     except httpx.HTTPStatusError as exc:
         error_payload: Optional[Dict[str, Any]] = None
         try:
@@ -2245,6 +2304,14 @@ async def _process_payment_proof(
         if error_code == "DUPLICATE_IMAGE":
             await message.answer(t(locale, "duplicate_image_warning"))
             return
+        if error_code == "PAYMENT_PROOF_NOT_VALID":
+            backend_message = (
+                error_payload.get("message")
+                if isinstance(error_payload, dict)
+                else None
+            )
+            await message.answer(backend_message or t(locale, "payment_screenshot_invalid"))
+            return
         if exc.response.status_code in (404, 409):
             print(
                 "[bot/order_guard] not_payable",
@@ -2253,7 +2320,14 @@ async def _process_payment_proof(
             await show_not_payable_and_redirect(message, state, locale)
             return
         raise
+    except Exception as exc:
+        print("[bot/payment_proof] unexpected_error", {"order_id": order_id, "error": repr(exc)})
+        await message.answer(t(locale, "payment_screenshot_processing_error"))
+        return
+    finally:
+        await _cleanup_analysis_notice(analyzing_notice, analysis_animation_task)
     _SCREENSHOTS_RECEIVED.add(order_id)
+    _remember_user_image(_PAYMENT_IMAGE_CACHE, message.from_user.id, screenshot_unique_id)
     await message.answer(t(locale, "screenshot_received"))
     await state.update_data(
         order_id=None,

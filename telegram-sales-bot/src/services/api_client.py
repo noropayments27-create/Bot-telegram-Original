@@ -2,6 +2,7 @@ from typing import Any, Dict, Optional
 
 import asyncio
 import httpx
+from ..config import ADMIN_API_KEY, PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS
 
 
 async def _request_with_retry(fn, attempts: int = 3, delay: float = 0.35) -> Any:
@@ -35,6 +36,8 @@ class ApiClient:
         headers: Dict[str, str] = {}
         if self.token:
             headers["Authorization"] = f"Bearer {self.token}"
+        if ADMIN_API_KEY:
+            headers["x-admin-key"] = ADMIN_API_KEY
         if self.bot_secret:
             headers["x-bot-secret"] = self.bot_secret
         return headers
@@ -94,7 +97,152 @@ class ApiClient:
         url = f"{self.base_url}/orders/{order_id}/payment-proof"
         async with httpx.AsyncClient() as client:
             response = await client.post(
-                url, json=payload, headers=self._headers(), timeout=5
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_maintenance(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/maintenance"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=10)
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_auth_direct(self, password: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/auth/direct"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={"password": password},
+                headers={"Content-Type": "application/json"},
+                timeout=15,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_set_maintenance(
+        self, active: bool, message: Optional[str] = None
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/maintenance"
+        payload: Dict[str, Any] = {"active": bool(active)}
+        if message:
+            payload["message"] = message
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=15
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_list_orders(
+        self, status: str = "WAITING_PAYMENT", page: int = 1, page_size: int = 10
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"status": status, "page": page, "page_size": page_size},
+                headers=self._headers(),
+                timeout=15,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_order_status_counts(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/status-counts"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=10)
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_order(self, order_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/{order_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=15)
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_mark_order_paid(self, order_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/{order_id}/mark-paid"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, headers=self._headers(), timeout=60
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_reject_order(
+        self, order_id: str, mode: str = "retry", reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/{order_id}/reject"
+        payload: Dict[str, Any] = {"mode": mode}
+        if reason:
+            payload["reason"] = reason
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_refund_order(
+        self, order_id: str, reason: Optional[str] = None, amount: Optional[float] = None
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/{order_id}/refund"
+        payload: Dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        if amount is not None:
+            payload["amount"] = amount
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=60
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_toggle_ban(self, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/users/{telegram_id}/ban-toggle"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, headers=self._headers(), timeout=15
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_create_broadcast(
+        self, message: str, segment: str = "ALL_USERS"
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts"
+        payload = {"message": message, "segment": segment}
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_send_broadcast(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}/send"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, headers=self._headers(), timeout=180
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_logs(self, category: str, limit: int = 10) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/logs"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"category": category, "limit": limit},
+                headers=self._headers(),
+                timeout=20,
             )
             response.raise_for_status()
             return response.json()

@@ -3,6 +3,7 @@ let botAssetsSchemaReady = false;
 const BOT_ASSET_COLUMNS = [
   "main_image_url",
   "affiliate_panel_image_url",
+  "affiliate_invoice_image_url",
   "cart_image_url",
   "community_image_url",
   "shop_section_image_url",
@@ -19,6 +20,7 @@ async function ensureBotAssetsSchema(pool) {
        id int PRIMARY KEY DEFAULT 1,
        main_image_url text,
        affiliate_panel_image_url text,
+       affiliate_invoice_image_url text,
        cart_image_url text,
        community_image_url text,
        shop_section_image_url text,
@@ -31,6 +33,7 @@ async function ensureBotAssetsSchema(pool) {
     `ALTER TABLE bot_assets
      ADD COLUMN IF NOT EXISTS main_image_url text,
      ADD COLUMN IF NOT EXISTS affiliate_panel_image_url text,
+     ADD COLUMN IF NOT EXISTS affiliate_invoice_image_url text,
      ADD COLUMN IF NOT EXISTS cart_image_url text,
      ADD COLUMN IF NOT EXISTS community_image_url text,
      ADD COLUMN IF NOT EXISTS shop_section_image_url text,
