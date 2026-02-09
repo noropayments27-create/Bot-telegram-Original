@@ -5,6 +5,7 @@ import Layout from "../components/Layout";
 import "../styles/globals.css";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
+import "../styles/responsive.css";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
@@ -47,6 +48,40 @@ export default function App({ Component, pageProps }) {
     return () => {
       window.removeEventListener("scroll", saveScroll);
       window.removeEventListener("beforeunload", saveScroll);
+    };
+  }, [router.asPath]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const applyNativeButtonTooltips = () => {
+      const targets = document.querySelectorAll(
+        "button:not([title]), a.link-button:not([title]), [role='button']:not([title])"
+      );
+      targets.forEach((node) => {
+        const text = (node.textContent || "").replace(/\s+/g, " ").trim();
+        const ariaLabel = node.getAttribute("aria-label") || "";
+        const dataTooltip = node.getAttribute("data-tooltip") || "";
+        const tooltip = (dataTooltip || ariaLabel || text).trim();
+        if (!tooltip) {
+          return;
+        }
+        if (tooltip.length > 120) {
+          return;
+        }
+        node.setAttribute("title", tooltip);
+      });
+    };
+
+    applyNativeButtonTooltips();
+    const observer = new MutationObserver(() => {
+      applyNativeButtonTooltips();
+    });
+    observer.observe(document.body, { childList: true, subtree: true });
+    return () => {
+      observer.disconnect();
     };
   }, [router.asPath]);
 

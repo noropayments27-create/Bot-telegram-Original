@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState } from "react";
 import { useRouter } from "next/router";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import {
   apiFetch,
@@ -156,6 +157,7 @@ export default function OrdersPage() {
   const [reasons, setReasons] = useState({});
   const [isSubmittingApprove, setIsSubmittingApprove] = useState({});
   const [isSubmittingRefund, setIsSubmittingRefund] = useState({});
+  const [headerActionsOpenById, setHeaderActionsOpenById] = useState({});
   const [toast, setToast] = useState("");
   const [orderCounts, setOrderCounts] = useState({});
 
@@ -664,8 +666,15 @@ export default function OrdersPage() {
     }
   };
 
+  const toggleHeaderActions = (orderId) => {
+    setHeaderActionsOpenById((prev) => ({
+      ...prev,
+      [orderId]: !prev[orderId],
+    }));
+  };
+
   return (
-    <main className="page">
+    <main className="page orders-page">
       <section className="card orders-card">
         <div className="orders-header-row">
           <h1 className="icon-inline"><IconOrders className="panel-icon" /> Ordenes</h1>
@@ -817,6 +826,7 @@ export default function OrdersPage() {
               detail?.order?.status === "PAID"
               || detail?.order?.status === "DELIVERED"
               || detail?.payment?.review_status === "APPROVED";
+            const isHeaderActionsOpen = Boolean(headerActionsOpenById[orderId]);
 
             return (
               <section key={orderId} className="card orders-detail-card">
@@ -829,36 +839,60 @@ export default function OrdersPage() {
                         {detail.order.order_number
                           ? String(detail.order.order_number).padStart(5, "0")
                           : "-"}
+                      </h2>
+                      <div
+                        className={`orders-detail-header-actions${
+                          isHeaderActionsOpen ? " is-open" : ""
+                        }`}
+                      >
                         <button
                           type="button"
-                          className="orders-refund-button"
-                          style={{ marginLeft: "1cm" }}
-                          onClick={() => handleRefund(orderId)}
-                          disabled={
-                            isSubmittingRefund[orderId]
-                            || detail.order.status === "REFUNDED"
-                          }
+                          className="link-button"
+                          onClick={() => handleViewOrder(detail.order.id)}
                         >
-                          {detail.order.status === "REFUNDED"
-                            ? "Reembolsada"
-                            : isSubmittingRefund[orderId]
-                            ? "Reembolsando..."
-                            : "Reembolsar"}
+                          Cerrar
                         </button>
-                      </h2>
-                      <button
-                        type="button"
-                        className="link-button"
-                        onClick={() => handleViewOrder(detail.order.id)}
-                      >
-                        Cerrar
-                      </button>
+                        <button
+                          type="button"
+                          className="plain-button orders-header-toggle"
+                          onClick={() => toggleHeaderActions(orderId)}
+                          title={isHeaderActionsOpen ? "Ocultar acciones" : "Mostrar acciones"}
+                        >
+                          {isHeaderActionsOpen ? <ArrowRight size={16} /> : <ArrowLeft size={16} />}
+                        </button>
+                        {isHeaderActionsOpen && (
+                          <>
+                            <button
+                              type="button"
+                              className="orders-refund-button"
+                              onClick={() => handleRefund(orderId)}
+                              disabled={
+                                isSubmittingRefund[orderId]
+                                || detail.order.status === "REFUNDED"
+                              }
+                            >
+                              {detail.order.status === "REFUNDED"
+                                ? "Reembolsada"
+                                : isSubmittingRefund[orderId]
+                                ? "Reembolsando..."
+                                : "Reembolsar"}
+                            </button>
+                            <button
+                              type="button"
+                              className="orders-ban-button"
+                              onClick={() => handleToggleBan(orderId)}
+                            >
+                              {detail.user?.banned ? "Desbanear" : "Banear"}
+                            </button>
+                          </>
+                        )}
+                      </div>
                     </div>
                     <div className="orders-detail-separator"></div>
                     {message && <p className="muted">{message}</p>}
                     {errorMessage && <p className="error">{errorMessage}</p>}
-                    <div className="orders-detail-grid">
-                      <div className="orders-detail-section">
+                    <div className="orders-detail-grid orders-detail-grid--summary">
+                      <div className="orders-detail-section orders-detail-section--summary">
                         <h3>Detalle</h3>
                         <p>Estado: {formatOrderStatus(detail.order.status)}</p>
                         <p>
@@ -899,17 +933,8 @@ export default function OrdersPage() {
                           </p>
                         )}
                       </div>
-                      <div className="orders-detail-section">
-                        <div className="orders-detail-title-row">
-                          <h3>Usuario</h3>
-                          <button
-                            type="button"
-                            className="orders-ban-button"
-                            onClick={() => handleToggleBan(orderId)}
-                          >
-                            {detail.user?.banned ? "Desbanear" : "Banear"}
-                          </button>
-                        </div>
+                      <div className="orders-detail-section orders-detail-section--user-products">
+                        <h3>Usuario</h3>
                         <p className="orders-user-telegram">
                           <span className="orders-copy-label">Telegram ID:</span>
                           <button
@@ -1000,7 +1025,7 @@ export default function OrdersPage() {
                         <h3>Captura</h3>
                         {detail.payment?.screenshot_file_id && proofUrl ? (
                           <div
-                            className={`orders-proof${receiptUrl ? " orders-proof--side" : ""}`}
+                            className={`orders-proof${receiptUrl ? " orders-proof--side orders-proof--pair" : ""}`}
                           >
                             <div>
                               <img

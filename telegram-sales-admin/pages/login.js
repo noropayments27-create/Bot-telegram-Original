@@ -44,9 +44,11 @@ export default function Login() {
         if (data.status === "APPROVED" && data.token) {
           setAuthToken(data.token);
           setToast("✅ Bienvenido al panel, acceso concedido.");
+          setWaiting(false);
+          setRequestId("");
           setTimeout(() => {
             router.replace("/dashboard");
-          }, 1000);
+          }, 600);
           return;
         }
         if (data.status === "DENIED") {

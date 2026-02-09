@@ -1,0 +1,1125 @@
+/* Responsive styles extracted from globals.css */
+/* Keep only @media rules in this file. */
+@media (max-width: 1100px) {
+  .payment-methods-page-grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 900px) {
+  .payment-methods-grid {
+    grid-template-columns: 1fr 1fr;
+    grid-template-areas:
+      "key label"
+      "midline midline"
+      "destination destination"
+      "description description"
+      "actions actions";
+  }
+}
+
+@media (max-width: 1200px) {
+  .inventory-search.inventory-card,
+  .inventory-list.inventory-card {
+    width: 100%;
+  }
+}
+
+@media (max-width: 640px) {
+  .app-header__bell-panel {
+    width: calc(100vw - 32px);
+    right: -12px;
+  }
+  .app-header__actions {
+    margin-right: -12px;
+  }
+}
+
+@media (max-width: 1024px) {
+  .summary-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .product-grid,
+  .split-grid {
+    grid-template-columns: 1fr;
+  }
+  .inventory-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .mode-grid {
+    grid-template-columns: 1fr;
+  }
+  .category-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .inventory-card {
+    max-width: 100%;
+  }
+  .create-product__grid {
+    grid-template-columns: 1fr;
+  }
+  .product-edit__grid,
+  .product-edit__options {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .simple-stock__grid {
+    grid-template-columns: 1fr;
+  }
+}
+
+@media (max-width: 768px) {
+  .inventory-hero {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+}
+
+@media (max-width: 1200px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 768px) {
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .dashboard-header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 12px;
+  }
+  .dashboard-reset {
+    width: 100%;
+    justify-content: flex-end;
+  }
+  .dashboard-reset-input {
+    width: min(100%, 176px);
+    min-width: 140px;
+  }
+}
+
+@media (max-width: 1200px) {
+  .page {
+    padding: 100px 20px 1.5cm;
+  }
+  .orders-card {
+    width: 100%;
+    margin: 0;
+  }
+  .orders-detail-wrap {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+}
+
+@media (max-width: 1024px) {
+  .inventory-page {
+    zoom: 1;
+  }
+}
+
+@media (max-width: 960px) {
+  .page {
+    padding: 92px 18px 1.2cm;
+  }
+  .orders-page {
+    padding-top: 1cm;
+  }
+  .orders-page .orders-card {
+    margin-top: 0;
+  }
+  .orders-page .orders-status-counts {
+    gap: 6px;
+  }
+  .orders-page .orders-count-label,
+  .orders-page .orders-count-value {
+    font-size: 16px;
+  }
+  .app-header__actions {
+    margin-right: 0;
+  }
+  .orders-page .orders-card .form select {
+    width: 40%;
+    min-width: 140px;
+  }
+  .orders-page .orders-list {
+    max-height: 236px;
+  }
+  .orders-list {
+    overflow-x: auto;
+  }
+  .orders-page .orders-table th,
+  .orders-page .orders-table td {
+    padding: 4px 0.2cm;
+    font-size: 11px;
+    line-height: 1.15;
+  }
+  .orders-page .orders-table tbody td {
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .orders-page .orders-table tbody tr {
+    height: 34px;
+  }
+  .orders-table {
+    min-width: 680px;
+  }
+  .orders-detail-wrap {
+    grid-template-columns: 1fr;
+    margin-top: 24px;
+  }
+  .orders-page .orders-detail-header {
+    align-items: center;
+    gap: 8px;
+  }
+  .orders-page .orders-detail-header h2 {
+    font-size: 18px;
+    line-height: 1.1;
+  }
+  .orders-page .orders-detail-header-actions {
+    gap: 6px;
+    flex-wrap: nowrap;
+  }
+  .orders-page .orders-refund-button,
+  .orders-page .orders-ban-button {
+    padding: 3px 8px;
+    font-size: 10px;
+  }
+  .orders-detail-card {
+    max-height: none;
+    font-size: 12px;
+    line-height: 1.2;
+  }
+  .orders-detail-grid {
+    grid-template-columns: 1fr;
+  }
+  .orders-page .orders-detail-grid--summary {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    align-items: start;
+    gap: 12px;
+  }
+  .orders-page .orders-detail-grid--summary > .orders-detail-section--summary {
+    grid-column: 1;
+  }
+  .orders-page .orders-detail-grid--summary > .orders-detail-section--user-products {
+    grid-column: 2;
+  }
+  .orders-page .orders-proof {
+    justify-content: center;
+  }
+  .orders-page .orders-proof > div {
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    gap: 6px;
+  }
+  .orders-page .orders-proof .payment-proof {
+    width: 40%;
+    max-width: 160px;
+    min-width: 110px;
+    height: auto;
+  }
+  .orders-page .orders-proof.orders-proof--pair {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: start;
+    justify-items: center;
+    column-gap: 10px;
+    row-gap: 8px;
+    width: 100%;
+  }
+  .orders-page .orders-proof.orders-proof--pair > div:first-child {
+    grid-column: 1;
+  }
+  .orders-page .orders-proof.orders-proof--pair > div:last-child {
+    grid-column: 2;
+  }
+  .orders-page .orders-proof button,
+  .orders-page .orders-proof--side button {
+    width: auto;
+    margin: 0 auto;
+    display: inline-flex;
+    justify-content: center;
+  }
+  .orders-detail-grid p {
+    line-height: 1.2;
+  }
+  .orders-detail-date-line {
+    gap: 8px;
+  }
+  .orders-detail-actions .actions {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .orders-status-inline {
+    flex-wrap: wrap;
+    gap: 8px;
+  }
+  .inventory-column {
+    gap: 24px;
+  }
+  .product-list {
+    max-height: none;
+  }
+  .simple-stock-row {
+    flex-wrap: wrap;
+    align-items: stretch;
+  }
+  .stock-toggle-group {
+    width: 100%;
+    margin-left: 0;
+    justify-content: flex-start;
+  }
+}
+
+@media (max-width: 768px) {
+  .page {
+    padding: 88px 16px 1cm;
+  }
+  .orders-page {
+    padding-top: 1cm;
+  }
+  .card {
+    padding: 20px;
+    border-radius: 20px;
+  }
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+  .product-row {
+    grid-template-columns: 1fr;
+  }
+  .product-row__main {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+  .product-row__actions {
+    width: 100%;
+    flex-wrap: wrap;
+  }
+  .product-row__actions input {
+    width: 100%;
+  }
+  .create-product__actions,
+  .product-edit__actions {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+  }
+  .tabs {
+    flex-wrap: wrap;
+  }
+  .orders-table {
+    min-width: 620px;
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 84px 14px 0.8cm;
+  }
+  .orders-page {
+    padding-top: 1cm;
+  }
+  .card {
+    padding: 16px;
+    border-radius: 16px;
+  }
+  .dashboard-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .stats-grid {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 10px;
+  }
+  .summary-grid {
+    grid-template-columns: 1fr;
+  }
+  .category-grid {
+    grid-template-columns: 1fr;
+  }
+  .nav-card {
+    min-height: 76px;
+  }
+  .nav-card__count {
+    font-size: 22px;
+  }
+  .stat-value {
+    font-size: 24px;
+  }
+  .payment-methods-panel {
+    padding: 16px;
+    border-radius: 16px;
+  }
+  .payment-methods-title {
+    font-size: 17px;
+  }
+  .payment-methods-row {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+  .payment-method-toggle {
+    font-size: 12px;
+    padding: 8px 10px;
+    min-height: 40px;
+  }
+  .inventory-header {
+    flex-direction: column;
+    align-items: flex-start;
+  }
+  .payment-proof {
+    width: 100%;
+    max-width: 100%;
+  }
+  .orders-page .orders-proof .payment-proof {
+    width: 40%;
+    max-width: 150px;
+    min-width: 100px;
+    height: auto;
+  }
+  .orders-table {
+    min-width: 560px;
+  }
+}
+
+@media (max-width: 520px) {
+  .page {
+    padding: 80px 12px 0.8cm;
+  }
+  .orders-page {
+    padding-top: 1cm;
+  }
+  .orders-table {
+    min-width: 520px;
+  }
+}
+
+@media (max-width: 768px) {
+  .table-scroll table {
+    min-width: 640px;
+  }
+}
+
+@media (max-width: 640px) {
+  .table-scroll table {
+    min-width: 520px;
+  }
+}
+
+@media (max-width: 960px) {
+  .affiliates-page {
+    /* 70px (main) + 28px ~= 1cm de separación visual con header de 60px */
+    padding-top: 28px;
+  }
+
+  .affiliates-page .orders-detail-wrap {
+    margin-top: 14px;
+  }
+
+  .affiliates-page .orders-detail-card {
+    font-size: 13px;
+    line-height: 1.4;
+  }
+
+  .affiliates-page .affiliates-card {
+    padding: 18px;
+    margin-top: 0;
+    top: 0;
+  }
+
+  .affiliates-page .affiliates-title {
+    font-size: 24px;
+  }
+
+  .affiliates-page .affiliates-header-actions {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .affiliates-page .affiliates-filters {
+    width: 100%;
+    max-width: 100%;
+  }
+
+  .affiliates-page .affiliates-commission-wrap {
+    width: 100%;
+  }
+
+  .affiliates-page .affiliates-commission-title {
+    justify-content: center;
+    font-size: 19px;
+  }
+
+  .affiliates-page .affiliates-commission-card {
+    padding: 7px 8px;
+  }
+
+  .affiliates-page .affiliates-commission-form {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: end;
+    gap: 6px;
+  }
+
+  .affiliates-page .affiliates-commission-field {
+    width: 100%;
+  }
+
+  .affiliates-page .commission-duration {
+    width: 100%;
+  }
+
+  .affiliates-page .commission-input,
+  .affiliates-page .commission-input-wide {
+    width: 100%;
+    min-width: 0;
+  }
+
+  .affiliates-page .affiliates-commission-form > button {
+    width: 100%;
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .affiliates-page .affiliates-table-scroll {
+    max-height: none;
+    margin-top: 12px;
+  }
+
+  .affiliates-page .affiliates-table-scroll table {
+    min-width: 900px;
+  }
+
+  .affiliates-page .orders-detail-header {
+    flex-direction: column;
+    align-items: flex-start;
+    gap: 10px;
+  }
+
+  .affiliates-page .affiliate-detail-row--header > div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding-left: 0.3cm;
+    padding-right: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-detail-row--header > div:first-child {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .affiliates-page .affiliate-detail-row--data > div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding-left: 0.1cm;
+    padding-right: 0cm;
+  }
+
+  .affiliates-page .affiliate-detail-row--data > div:first-child {
+    justify-content: flex-start;
+    text-align: left;
+  }
+
+  .affiliates-page .affiliate-detail-row--header,
+  .affiliates-page .affiliate-detail-row--data {
+    column-gap: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-name-cell {
+    gap: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-detail-actions {
+    width: 100%;
+    justify-content: flex-start;
+  }
+
+  .affiliates-page .affiliate-detail-actions.is-delete-open {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .affiliates-page .affiliate-detail-actions.is-delete-open .plain-button {
+    white-space: nowrap;
+  }
+
+  .affiliates-page .affiliate-adjustment-row {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 8px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    gap: 8px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions button {
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .affiliates-page .affiliate-control-scroll {
+    max-height: 240px;
+  }
+
+  .affiliates-page .affiliate-list-table thead th,
+  .affiliates-page .affiliate-list-table tbody td {
+    padding-left: 0.3cm;
+    padding-right: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-list-table thead th {
+    text-align: center;
+  }
+
+  .affiliates-page .affiliate-list-header {
+    column-gap: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-list-header > div {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    text-align: center;
+    padding-left: 0.3cm;
+    padding-right: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-list-data {
+    column-gap: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-list-data > div {
+    padding-left: 0.3cm;
+    padding-right: 0.3cm;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-data > div:first-child {
+    justify-content: center;
+    text-align: center;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-name-cell {
+    justify-content: center;
+    gap: 0.3cm;
+  }
+
+  /* Final override: enforce same behavior on all affiliate lists in responsive */
+  .affiliates-page .table-scroll table thead th,
+  .affiliates-page .table-scroll table tbody td {
+    padding-left: 0.3cm !important;
+    padding-right: 0.3cm !important;
+  }
+
+  .affiliates-page .table-scroll table thead th {
+    text-align: center !important;
+    vertical-align: bottom;
+  }
+
+  .affiliates-page .table-scroll table tbody td {
+    text-align: center !important;
+  }
+
+  .affiliates-page .table-scroll table .affiliate-name-cell {
+    justify-content: center !important;
+    gap: 0.3cm !important;
+  }
+
+  /* Explicit include: Control de Ganancias list */
+  .affiliates-page .affiliate-gains-table {
+    border-collapse: separate !important;
+    border-spacing: 0.2cm 0 !important;
+    table-layout: auto !important;
+  }
+
+  .affiliates-page .affiliate-gains-table thead th,
+  .affiliates-page .affiliate-gains-table tbody td {
+    padding-left: 0.2cm !important;
+    padding-right: 0.2cm !important;
+  }
+
+  .affiliates-page .affiliate-gains-table thead th {
+    text-align: center !important;
+    vertical-align: bottom;
+  }
+
+  .affiliates-page .affiliate-gains-table tbody td {
+    text-align: center !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-header,
+  .affiliates-page .affiliate-detail-table .affiliate-list-data {
+    grid-template-columns: 1.6fr repeat(6, minmax(0, 1fr)) !important;
+    column-gap: 0.3cm !important;
+    min-width: 720px !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-header > div,
+  .affiliates-page .affiliate-detail-table .affiliate-list-data > div {
+    display: flex;
+    align-items: center;
+    justify-content: center !important;
+    text-align: center !important;
+    padding-left: 0.3cm !important;
+    padding-right: 0.3cm !important;
+  }
+}
+
+@media (max-width: 640px) {
+  .affiliates-page .affiliates-table {
+    font-size: 11px;
+  }
+
+  .affiliates-page .affiliates-table thead th {
+    font-size: 9px;
+    padding: 4px 0.3cm;
+  }
+
+  .affiliates-page .affiliates-table tbody td {
+    padding: 4px 0.3cm;
+  }
+
+  .affiliates-page .affiliates-table .affiliate-name-cell {
+    min-width: 120px;
+    gap: 0.3cm;
+  }
+
+  .affiliates-page .affiliates-table .affiliate-avatar {
+    width: 30px;
+    height: 30px;
+    font-size: 8.5px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll {
+    max-height: 290px;
+    padding: 4px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll table {
+    font-size: 10px;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll thead th {
+    font-size: 8px;
+    padding: 4px 0.3cm;
+  }
+
+  .affiliates-page .affiliate-commissions-scroll tbody td {
+    padding: 4px 0.3cm;
+  }
+
+  .affiliates-page .truncate-id {
+    max-width: 94px;
+  }
+
+  .affiliates-page .orders-detail-card {
+    font-size: 12px;
+    line-height: 1.45;
+  }
+
+  .affiliates-page .orders-detail-header {
+    flex-direction: row;
+    align-items: center;
+    justify-content: space-between;
+    gap: 8px;
+  }
+
+  .affiliates-page .orders-detail-header h2 {
+    margin: 0;
+    flex: 1 1 auto;
+    min-width: 0;
+  }
+
+  .affiliates-page .affiliate-detail-actions {
+    width: auto;
+    margin-left: auto;
+    justify-content: flex-end;
+    gap: 6px;
+    flex-wrap: wrap;
+  }
+
+  .affiliates-page .affiliate-detail-actions.is-delete-open {
+    flex-wrap: nowrap;
+    align-items: center;
+    gap: 8px;
+  }
+
+  .affiliates-page .affiliate-detail-actions.is-delete-open .plain-button {
+    white-space: nowrap;
+  }
+
+  .affiliates-page .affiliate-detail-actions .plain-button {
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .affiliates-page .affiliates-card {
+    padding: 14px;
+    border-radius: 16px;
+  }
+
+  .affiliates-page .affiliates-title {
+    font-size: 20px;
+  }
+
+  .affiliates-page .affiliates-commission-form {
+    grid-template-columns: repeat(6, minmax(0, 1fr));
+    gap: 6px;
+    align-items: end;
+  }
+
+  .affiliates-page .affiliates-commission-form > .affiliates-commission-field:first-of-type {
+    grid-column: span 2;
+  }
+
+  .affiliates-page .affiliates-commission-form > .affiliates-commission-field:nth-of-type(2) {
+    grid-column: span 4;
+  }
+
+  .affiliates-page .commission-duration {
+    display: grid;
+    grid-template-columns: 1fr 1fr;
+    gap: 6px;
+  }
+
+  .affiliates-page .affiliates-commission-form .commission-input,
+  .affiliates-page .affiliates-commission-form .commission-input-wide,
+  .affiliates-page .affiliates-commission-form select {
+    min-height: 34px;
+    padding: 6px 8px;
+    font-size: 12px;
+  }
+
+  .affiliates-page .affiliates-commission-form > button {
+    grid-column: span 3;
+    min-height: 30px;
+    padding: 4px 8px;
+    font-size: 11px;
+  }
+
+  .affiliates-page .affiliates-table-scroll {
+    padding: 6px;
+  }
+
+  .affiliates-page .affiliates-table-scroll table {
+    min-width: 820px;
+  }
+
+  .affiliates-page .affiliate-detail-table {
+    padding: 8px;
+  }
+
+  .affiliates-page .affiliate-detail-row--header,
+  .affiliates-page .affiliate-detail-row--data {
+    grid-template-columns: max-content repeat(6, max-content);
+    column-gap: 0.3cm;
+    min-width: max-content;
+  }
+
+  .affiliates-page .affiliate-detail-row--header {
+    justify-items: center;
+    text-align: center;
+  }
+
+  .affiliates-page .orders-detail-grid {
+    grid-template-columns: 1fr;
+    gap: 12px;
+  }
+
+  .affiliates-page .affiliate-adjustment-row {
+    display: grid;
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+    align-items: stretch;
+    gap: 6px;
+  }
+
+  .affiliates-page .affiliate-adjustment-row .commission-input {
+    width: 100%;
+    min-width: 0;
+    min-height: 32px;
+    padding: 5px 8px;
+    font-size: 12px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions {
+    display: grid;
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+    gap: 6px;
+    margin-top: 4px;
+    margin-bottom: 4px;
+  }
+
+  .affiliates-page .affiliate-adjustment-actions button {
+    min-height: 30px;
+    padding: 4px 6px;
+    font-size: 11px;
+  }
+
+  .affiliates-page .affiliate-gains-section > .affiliate-gains-title {
+    font-size: 18px;
+    margin-bottom: 0.5cm;
+  }
+
+  .affiliates-page .affiliate-gains-scroll {
+    margin-top: 1cm;
+  }
+
+  .affiliates-page .affiliate-gains-scroll table {
+    min-width: 792px;
+  }
+
+  .affiliates-page .affiliate-control-scroll {
+    max-height: 220px;
+    padding: 2px 4px;
+  }
+
+  .affiliates-page .affiliate-control-table {
+    font-size: 9px;
+  }
+
+  .affiliates-page .affiliate-control-table thead th,
+  .affiliates-page .affiliate-control-table tbody td {
+    padding: 3px 0.3cm;
+  }
+
+  /* Unified affiliate list rules (apply to every list/table in affiliates responsive) */
+  .affiliates-page .table-scroll table thead th {
+    text-align: center !important;
+    padding-left: 0.3cm !important;
+    padding-right: 0.3cm !important;
+    vertical-align: bottom;
+  }
+
+  .affiliates-page .table-scroll table tbody td {
+    padding-left: 0.3cm !important;
+    padding-right: 0.3cm !important;
+    text-align: center !important;
+  }
+
+  /* Explicit include: Control de Ganancias list */
+  .affiliates-page .affiliate-gains-table {
+    border-collapse: separate !important;
+    border-spacing: 0.2cm 0 !important;
+    table-layout: auto !important;
+  }
+
+  .affiliates-page .affiliate-gains-table thead th,
+  .affiliates-page .affiliate-gains-table tbody td {
+    padding-left: 0.2cm !important;
+    padding-right: 0.2cm !important;
+  }
+
+  .affiliates-page .affiliate-gains-table thead th {
+    text-align: center !important;
+    vertical-align: bottom;
+  }
+
+  .affiliates-page .affiliate-gains-table tbody td {
+    text-align: center !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-header {
+    grid-template-columns: 1.6fr repeat(6, minmax(0, 1fr)) !important;
+    min-width: 720px !important;
+    column-gap: 0.3cm !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-header > div {
+    display: flex;
+    align-items: center;
+    justify-content: center !important;
+    text-align: center !important;
+    padding-left: 0.3cm !important;
+    padding-right: 0.3cm !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-data {
+    grid-template-columns: 1.6fr repeat(6, minmax(0, 1fr)) !important;
+    min-width: 720px !important;
+    column-gap: 0.3cm !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-data > div {
+    display: flex;
+    align-items: center;
+    justify-content: center !important;
+    text-align: center !important;
+    padding-left: 0.3cm !important;
+    padding-right: 0.3cm !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-list-data > div:first-child {
+    justify-content: center !important;
+    text-align: center !important;
+  }
+
+  .affiliates-page .affiliate-detail-table .affiliate-name-cell {
+    justify-content: center !important;
+    gap: 0.3cm !important;
+  }
+}
+
+/* Final hard override for Control de Ganancias (responsive) */
+@media (max-width: 960px) {
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table {
+    border-collapse: collapse !important;
+    border-spacing: 0 !important;
+    table-layout: auto !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table thead th,
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table tbody td {
+    padding-left: 0.2cm !important;
+    padding-right: 0.2cm !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table thead th {
+    text-align: center !important;
+    vertical-align: bottom !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table tbody td {
+    text-align: center !important;
+  }
+}
+
+/* Final final override: Monto/Estado/Motivo left-aligned with 0.4cm separation */
+@media (max-width: 960px) {
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th,
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td {
+    text-align: left !important;
+    padding-left: 0.2cm !important;
+    padding-right: 0.2cm !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(2),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(3),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(4),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(2),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(3),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(4) {
+    text-align: left !important;
+    padding-left: 0.4cm !important;
+    padding-right: 0 !important;
+  }
+
+  /* Keep Estado in a single line */
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(3),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(3) {
+    white-space: nowrap !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+  }
+
+  /* Deterministic targeting for Monto / Estado / Motivo columns */
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table th.gains-shift-col,
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table td.gains-shift-col {
+    text-align: left !important;
+    padding-left: 0.4cm !important;
+    padding-right: 0 !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-gains-table td.gains-shift-col .affiliate-reason-truncate {
+    display: block;
+    width: 100%;
+    max-width: none;
+    text-align: left !important;
+  }
+}
+
+/* Dedicated responsive layout: Control de Ganancias only */
+@media (max-width: 960px) {
+  .affiliates-page .affiliate-gains-scroll {
+    overflow-x: hidden !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table {
+    width: 100% !important;
+    min-width: 100% !important;
+    table-layout: fixed !important;
+    border-collapse: collapse !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table .gains-col-date {
+    width: 40%;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table .gains-col-amount {
+    width: 18%;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table .gains-col-status {
+    width: 20%;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table .gains-col-reason {
+    width: 22%;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th,
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td {
+    white-space: normal !important;
+    overflow-wrap: anywhere !important;
+    padding-left: 0.2cm !important;
+    padding-right: 0.2cm !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(1),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(1) {
+    text-align: left !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(2),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(3),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(4),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(2),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(3),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(4) {
+    text-align: left !important;
+    padding-left: 0.4cm !important;
+    padding-right: 0 !important;
+  }
+
+  /* Extra separation between Estado and Motivo */
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(3),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(3) {
+    white-space: nowrap !important;
+    word-break: normal !important;
+    overflow-wrap: normal !important;
+    padding-right: 0.25cm !important;
+    overflow: hidden !important;
+    text-overflow: ellipsis !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table thead th:nth-child(4),
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table tbody td:nth-child(4) {
+    padding-left: 0.6cm !important;
+  }
+
+  .affiliates-page .affiliate-gains-scroll .affiliate-list-table.affiliate-gains-table .affiliate-reason-truncate {
+    width: 100% !important;
+    max-width: none !important;
+    text-align: left !important;
+  }
+}

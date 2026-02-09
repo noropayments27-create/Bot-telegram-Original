@@ -446,7 +446,6 @@ export default function Dashboard() {
                 key={item.href}
                 href={item.href}
                 className={`nav-card ${hasAlert ? "nav-card--alert" : ""}`}
-                data-tooltip={item.tooltip || ""}
                 title={item.tooltip || item.label}
                 aria-label={`${item.label}. ${item.tooltip || ""}`}
               >

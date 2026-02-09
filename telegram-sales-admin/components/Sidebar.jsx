@@ -353,7 +353,9 @@ export default function Sidebar({ open, onClose }) {
             <span className={styles.brandSubtitle}>Admin</span>
           </div>
         </div>
-        <NotificationsBell variant="sidebar" />
+        <div className={styles.sidebarBell}>
+          <NotificationsBell variant="sidebar" />
+        </div>
       </div>
 
       <div className={styles.sidebarContent}>

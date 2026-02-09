@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useRef, useState } from "react";
 import { useRouter } from "next/router";
-import { ArrowLeft, Download } from "lucide-react";
+import { ArrowLeft, ArrowRight } from "lucide-react";
 
 import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconAffiliates } from "../../components/PanelIcons";
@@ -489,21 +489,48 @@ export default function AffiliatesPage() {
       setToast("No se pudo generar la imagen.");
       return;
     }
+    const offscreen = document.createElement("div");
+    offscreen.style.position = "fixed";
+    offscreen.style.left = "-100000px";
+    offscreen.style.top = "0";
+    offscreen.style.width = "1400px";
+    offscreen.style.padding = "20px";
+    offscreen.style.background = "#2b2b2b";
+    offscreen.style.zIndex = "-1";
+
+    let exportNode = null;
     try {
       const { default: html2canvas } = await import("html2canvas");
       if (document.fonts && document.fonts.ready) {
         await document.fonts.ready;
       }
-      const canvas = await html2canvas(node, {
+
+      exportNode = node.cloneNode(true);
+      exportNode.classList.add("affiliate-export-snapshot");
+      exportNode.style.width = "1360px";
+      exportNode.style.maxWidth = "1360px";
+      exportNode.style.margin = "0";
+      exportNode.style.transform = "none";
+      exportNode.style.zoom = "1";
+      exportNode
+        .querySelectorAll("[data-no-export='true']")
+        .forEach((element) => element.remove());
+
+      offscreen.appendChild(exportNode);
+      document.body.appendChild(offscreen);
+
+      await new Promise((resolve) => window.requestAnimationFrame(resolve));
+
+      const canvas = await html2canvas(exportNode, {
         backgroundColor: "#2b2b2b",
         scale: 2,
         useCORS: true,
-        ignoreElements: (target) => {
-          if (!(target instanceof HTMLElement)) {
-            return false;
-          }
-          return target.dataset.noExport === "true";
-        },
+        windowWidth: 1600,
+        windowHeight: Math.max(window.innerHeight, exportNode.scrollHeight + 200),
+        width: exportNode.scrollWidth,
+        height: exportNode.scrollHeight,
+        scrollX: 0,
+        scrollY: 0,
       });
       const dataUrl = canvas.toDataURL("image/png");
       const link = document.createElement("a");
@@ -513,6 +540,10 @@ export default function AffiliatesPage() {
     } catch (err) {
       console.error("Download affiliate image failed", err);
       setToast("No se pudo generar la imagen. Revisa la consola del navegador.");
+    } finally {
+      if (offscreen.parentNode) {
+        offscreen.parentNode.removeChild(offscreen);
+      }
     }
   };
 
@@ -909,7 +940,7 @@ export default function AffiliatesPage() {
         {message && <p className="muted">{message}</p>}
         {error && <p className="error">{error}</p>}
         <div className="table-scroll affiliates-table-scroll">
-          <table className="affiliates-table" style={{ width: "100%", marginTop: "16px" }}>
+          <table className="affiliates-table affiliate-list-table" style={{ width: "100%", marginTop: "16px" }}>
             <thead>
               <tr>
                 <th align="left">Perfil</th>
@@ -1203,48 +1234,58 @@ export default function AffiliatesPage() {
                           ? ` #${formatAffiliateNumber(affiliate.affiliate_number)}`
                           : ""}
                       </h2>
-                      <div className="affiliate-detail-actions">
-                        <button
-                          type="button"
-                          className="plain-button"
-                          onClick={() => handleViewAffiliate(affiliate.id)}
-                          data-no-export="true"
-                        >
-                          Cerrar
-                        </button>
-                        <button
-                          type="button"
-                          className="plain-button"
-                          onClick={() => handleDownloadAffiliate(affiliate.id)}
-                          data-no-export="true"
-                        >
-                          <Download size={16} />
-                          Descargar
-                        </button>
-                        <button
-                          type="button"
-                          className="plain-button"
-                          onClick={() => toggleDeleteAffiliate(affiliate.id)}
-                          title="Mostrar opciones"
-                          data-no-export="true"
-                        >
-                          <ArrowLeft size={16} />
-                        </button>
+                      <div
+                        className={`affiliate-detail-actions${
+                          isDeleteOpen ? " is-delete-open" : ""
+                        }`}
+                      >
+                        {!isDeleteOpen && (
+                          <>
+                            <button
+                              type="button"
+                              className="plain-button"
+                              onClick={() => handleViewAffiliate(affiliate.id)}
+                              title="Cerrar el panel con los detalles del afiliado."
+                              data-no-export="true"
+                            >
+                              Cerrar
+                            </button>
+                            <button
+                              type="button"
+                              className="plain-button"
+                              onClick={() => handleDownloadAffiliate(affiliate.id)}
+                              title="Descargar imagen con los detalles del afiliado"
+                              data-no-export="true"
+                            >
+                              Descargar
+                            </button>
+                          </>
+                        )}
                         {isDeleteOpen && (
                           <button
                             type="button"
                             className="plain-button"
                             onClick={() => handleDeleteAffiliate(affiliate.id)}
+                            title="Eliminar afiliado y todos sus datos"
                             data-no-export="true"
                           >
                             Eliminar afiliado
                           </button>
                         )}
+                        <button
+                          type="button"
+                          className="plain-button"
+                          onClick={() => toggleDeleteAffiliate(affiliate.id)}
+                          title={isDeleteOpen ? "Ocultar opciones" : "Mostrar opciones"}
+                          data-no-export="true"
+                        >
+                          {isDeleteOpen ? <ArrowRight size={16} /> : <ArrowLeft size={16} />}
+                        </button>
                       </div>
                     </div>
                     <div className="orders-detail-separator"></div>
                     <div className="affiliate-detail-table">
-                      <div className="affiliate-detail-row affiliate-detail-row--header">
+                      <div className="affiliate-detail-row affiliate-detail-row--header affiliate-list-header">
                         <div>Perfil</div>
                         <div className="affiliate-center">Telegram ID</div>
                         <div className="affiliate-center">Estado</div>
@@ -1253,7 +1294,7 @@ export default function AffiliatesPage() {
                         <div className="affiliate-center">Bloqueo</div>
                         <div className="affiliate-center">Nivel</div>
                       </div>
-                      <div className="affiliate-detail-row affiliate-detail-row--data">
+                      <div className="affiliate-detail-row affiliate-detail-row--data affiliate-list-data">
                         <div className="affiliate-name-cell">
                           <div className="affiliate-avatar affiliate-detail-avatar">
                             {photoUrls[user?.telegram_id] ? (
@@ -1498,7 +1539,7 @@ export default function AffiliatesPage() {
                         <p className="muted">Sin comisiones.</p>
                       ) : (
                         <div className="table-scroll affiliate-commissions-scroll affiliate-control-scroll">
-                          <table className="affiliate-control-table" style={{ width: "100%", marginTop: "0px" }}>
+                          <table className="affiliate-control-table affiliate-list-table" style={{ width: "100%", marginTop: "0px" }}>
                             <thead>
                               <tr>
                                 <th align="left">Número</th>
@@ -1572,8 +1613,11 @@ export default function AffiliatesPage() {
                       )}
                     </div>
                     <div className="orders-detail-separator"></div>
-                    <div className="orders-detail-section">
-                      <h3>Control de Ganancias</h3>
+                    <div
+                      className="orders-detail-section affiliate-gains-section"
+                      data-no-export="true"
+                    >
+                      <h3 className="affiliate-gains-title">Control de Ganancias</h3>
                       <div className="affiliate-adjustment-form">
                         <div className="affiliate-adjustment-row">
                           <input
@@ -1647,14 +1691,20 @@ export default function AffiliatesPage() {
                       {controlItems.length === 0 ? (
                         <p className="muted">Sin ajustes registrados.</p>
                       ) : (
-                        <div className="table-scroll affiliate-commissions-scroll">
-                          <table style={{ width: "100%", marginTop: "0px" }}>
+                        <div className="table-scroll affiliate-commissions-scroll affiliate-gains-scroll">
+                          <table className="affiliate-list-table affiliate-gains-table" style={{ width: "100%", marginTop: "0px" }}>
+                            <colgroup>
+                              <col className="gains-col-date" />
+                              <col className="gains-col-amount" />
+                              <col className="gains-col-status" />
+                              <col className="gains-col-reason" />
+                            </colgroup>
                             <thead>
                               <tr>
                                 <th align="left">Fecha</th>
-                                <th align="left">Monto</th>
-                                <th align="left">Estado</th>
-                                <th align="left">Motivo</th>
+                                <th align="left" className="gains-shift-col">Monto</th>
+                                <th align="left" className="gains-shift-col">Estado</th>
+                                <th align="left" className="gains-shift-col">Motivo</th>
                               </tr>
                             </thead>
                             <tbody>
@@ -1674,9 +1724,9 @@ export default function AffiliatesPage() {
                                 return (
                                   <tr key={`${row.type}-${row.id}`}>
                                     <td>{new Date(row.created_at).toLocaleString()}</td>
-                                    <td>{formatCommissionAmount(amount)}</td>
-                                    <td>{status}</td>
-                                    <td>
+                                    <td className="gains-shift-col">{formatCommissionAmount(amount)}</td>
+                                    <td className="gains-shift-col">{status}</td>
+                                    <td className="gains-shift-col">
                                       <span className="affiliate-reason-truncate">
                                         {reason}
                                       </span>
