@@ -129,6 +129,11 @@ export default function InventoryPage() {
     return normalizePriceValue(value);
   };
 
+  const normalizeStockInput = (value) =>
+    String(value ?? "")
+      .replace(/[^\d]/g, "")
+      .slice(0, 3);
+
   const notifyMessage = (text) => {
     setMessage(text);
     setToast(text);
@@ -196,7 +201,7 @@ export default function InventoryPage() {
 
   const removeMessage = (setter, index) => {
     setter((prev) => {
-      if (prev.length <= 1) {
+      if (prev.length <= 1 || index <= 0) {
         return prev;
       }
       return prev.filter((_, idx) => idx !== index);
@@ -867,6 +872,26 @@ export default function InventoryPage() {
     (item) => item.stock_mode === modeFilter
   );
 
+  const orderedProductsByMode = [...productsByMode].sort((a, b) => {
+    const aOrder = getSkuOrder(a);
+    const bOrder = getSkuOrder(b);
+    if (aOrder !== null && bOrder !== null && aOrder !== bOrder) {
+      return aOrder - bOrder;
+    }
+    if (aOrder !== null) return -1;
+    if (bOrder !== null) return 1;
+    if (a.created_at && b.created_at) {
+      return new Date(a.created_at) - new Date(b.created_at);
+    }
+    if (a.created_at) return -1;
+    if (b.created_at) return 1;
+    return String(a.name || "").localeCompare(String(b.name || ""));
+  });
+
+  const categoryProducts = categoryFilter
+    ? orderedProductsByMode.filter((item) => getCategoryKey(item) === categoryFilter)
+    : [];
+
   const categoryCounts = categoryOptions.reduce((acc, option) => {
     acc[option.key] = productsByMode.filter(
       (item) => getCategoryKey(item) === option.key
@@ -1287,14 +1312,15 @@ export default function InventoryPage() {
                                 }
                                 placeholder={`Mensaje ${index + 1}`}
                               />
-                              <button
-                                type="button"
-                                className="ghost"
-                                onClick={() => removeMessage(setCreateDeliveryMessages, index)}
-                                disabled={createDeliveryMessages.length <= 1}
-                              >
-                                Eliminar
-                              </button>
+                              {index > 0 && (
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() => removeMessage(setCreateDeliveryMessages, index)}
+                                >
+                                  Eliminar
+                                </button>
+                              )}
                             </div>
                           ))}
                           <button
@@ -1420,7 +1446,7 @@ export default function InventoryPage() {
                   </div>
                 ) : (
                   <div className="create-product__description create-product__description--split">
-                    <span>Descripción (máx 8 líneas)</span>
+                    <span>Descripción</span>
                     <div className="description-editor" role="textbox">
                       {createDescriptionLines.map((line, index) => (
                         <div key={`create-line-${index}`} className="description-line">
@@ -1486,9 +1512,13 @@ export default function InventoryPage() {
                         <input
                           type="number"
                           min="0"
+                          max="999"
+                          inputMode="numeric"
                           value={createSimpleStock}
                           disabled={createUnique || createSimpleUnlimited}
-                          onChange={(event) => setCreateSimpleStock(event.target.value)}
+                          onChange={(event) =>
+                            setCreateSimpleStock(normalizeStockInput(event.target.value))
+                          }
                         />
                       </label>
                     </div>
@@ -1606,51 +1636,56 @@ export default function InventoryPage() {
                 ))}
               </div>
               {categoryFilter && !detail && (
-                <div className="product-list">
-                  {productsByMode
-                    .filter(
-                      (item) => getCategoryKey(item) === categoryFilter
-                    )
-                    .sort((a, b) => {
-                      const aOrder = getSkuOrder(a);
-                      const bOrder = getSkuOrder(b);
-                      if (aOrder !== null && bOrder !== null && aOrder !== bOrder) {
-                        return aOrder - bOrder;
-                      }
-                      if (a.created_at && b.created_at) {
-                        return new Date(a.created_at) - new Date(b.created_at);
-                      }
-                      if (a.created_at) return -1;
-                      if (b.created_at) return 1;
-                      return String(a.name || "").localeCompare(String(b.name || ""));
-                    })
-                    .map((item) => (
-                      <div key={item.id} className="product-row">
-                        <button
-                          type="button"
-                          className="product-row__main"
-                          onClick={() => handleSelectProduct(item)}
-                        >
-                          <div>
-                            <div className="product-name">
+                <div className="product-list product-list--table">
+                  <div className="product-list-head product-list-head--table" aria-hidden="true">
+                    <span>Orden</span>
+                    <span>Producto</span>
+                    <span>Sku</span>
+                    <span>Acciones</span>
+                  </div>
+                  {categoryProducts
+                    .map((item, index) => {
+                      const isEditing = editingProductId === item.id;
+                      return (
+                      <div key={item.id} className="product-row product-row--table">
+                        {isEditing ? (
+                          <div className="product-row__main product-row__main--table is-editing">
+                            <span className="product-order">{index + 1}</span>
+                            <input
+                              className="product-name-input"
+                              type="text"
+                              value={editingName}
+                              onChange={(event) => setEditingName(event.target.value)}
+                              onKeyDown={(event) => {
+                                if (event.key === "Enter") {
+                                  event.preventDefault();
+                                  handleEditSave(item);
+                                }
+                                if (event.key === "Escape") {
+                                  event.preventDefault();
+                                  handleEditCancel();
+                                }
+                              }}
+                              autoFocus
+                            />
+                            <span className="muted product-sku">{item.sku_key || "-"}</span>
+                          </div>
+                        ) : (
+                          <button
+                            type="button"
+                            className="product-row__main product-row__main--table"
+                            onClick={() => handleSelectProduct(item)}
+                          >
+                            <span className="product-order">{index + 1}</span>
+                            <span className="product-name">
                               {stripCategoryPrefix(item.name)}
-                            </div>
-                            <div className="muted">
-                              SKU: {item.sku_key || "-"}
-                            </div>
-                          </div>
-                          <div className="product-stock">
-                            {item.available_stock ?? "-"}
-                          </div>
-                        </button>
-                        <div className="product-row__actions">
-                          {editingProductId === item.id ? (
+                            </span>
+                            <span className="muted product-sku">{item.sku_key || "-"}</span>
+                          </button>
+                        )}
+                        <div className="product-row__actions product-row__actions--table">
+                          {isEditing ? (
                             <>
-                              <input
-                                type="text"
-                                value={editingName}
-                                onChange={(event) => setEditingName(event.target.value)}
-                              />
                               <button type="button" onClick={() => handleEditSave(item)}>
                                 Guardar
                               </button>
@@ -1677,7 +1712,7 @@ export default function InventoryPage() {
                           )}
                         </div>
                       </div>
-                    ))}
+                    )})}
                 </div>
               )}
             </>
@@ -1713,7 +1748,8 @@ export default function InventoryPage() {
                 </div>
               </section>
 
-              <section className="card inventory-holds inventory-card">
+              {holdsActive.length > 0 && (
+                <section className="card inventory-holds inventory-card">
                 <div className="inventory-header">
                   <div>
                     <h2 className="icon-inline"><IconOrders className="panel-icon" /> Holds activos</h2>
@@ -1721,76 +1757,72 @@ export default function InventoryPage() {
                   </div>
                   <span className="pill pill-highlight">Retenidos: {holdsHeldQty}</span>
                 </div>
-                {holdsActive.length === 0 ? (
-                  <p>No hay holds activos.</p>
-                ) : (
-                  <div className="table-scroll">
-                    <table className="holds-table" style={{ width: "100%", marginTop: "12px" }}>
-                      <thead>
-                        <tr>
-                          <th align="left">Pedido</th>
-                          <th align="left">Cant.</th>
-                          <th align="left">Expira</th>
-                          <th align="left">Restante</th>
-                          <th align="left">Creado</th>
-                          <th align="left">Estado</th>
-                          <th></th>
-                        </tr>
-                      </thead>
-                      <tbody>
-                        {holdsActive.map((hold) => {
-                          const expiresAt = hold.expires_at
-                            ? new Date(hold.expires_at)
-                            : null;
-                          const remainingMs = expiresAt ? expiresAt - new Date() : 0;
-                          const minutes = Math.max(Math.floor(remainingMs / 60000), 0);
-                          const seconds = Math.max(
-                            Math.floor((remainingMs % 60000) / 1000),
-                            0
-                          );
-                          return (
-                            <tr key={hold.id}>
-                              <td>
-                                <div className="hold-order-id">
-                                  {hold.order_id || "—"}
+                <div className="table-scroll">
+                  <table className="holds-table" style={{ width: "100%", marginTop: "12px" }}>
+                    <thead>
+                      <tr>
+                        <th align="left">Pedido</th>
+                        <th align="left">Cant.</th>
+                        <th align="left">Expira</th>
+                        <th align="left">Restante</th>
+                        <th align="left">Creado</th>
+                        <th align="left">Estado</th>
+                        <th></th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {holdsActive.map((hold) => {
+                        const expiresAt = hold.expires_at
+                          ? new Date(hold.expires_at)
+                          : null;
+                        const remainingMs = expiresAt ? expiresAt - new Date() : 0;
+                        const minutes = Math.max(Math.floor(remainingMs / 60000), 0);
+                        const seconds = Math.max(
+                          Math.floor((remainingMs % 60000) / 1000),
+                          0
+                        );
+                        return (
+                          <tr key={hold.id}>
+                            <td>
+                              <div className="hold-order-id">
+                                {hold.order_id || "—"}
+                              </div>
+                              {hold.order_id && (
+                                <div className="hold-actions-inline">
+                                  <button
+                                    type="button"
+                                    onClick={() => copyText(hold.order_id, "Pedido")}
+                                  >
+                                    Copiar
+                                  </button>
+                                  <button type="button" onClick={() => openRelease(hold)}>
+                                    Liberar
+                                  </button>
                                 </div>
-                                {hold.order_id && (
-                                  <div className="hold-actions-inline">
-                                    <button
-                                      type="button"
-                                      onClick={() => copyText(hold.order_id, "Pedido")}
-                                    >
-                                      Copiar
-                                    </button>
-                                    <button type="button" onClick={() => openRelease(hold)}>
-                                      Liberar
-                                    </button>
-                                  </div>
-                                )}
-                              </td>
-                              <td>{hold.qty}</td>
-                              <td>
-                                {hold.expires_at
-                                  ? new Date(hold.expires_at).toLocaleString()
-                                  : "-"}
-                              </td>
-                              <td>
-                                {hold.expires_at ? `${minutes}m ${seconds}s` : "-"}
-                              </td>
-                              <td>
-                                {hold.created_at
-                                  ? new Date(hold.created_at).toLocaleString()
-                                  : "-"}
-                              </td>
-                              <td>{hold.status || "-"}</td>
-                              <td></td>
-                            </tr>
-                          );
-                        })}
-                      </tbody>
-                    </table>
-                  </div>
-                )}
+                              )}
+                            </td>
+                            <td>{hold.qty}</td>
+                            <td>
+                              {hold.expires_at
+                                ? new Date(hold.expires_at).toLocaleString()
+                                : "-"}
+                            </td>
+                            <td>
+                              {hold.expires_at ? `${minutes}m ${seconds}s` : "-"}
+                            </td>
+                            <td>
+                              {hold.created_at
+                                ? new Date(hold.created_at).toLocaleString()
+                                : "-"}
+                            </td>
+                            <td>{hold.status || "-"}</td>
+                            <td></td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
                 {releaseTarget && (
                   <section className="card emergency-panel inventory-card">
                     <h3 className="icon-inline"><IconOrders className="panel-icon" /> Liberar hold (EMERGENCIA)</h3>
@@ -1824,7 +1856,8 @@ export default function InventoryPage() {
                     </div>
                   </section>
                 )}
-              </section>
+                </section>
+              )}
 
               {editStockMode === "UNITS" && (
                 <section className="card inner-card units-summary-card">
@@ -1938,7 +1971,6 @@ export default function InventoryPage() {
                 <div className="product-grid">
                   <div>
                     <p><strong>SKU:</strong> {detail.product.sku_key || "-"}</p>
-                    <p><strong>ID:</strong> {detail.product.id}</p>
                   </div>
                 </div>
                 <div className="product-edit">
@@ -2041,9 +2073,13 @@ export default function InventoryPage() {
                             <input
                               type="number"
                               min="0"
+                              max="999"
+                              inputMode="numeric"
                               value={simpleStock}
                               disabled={editUnique || simpleUnlimited}
-                              onChange={(event) => setSimpleStock(event.target.value)}
+                              onChange={(event) =>
+                                setSimpleStock(normalizeStockInput(event.target.value))
+                              }
                             />
                           </label>
                         </div>
@@ -2134,14 +2170,15 @@ export default function InventoryPage() {
                                   }
                                   placeholder={`Mensaje ${index + 1}`}
                                 />
-                                <button
-                                  type="button"
-                                  className="ghost"
-                                  onClick={() => removeMessage(setEditDeliveryMessages, index)}
-                                  disabled={editDeliveryMessages.length <= 1}
-                                >
-                                  Eliminar
-                                </button>
+                                {index > 0 && (
+                                  <button
+                                    type="button"
+                                    className="ghost"
+                                    onClick={() => removeMessage(setEditDeliveryMessages, index)}
+                                  >
+                                    Eliminar
+                                  </button>
+                                )}
                               </div>
                             ))}
                             <button
@@ -2359,7 +2396,7 @@ export default function InventoryPage() {
                     </div>
                   ) : (
                     <div className="product-edit__description product-edit__description--split">
-                      <span>Descripción (máx 8 líneas)</span>
+                      <span>Descripción</span>
                       <div className="description-editor" role="textbox">
                         {editDescriptionLines.map((line, index) => (
                           <div key={`edit-line-${index}`} className="description-line">

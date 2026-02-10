@@ -1,5 +1,6 @@
 import { useEffect } from "react";
 import { useRouter } from "next/router";
+import Head from "next/head";
 
 import Layout from "../components/Layout";
 import "../styles/globals.css";
@@ -85,13 +86,29 @@ export default function App({ Component, pageProps }) {
     };
   }, [router.asPath]);
 
+  const faviconHead = (
+    <Head>
+      <link rel="icon" type="image/png" href="/favicon-noropayments.png" />
+      <link rel="shortcut icon" href="/favicon-noropayments.png" />
+      <link rel="apple-touch-icon" href="/favicon-noropayments.png" />
+    </Head>
+  );
+
   if (!useLayout) {
-    return <Component {...pageProps} />;
+    return (
+      <>
+        {faviconHead}
+        <Component {...pageProps} />
+      </>
+    );
   }
 
   return (
-    <Layout>
-      <Component {...pageProps} />
-    </Layout>
+    <>
+      {faviconHead}
+      <Layout>
+        <Component {...pageProps} />
+      </Layout>
+    </>
   );
 }

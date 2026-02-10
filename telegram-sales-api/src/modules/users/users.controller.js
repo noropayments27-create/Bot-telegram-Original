@@ -599,6 +599,8 @@ async function getAffiliateStatus(req, res, next) {
     const pendingPayout = pendingPayoutRes.rows[0] || null;
     const payoutMethod = row.wallet_usdt_bsc
       ? "USDT_BSC"
+      : row.wallet_nequi
+      ? "NEQUI"
       : row.binance_id
       ? "BINANCE_ID"
       : null;
@@ -609,6 +611,7 @@ async function getAffiliateStatus(req, res, next) {
         status: row.status,
         commission_rate: row.commission_rate,
         wallet_usdt_bsc: row.wallet_usdt_bsc,
+        wallet_nequi: row.wallet_nequi,
         binance_id: row.binance_id,
         payout_method: payoutMethod,
         created_at: row.created_at,
@@ -909,7 +912,7 @@ async function requestAffiliatePayout(req, res, next) {
     await client.query("BEGIN");
 
     const affiliateRes = await client.query(
-      `SELECT a.id, a.status, a.wallet_usdt_bsc, a.binance_id, a.affiliate_debt
+      `SELECT a.id, a.status, a.wallet_usdt_bsc, a.wallet_nequi, a.binance_id, a.affiliate_debt
        FROM affiliates a
        JOIN users u ON u.id = a.user_id
        WHERE u.telegram_id = $1`,

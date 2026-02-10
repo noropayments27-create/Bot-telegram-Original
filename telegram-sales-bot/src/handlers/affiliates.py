@@ -73,6 +73,22 @@ async def _render_affiliate_view(
 logger = logging.getLogger(__name__)
 
 
+def _get_affiliate_withdraw_destination(affiliate: dict) -> str:
+    if not isinstance(affiliate, dict):
+        return "-"
+    method = str(affiliate.get("payout_method") or "").upper()
+    usdt = str(affiliate.get("wallet_usdt_bsc") or "").strip()
+    nequi = str(affiliate.get("wallet_nequi") or "").strip()
+    binance = str(affiliate.get("binance_id") or "").strip()
+    if method == "USDT_BSC" and usdt:
+        return usdt
+    if method == "NEQUI" and nequi:
+        return nequi
+    if method == "BINANCE_ID" and binance:
+        return binance
+    return usdt or nequi or binance or "-"
+
+
 class AffiliateStates(StatesGroup):
     waiting_method = State()
     waiting_destination = State()
@@ -983,7 +999,7 @@ async def handle_affiliate_withdraw(callback: CallbackQuery, state: FSMContext) 
     try:
         data = await api_client.get_affiliate_status(callback.from_user.id)
         affiliate = data.get("affiliate") or {}
-        destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
+        destination = _get_affiliate_withdraw_destination(affiliate)
         balance_value = float(affiliate.get("earnings_available") or 0)
         debt_value = float(
             affiliate.get("debt_remaining")
@@ -1059,7 +1075,7 @@ async def handle_affiliate_withdraw_all(callback: CallbackQuery, state: FSMConte
     try:
         data = await api_client.get_affiliate_status(callback.from_user.id)
         affiliate = data.get("affiliate") or {}
-        destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
+        destination = _get_affiliate_withdraw_destination(affiliate)
         balance_value = float(affiliate.get("earnings_available") or 0)
         debt_value = float(
             affiliate.get("debt_remaining")
@@ -1130,7 +1146,7 @@ async def handle_affiliate_withdraw_min(callback: CallbackQuery, state: FSMConte
     try:
         data = await api_client.get_affiliate_status(callback.from_user.id)
         affiliate = data.get("affiliate") or {}
-        destination = affiliate.get("wallet_usdt_bsc") or affiliate.get("binance_id") or "-"
+        destination = _get_affiliate_withdraw_destination(affiliate)
         balance_value = float(affiliate.get("earnings_available") or 0)
         debt_value = float(
             affiliate.get("debt_remaining")

@@ -367,7 +367,7 @@ export default function PaymentMethodsPage() {
                           method.enabled ? " is-active" : ""
                         }`}
                       >
-                        {method.enabled ? "Activo" : "Desactivado"}
+                        {method.enabled ? "Activo" : "Inactivo"}
                       </span>
                     </td>
                     <td>

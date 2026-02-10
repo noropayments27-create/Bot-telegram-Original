@@ -90,6 +90,8 @@ export default function PayoutsPage() {
   const [reasonById, setReasonById] = useState({});
   const [markingSentById, setMarkingSentById] = useState({});
   const [toast, setToast] = useState("");
+  const [isExportingCsv, setIsExportingCsv] = useState(false);
+  const [exportFilter, setExportFilter] = useState("");
   const [payoutCounts, setPayoutCounts] = useState({});
   const getPayoutCount = (key) => Number(payoutCounts[key] || 0);
   const totalPayouts = Object.values(payoutCounts).reduce(
@@ -369,8 +371,165 @@ export default function PayoutsPage() {
     }
   };
 
+  const escapeCsvCell = (value) => {
+    const raw = String(value ?? "");
+    const safe = /^[=+\-@]/.test(raw) ? `'${raw}` : raw;
+    return `"${safe.replace(/"/g, '""')}"`;
+  };
+
+  const toIsoDate = (value) => {
+    if (!value) {
+      return "";
+    }
+    const date = new Date(value);
+    if (Number.isNaN(date.getTime())) {
+      return "";
+    }
+    return date.toISOString();
+  };
+
+  const handleDownloadGlobalPayoutsCsv = async () => {
+    if (isExportingCsv) {
+      return;
+    }
+    setIsExportingCsv(true);
+    try {
+      const allItems = [];
+      let currentPage = 1;
+      let totalPagesGlobal = 1;
+
+      while (currentPage <= totalPagesGlobal) {
+        const data = await apiFetch(
+          `/admin/payouts?status=SENT&page=${currentPage}&page_size=100`
+        );
+        const pageItems = Array.isArray(data.items) ? data.items : [];
+        allItems.push(...pageItems);
+        totalPagesGlobal = Number(data.total_pages || 1);
+        currentPage += 1;
+      }
+
+      const trimmedFilter = String(exportFilter || "").trim();
+      const normalizedFilter = trimmedFilter.toLowerCase();
+      const isTelegramFilter = /^[0-9]+$/.test(trimmedFilter);
+
+      const filteredItems = trimmedFilter
+        ? allItems.filter((payout) => {
+            if (isTelegramFilter) {
+              return String(payout.telegram_id || "").trim() === trimmedFilter;
+            }
+            const affiliateId = String(payout.affiliate_id || "").toLowerCase();
+            return affiliateId === normalizedFilter;
+          })
+        : allItems;
+
+      if (filteredItems.length === 0) {
+        setToast("No hay pagos ENVIADOS para ese filtro.");
+        return;
+      }
+
+      const uniqueUsernames = [
+        ...new Set(
+          filteredItems
+            .map((payout) => String(formatUsername(payout.telegram_username) || "").trim())
+            .filter((value) => value && value !== "-")
+        ),
+      ];
+      const csvTitleUsername =
+        uniqueUsernames.length === 1
+          ? uniqueUsernames[0]
+          : uniqueUsernames.length > 1
+          ? "Varios"
+          : "-";
+
+      const csvRows = [
+        [`Pago enviado a: ${csvTitleUsername}`],
+        [],
+        [
+          "NUMERO",
+          "PAYOUT_ID",
+          "AFFILIATE_UUID",
+          "TELEGRAM_ID",
+          "USERNAME",
+          "MONTO_USD",
+          "METODO",
+          "DESTINO",
+          "ESTADO",
+          "CREADO_UTC",
+          "ENVIADO_UTC",
+        ],
+      ];
+
+      for (const payout of filteredItems) {
+        const amountNumber = Number(payout.amount);
+        csvRows.push([
+          formatPayoutNumber(payout.payout_number) || "",
+          payout.id || "",
+          payout.affiliate_id || "",
+          payout.telegram_id || "",
+          formatUsername(payout.telegram_username),
+          Number.isFinite(amountNumber) ? amountNumber.toFixed(2) : payout.amount || "",
+          formatMethod(payout.method),
+          payout.destination || "",
+          formatStatus(payout.status),
+          toIsoDate(payout.created_at),
+          toIsoDate(payout.sent_at),
+        ]);
+      }
+
+      const totalGlobalUsd = filteredItems.reduce((sum, payout) => {
+        const value = Number(payout.amount);
+        return Number.isFinite(value) ? sum + value : sum;
+      }, 0);
+
+      csvRows.push([]);
+      csvRows.push([
+        "TOTAL_GLOBAL_USD",
+        "",
+        "",
+        "",
+        "",
+        totalGlobalUsd.toFixed(2),
+        "",
+        "",
+        "",
+        "",
+        "",
+      ]);
+
+      const csvText = csvRows
+        .map((row) => row.map((cell) => escapeCsvCell(cell)).join(","))
+        .join("\n");
+
+      const now = new Date();
+      const stamp = `${now.getFullYear()}${String(now.getMonth() + 1).padStart(2, "0")}${String(now.getDate()).padStart(2, "0")}_${String(now.getHours()).padStart(2, "0")}${String(now.getMinutes()).padStart(2, "0")}`;
+      const suffix = trimmedFilter
+        ? `afiliado_${trimmedFilter.replace(/[^a-zA-Z0-9_-]/g, "")}`
+        : "global";
+      const filename = `pagos_enviados_${suffix}_${stamp}.csv`;
+
+      const blob = new Blob([`\uFEFF${csvText}`], {
+        type: "text/csv;charset=utf-8;",
+      });
+      const url = URL.createObjectURL(blob);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = filename;
+      document.body.appendChild(link);
+      link.click();
+      link.remove();
+      URL.revokeObjectURL(url);
+
+      setToast(`CSV generado: ${filteredItems.length} pagos ENVIADOS`);
+    } catch (err) {
+      setError("No se pudo descargar el CSV global de pagos.");
+      setToast("No se pudo descargar el CSV.");
+    } finally {
+      setIsExportingCsv(false);
+    }
+  };
+
   return (
-    <main className="page">
+    <main className="page payouts-page">
       <section className="card orders-card">
         <div className="orders-header-row">
           <h1 className="icon-inline"><IconPayouts className="panel-icon" /> Pagos</h1>
@@ -406,7 +565,7 @@ export default function PayoutsPage() {
           <table className="orders-table payouts-table">
             <thead>
               <tr>
-                <th>Numero de pago</th>
+                <th>Número</th>
                 <th>Telegram ID</th>
                 <th>Username</th>
                 <th>Monto</th>
@@ -473,6 +632,21 @@ export default function PayoutsPage() {
             </tbody>
           </table>
         </div>
+        <div className="payouts-export-actions payouts-export-controls">
+          <button
+            type="button"
+            onClick={handleDownloadGlobalPayoutsCsv}
+            disabled={isExportingCsv}
+          >
+            {isExportingCsv ? "Descargando..." : "Descargar"}
+          </button>
+          <input
+            type="text"
+            value={exportFilter}
+            onChange={(event) => setExportFilter(event.target.value)}
+            placeholder="Telegram ID o UUID afiliado"
+          />
+        </div>
       </section>
       {selectedPayoutIds.length > 0 && (
         <div className="orders-detail-wrap">
@@ -517,8 +691,8 @@ export default function PayoutsPage() {
                     <div className="orders-detail-separator"></div>
                     {message && <p className="muted">{message}</p>}
                     {errorMessage && <p className="error">{errorMessage}</p>}
-                    <div className="orders-detail-grid payouts-detail-grid">
-                      <div className="orders-detail-section">
+                    <div className="orders-detail-grid payouts-detail-grid payouts-detail-grid--summary">
+                      <div className="orders-detail-section payouts-section payouts-section--detail">
                         <h3>Detalle</h3>
                         <p>Estado: {formatStatus(payout.status)}</p>
                         <p>Monto: {formatUsdAmount(payout.amount)}</p>
@@ -540,11 +714,12 @@ export default function PayoutsPage() {
                           <p>Enviado: {new Date(payout.sent_at).toLocaleString()}</p>
                         )}
                       </div>
-                      <div className="orders-detail-section">
+                      <div className="orders-detail-section payouts-section payouts-section--affiliate">
                         <h3>Afiliado</h3>
                         <p>Estado: {formatStatus(affiliate?.status)}</p>
                         <p>Balance disponible: {availableBalanceText}</p>
-                        <div className="orders-detail-subseparator"></div>
+                      </div>
+                      <div className="orders-detail-section payouts-section payouts-section--user-receipt">
                         <h3>Usuario</h3>
                         <p>
                           Telegram ID:{" "}
@@ -586,6 +761,7 @@ export default function PayoutsPage() {
                               />
                               <button
                                 type="button"
+                                className="payout-receipt-download"
                                 onClick={() => handleReceiptDownload(payout.id)}
                               >
                                 Descargar

@@ -623,7 +623,6 @@ function parseOrderLookupRef(rawValue) {
 }
 
 async function recalcSkuKeys(client) {
-  await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
   await client.query("UPDATE products SET sku_key = NULL WHERE sku_key IS NOT NULL");
   await client.query(
     `WITH ordered AS (
@@ -638,19 +637,23 @@ async function recalcSkuKeys(client) {
        SET sku_key = lpad(ordered.rn::text, 6, '0')
        FROM ordered
        WHERE p.id = ordered.id
-       RETURNING ordered.rn
+       RETURNING p.id
      )
-     SELECT setval('products_sku_key_seq', COALESCE((SELECT max(rn) FROM ordered), 0))`
+     SELECT count(*)::int AS updated_count
+     FROM updated`
   );
 }
 
 async function getNextSkuKey(client) {
-  await client.query("CREATE SEQUENCE IF NOT EXISTS products_sku_key_seq");
-  await client.query(
-    "GRANT USAGE, SELECT ON SEQUENCE products_sku_key_seq TO PUBLIC"
-  );
+  await client.query("SELECT pg_advisory_xact_lock(318622901)");
   const res = await client.query(
-    "SELECT nextval('products_sku_key_seq') AS value"
+    `SELECT (
+       COALESCE(
+         MAX(CASE WHEN sku_key ~ '^[0-9]+$' THEN sku_key::bigint END),
+         0
+       ) + 1
+     )::bigint AS value
+     FROM products`
   );
   return String(res.rows[0].value).padStart(6, "0");
 }
@@ -682,14 +685,59 @@ function escapeBroadcastHtml(value) {
     .replace(/>/g, "&gt;");
 }
 
+function restoreAllowedBroadcastHtml(value) {
+  let text = String(value || "");
+
+  text = text.replace(
+    /&lt;a\s+href="(https?:\/\/[^"]+)"\s*&gt;/gi,
+    (_, href) => `<a href="${href.replace(/&amp;/g, "&")}">`
+  );
+  text = text.replace(/&lt;\/a&gt;/gi, "</a>");
+  text = text.replace(/&lt;br\s*\/?&gt;/gi, "\n");
+
+  text = text.replace(
+    /&lt;(\/?)(strong|b|em|i|u|s|strike|del|blockquote|code|pre)&gt;/gi,
+    (_, slash, tag) => {
+      const normalized = String(tag).toLowerCase();
+      if (normalized === "strong") {
+        return `<${slash}b>`;
+      }
+      if (normalized === "em") {
+        return `<${slash}i>`;
+      }
+      if (normalized === "strike" || normalized === "del") {
+        return `<${slash}s>`;
+      }
+      return `<${slash}${normalized}>`;
+    }
+  );
+
+  text = text.replace(/&lt;\/?(?:div|p|li|ul|ol)&gt;/gi, "\n");
+  return text;
+}
+
 function formatBroadcastMessage(raw) {
   let text = escapeBroadcastHtml(raw);
+  text = restoreAllowedBroadcastHtml(text);
   text = text.replace(/```([\s\S]+?)```/g, (_, code) => {
     return `<pre><code>${code}</code></pre>`;
   });
   text = text.replace(/`([^`]+?)`/g, "<code>$1</code>");
+  text = text.replace(/\[([^\]]+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
   text = text.replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>");
+  text = text.replace(/__([^_]+?)__/g, "<u>$1</u>");
+  text = text.replace(/~~([^~]+?)~~/g, "<s>$1</s>");
   text = text.replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, "$1<i>$2</i>");
+  text = text
+    .split("\n")
+    .map((line) => {
+      const match = line.match(/^&gt;\s?(.*)$/);
+      if (!match) {
+        return line;
+      }
+      return `<blockquote>${match[1]}</blockquote>`;
+    })
+    .join("\n");
   return text;
 }
 
@@ -6757,8 +6805,23 @@ router.get("/broadcasts", async (req, res, next) => {
                 WHERE a.entity_type = 'broadcast'
                   AND a.entity_id = b.id
                   AND a.admin_action = 'BROADCAST_GROUP_CHATS'
-              ) AS has_group_recipients
+              ) AS has_group_recipients,
+              COALESCE(send_stats.sent_count, 0) AS last_sent_count,
+              COALESCE(send_stats.failed_count, 0) AS last_failed_count,
+              COALESCE(send_stats.target_count, 0) AS last_target_count
        FROM broadcasts b
+       LEFT JOIN LATERAL (
+         SELECT
+           NULLIF(a.meta->>'sent_count', '')::int AS sent_count,
+           NULLIF(a.meta->>'failed_count', '')::int AS failed_count,
+           NULLIF(a.meta->>'target_count', '')::int AS target_count
+         FROM audit_logs a
+         WHERE a.entity_type = 'broadcast'
+           AND a.entity_id = b.id
+           AND a.admin_action = 'BROADCAST_SEND_RESULT'
+         ORDER BY a.created_at DESC
+         LIMIT 1
+       ) send_stats ON TRUE
        ORDER BY b.created_at DESC
        LIMIT $1 OFFSET $2`,
       [pageSize, offset]
@@ -6798,19 +6861,44 @@ router.get("/broadcasts/:id", async (req, res, next) => {
     }
 
     const auditRes = await pool.query(
-      `SELECT meta
+      `SELECT admin_action, meta
        FROM audit_logs
        WHERE entity_type = 'broadcast'
          AND entity_id = $1
-         AND admin_action IN ('BROADCAST_CUSTOM_RECIPIENTS', 'BROADCAST_GROUP_CHATS')
-       ORDER BY created_at DESC
-       LIMIT 1`,
+         AND admin_action IN (
+           'BROADCAST_CUSTOM_RECIPIENTS',
+           'BROADCAST_GROUP_CHATS',
+           'BROADCAST_EXCLUDED_RECIPIENTS',
+           'BROADCAST_SEND_RESULT'
+         )
+       ORDER BY created_at DESC`,
       [broadcastId]
     );
 
-    const meta = auditRes.rows[0] && auditRes.rows[0].meta ? auditRes.rows[0].meta : {};
-    const customTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
-    const groupChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
+    let customTelegramIds = [];
+    let groupChatIds = [];
+    let excludedIds = [];
+    let sendResult = null;
+    for (const row of auditRes.rows) {
+      const action = row?.admin_action;
+      const meta = row?.meta || {};
+      if (action === "BROADCAST_CUSTOM_RECIPIENTS" && customTelegramIds.length === 0) {
+        customTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
+      }
+      if (action === "BROADCAST_GROUP_CHATS" && groupChatIds.length === 0) {
+        groupChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
+      }
+      if (action === "BROADCAST_EXCLUDED_RECIPIENTS" && excludedIds.length === 0) {
+        excludedIds = Array.isArray(meta.except_ids) ? meta.except_ids : [];
+      }
+      if (!sendResult && action === "BROADCAST_SEND_RESULT") {
+        sendResult = {
+          target_count: Number(meta.target_count || 0),
+          sent_count: Number(meta.sent_count || 0),
+          failed_count: Number(meta.failed_count || 0),
+        };
+      }
+    }
 
     const broadcast = broadcastRes.rows[0];
 
@@ -6823,12 +6911,56 @@ router.get("/broadcasts/:id", async (req, res, next) => {
         ),
         telegram_ids: customTelegramIds,
         chat_ids: groupChatIds,
+        except_ids: excludedIds,
+        last_result: sendResult,
         // Back-compat alias (deprecated):
         custom_telegram_ids: customTelegramIds,
       },
     });
   } catch (error) {
     next(error);
+  }
+});
+
+router.get("/broadcasts/:id/image", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const pool = getPool();
+
+  try {
+    const broadcastRes = await pool.query(
+      "SELECT image_path, image_filename, image_mime FROM broadcasts WHERE id = $1",
+      [broadcastId]
+    );
+    if (broadcastRes.rowCount === 0) {
+      return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+    }
+    const broadcast = broadcastRes.rows[0];
+    if (!broadcast.image_path) {
+      return res.status(404).json({ error: "BROADCAST_IMAGE_NOT_FOUND" });
+    }
+
+    const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "broadcasts");
+    const filePath = path.resolve(String(broadcast.image_path));
+    if (!filePath.startsWith(`${uploadsDir}${path.sep}`)) {
+      return res.status(404).json({ error: "BROADCAST_IMAGE_NOT_FOUND" });
+    }
+
+    const fileBuffer = await fs.readFile(filePath);
+    res.setHeader(
+      "Content-Type",
+      broadcast.image_mime && String(broadcast.image_mime).trim()
+        ? String(broadcast.image_mime).trim()
+        : "image/jpeg"
+    );
+    if (broadcast.image_filename) {
+      res.setHeader("Content-Disposition", `inline; filename="${broadcast.image_filename}"`);
+    }
+    return res.send(fileBuffer);
+  } catch (error) {
+    if (error && error.code === "ENOENT") {
+      return res.status(404).json({ error: "BROADCAST_IMAGE_NOT_FOUND" });
+    }
+    return next(error);
   }
 });
 
@@ -6844,6 +6976,8 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
   const clearImage = Boolean(req.body && req.body.clear_image);
   const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
   const savedFlag = typeof req.body?.saved === "boolean" ? req.body.saved : null;
+  const hasExceptIdsInput = Boolean(req.body && Object.prototype.hasOwnProperty.call(req.body, "except_ids"));
+  const exceptIds = hasExceptIdsInput ? normalizeChatIds(req.body.except_ids) : [];
 
   const pool = getPool();
 
@@ -6916,6 +7050,19 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
         [filePath, filename, imagePayload.mime, updated.id]
       );
       updated = imageRes.rows[0];
+    }
+
+    if (nextSegment === "ALL" && hasExceptIdsInput) {
+      await pool.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "BROADCAST_EXCLUDED_RECIPIENTS",
+          "broadcast",
+          updated.id,
+          JSON.stringify({ except_ids: exceptIds }),
+        ]
+      );
     }
 
     return res.json({
@@ -6993,6 +7140,7 @@ router.post("/broadcasts", async (req, res, next) => {
 
   const telegramIds = isCustom ? normalizeTelegramIds(req.body.telegram_ids) : [];
   const chatIds = isGroups || isChannels ? normalizeChatIds(req.body.chat_ids) : [];
+  const exceptIds = rawSegment === "ALL_USERS" ? normalizeChatIds(req.body.except_ids) : [];
   if (isCustom && telegramIds.length === 0) {
     return res.status(400).json({ error: "TELEGRAM_IDS_REQUIRED" });
   }
@@ -7069,6 +7217,18 @@ router.post("/broadcasts", async (req, res, next) => {
         ]
       );
     }
+    if (rawSegment === "ALL_USERS" && exceptIds.length > 0) {
+      await pool.query(
+        `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+         VALUES ($1, $2, $3, $4::jsonb)`,
+        [
+          "BROADCAST_EXCLUDED_RECIPIENTS",
+          "broadcast",
+          broadcast.id,
+          JSON.stringify({ except_ids: exceptIds }),
+        ]
+      );
+    }
 
     return res.status(201).json({
       broadcast: {
@@ -7076,6 +7236,7 @@ router.post("/broadcasts", async (req, res, next) => {
         segment: mapBroadcastSegment(broadcast.segment, isCustom || isGroups || isChannels),
         telegram_ids: telegramIds,
         chat_ids: chatIds,
+        except_ids: exceptIds,
         // Back-compat alias (deprecated):
         custom_telegram_ids: telegramIds,
       },
@@ -7102,25 +7263,43 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
     const broadcast = broadcastRes.rows[0];
     const bodyTelegramIds = normalizeTelegramIds(req.body && req.body.telegram_ids);
     const bodyChatIds = normalizeChatIds(req.body && req.body.chat_ids);
+    const bodyExceptIds = normalizeChatIds(req.body && req.body.except_ids);
 
     const auditRes = await pool.query(
-      `SELECT meta
+      `SELECT admin_action, meta
        FROM audit_logs
        WHERE entity_type = 'broadcast'
          AND entity_id = $1
-         AND admin_action IN ('BROADCAST_CUSTOM_RECIPIENTS', 'BROADCAST_GROUP_CHATS')
-       ORDER BY created_at DESC
-       LIMIT 1`,
+         AND admin_action IN (
+           'BROADCAST_CUSTOM_RECIPIENTS',
+           'BROADCAST_GROUP_CHATS',
+           'BROADCAST_EXCLUDED_RECIPIENTS'
+         )
+       ORDER BY created_at DESC`,
       [broadcastId]
     );
 
-    const meta = auditRes.rows[0] && auditRes.rows[0].meta ? auditRes.rows[0].meta : {};
-    const savedTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
-    const savedChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
+    let savedTelegramIds = [];
+    let savedChatIds = [];
+    let savedExceptIds = [];
+    for (const row of auditRes.rows) {
+      const action = row?.admin_action;
+      const meta = row?.meta || {};
+      if (action === "BROADCAST_CUSTOM_RECIPIENTS" && savedTelegramIds.length === 0) {
+        savedTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
+      }
+      if (action === "BROADCAST_GROUP_CHATS" && savedChatIds.length === 0) {
+        savedChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
+      }
+      if (action === "BROADCAST_EXCLUDED_RECIPIENTS" && savedExceptIds.length === 0) {
+        savedExceptIds = Array.isArray(meta.except_ids) ? meta.except_ids : [];
+      }
+    }
 
     let recipientIds = [];
     const customIds = bodyTelegramIds.length > 0 ? bodyTelegramIds : savedTelegramIds;
     const groupIds = bodyChatIds.length > 0 ? bodyChatIds : savedChatIds;
+    const excludedIds = bodyExceptIds.length > 0 ? bodyExceptIds : savedExceptIds;
     const isCustom = customIds.length > 0;
     const isGroups = broadcast.segment === "GROUPS" || groupIds.length > 0;
     const isChannels = broadcast.segment === "CHANNELS" || groupIds.length > 0;
@@ -7185,6 +7364,11 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
       );
     }
 
+    if (excludedIds.length > 0) {
+      const excludedSet = new Set(excludedIds.map((id) => String(id)));
+      recipientIds = recipientIds.filter((id) => !excludedSet.has(String(id)));
+    }
+
     const targetCount = recipientIds.length;
     const batchSize = 25;
     const batchDelayMs = 75;
@@ -7229,13 +7413,28 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
       }
     }
 
-    const status = sentCount > 0 && failedCount === 0 ? "SENT" : "FAILED";
+    const status = sentCount > 0 ? "SENT" : "FAILED";
     const updatedRes = await pool.query(
       `UPDATE broadcasts
        SET status = $1, sent_at = now()
        WHERE id = $2
        RETURNING *`,
       [status, broadcast.id]
+    );
+
+    await pool.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "BROADCAST_SEND_RESULT",
+        "broadcast",
+        broadcast.id,
+        JSON.stringify({
+          target_count: targetCount,
+          sent_count: sentCount,
+          failed_count: failedCount,
+        }),
+      ]
     );
 
     return res.json({

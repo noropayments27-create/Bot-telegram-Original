@@ -160,6 +160,7 @@ export default function OrdersPage() {
   const [headerActionsOpenById, setHeaderActionsOpenById] = useState({});
   const [toast, setToast] = useState("");
   const [orderCounts, setOrderCounts] = useState({});
+  const [isResponsiveView, setIsResponsiveView] = useState(false);
 
   const getOrderCount = (key) => Number(orderCounts[key] || 0);
   const totalNonExpired = Object.entries(orderCounts).reduce((sum, [key, value]) => {
@@ -393,6 +394,25 @@ export default function OrdersPage() {
     const timer = setTimeout(() => setToast(""), 2800);
     return () => clearTimeout(timer);
   }, [toast]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+    const media = window.matchMedia("(max-width: 960px)");
+    const apply = () => setIsResponsiveView(media.matches);
+    apply();
+    if (typeof media.addEventListener === "function") {
+      media.addEventListener("change", apply);
+      return () => media.removeEventListener("change", apply);
+    }
+    media.addListener(apply);
+    return () => media.removeListener(apply);
+  }, []);
+
+  const orderedDetailIds = isResponsiveView
+    ? [...selectedOrderIds].reverse()
+    : selectedOrderIds;
 
   const handleCopy = async (label, value) => {
     if (!value) {
@@ -813,7 +833,7 @@ export default function OrdersPage() {
       </section>
       {selectedOrderIds.length > 0 && (
         <div className="orders-detail-wrap">
-          {selectedOrderIds.map((orderId) => {
+          {orderedDetailIds.map((orderId) => {
             const detail = details[orderId];
             const isLoading = detailLoading[orderId];
             const errorMessage = detailErrors[orderId];
@@ -997,7 +1017,7 @@ export default function OrdersPage() {
                       </div>
                     </div>
                     <div className="orders-detail-separator"></div>
-                    <div className="orders-detail-grid">
+                    <div className="orders-detail-grid orders-detail-grid--payment-capture">
                       <div className="orders-detail-section">
                         <h3>Pago</h3>
                         {detail.payment ? (

@@ -1,7 +1,7 @@
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
-import { apiFetch, getAuthToken } from "../../lib/api";
+import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconBroadcasts } from "../../components/PanelIcons";
 
 const SEGMENT_OPTIONS = [
@@ -40,12 +40,129 @@ const formatStatusLabel = (status) => {
     return "-";
   }
   const key = String(status).toUpperCase();
+  if (key === "SENT") {
+    return "Enviado";
+  }
+  if (key === "FAILED") {
+    return "Fallido";
+  }
   const map = {
     DRAFT: "Borrador",
-    SENT: "Enviado",
-    FAILED: "Fallido",
   };
   return map[key] || status;
+};
+
+const formatStatusLabelWithCount = (status, sentCount) => {
+  if (!status) {
+    return "-";
+  }
+  const key = String(status).toUpperCase();
+  const delivered = Number(sentCount || 0);
+  if (delivered > 0) {
+    return `Enviado a: ${delivered}`;
+  }
+  if (key === "SENT" || key === "FAILED") {
+    return "Fallido";
+  }
+  return formatStatusLabel(key);
+};
+
+const escapeHtml = (value) =>
+  String(value || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+
+const markdownToEditorHtml = (raw) => {
+  if (!raw) {
+    return "";
+  }
+  const value = String(raw);
+  if (/<\/?(b|strong|i|em|u|s|strike|del|a|blockquote|code|pre|br|div|p)/i.test(value)) {
+    return value;
+  }
+  let text = escapeHtml(value);
+  text = text.replace(/```([\s\S]+?)```/g, "<pre><code>$1</code></pre>");
+  text = text.replace(/`([^`]+?)`/g, "<code>$1</code>");
+  text = text.replace(/\[([^\]]+?)\]\((https?:\/\/[^\s)]+)\)/g, '<a href="$2">$1</a>');
+  text = text.replace(/\*\*([^*]+?)\*\*/g, "<b>$1</b>");
+  text = text.replace(/__([^_]+?)__/g, "<u>$1</u>");
+  text = text.replace(/~~([^~]+?)~~/g, "<s>$1</s>");
+  text = text.replace(/(^|[^*])\*([^*]+?)\*(?!\*)/g, "$1<i>$2</i>");
+  text = text
+    .split("\n")
+    .map((line) => {
+      if (/^>\s?/.test(line)) {
+        return `<blockquote>${line.replace(/^>\s?/, "")}</blockquote>`;
+      }
+      return line;
+    })
+    .join("<br>");
+  return text;
+};
+
+const normalizeMessageForSave = (html) => {
+  if (!html) {
+    return "";
+  }
+  const container = document.createElement("div");
+  container.innerHTML = html;
+
+  const serialize = (node) => {
+    if (!node) {
+      return "";
+    }
+    if (node.nodeType === Node.TEXT_NODE) {
+      return escapeHtml(node.textContent || "");
+    }
+    if (node.nodeType !== Node.ELEMENT_NODE) {
+      return "";
+    }
+    const tag = node.tagName.toLowerCase();
+    const inner = Array.from(node.childNodes).map(serialize).join("");
+
+    if (tag === "br") {
+      return "\n";
+    }
+    if (tag === "b" || tag === "strong") {
+      return `<b>${inner}</b>`;
+    }
+    if (tag === "i" || tag === "em") {
+      return `<i>${inner}</i>`;
+    }
+    if (tag === "u") {
+      return `<u>${inner}</u>`;
+    }
+    if (tag === "s" || tag === "strike" || tag === "del") {
+      return `<s>${inner}</s>`;
+    }
+    if (tag === "code") {
+      return `<code>${inner}</code>`;
+    }
+    if (tag === "pre") {
+      return `<pre><code>${inner}</code></pre>`;
+    }
+    if (tag === "blockquote") {
+      return `<blockquote>${inner}</blockquote>`;
+    }
+    if (tag === "a") {
+      const href = String(node.getAttribute("href") || "").trim();
+      if (!/^https?:\/\//i.test(href)) {
+        return inner;
+      }
+      return `<a href="${escapeHtml(href)}">${inner || escapeHtml(href)}</a>`;
+    }
+    if (tag === "div" || tag === "p" || tag === "li") {
+      return `${inner}\n`;
+    }
+    return inner;
+  };
+
+  return Array.from(container.childNodes)
+    .map(serialize)
+    .join("")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
 };
 
 export default function BroadcastsPage() {
@@ -61,7 +178,9 @@ export default function BroadcastsPage() {
   const [segments, setSegments] = useState(["ALL_USERS"]);
   const [customIdsText, setCustomIdsText] = useState("");
   const [chatIdsText, setChatIdsText] = useState("");
+  const [exceptIdsText, setExceptIdsText] = useState("");
   const [imageDataUrl, setImageDataUrl] = useState("");
+  const [existingImagePreviewUrl, setExistingImagePreviewUrl] = useState("");
   const [imageName, setImageName] = useState("");
   const [imageCleared, setImageCleared] = useState(false);
   const [buttons, setButtons] = useState([]);
@@ -70,6 +189,9 @@ export default function BroadcastsPage() {
   const [createLoading, setCreateLoading] = useState(false);
   const [showCreate, setShowCreate] = useState(false);
   const [toast, setToast] = useState("");
+  const [previewUrl, setPreviewUrl] = useState("");
+  const messageInputRef = useRef(null);
+  const existingImageObjectUrlRef = useRef("");
   const listMaxHeight = 42 + 5 * 52;
 
   useEffect(() => {
@@ -179,6 +301,16 @@ export default function BroadcastsPage() {
     return () => clearTimeout(timer);
   }, [toast]);
 
+  useEffect(() => {
+    const editor = messageInputRef.current;
+    if (!editor) {
+      return;
+    }
+    if ((editor.innerHTML || "") !== (message || "")) {
+      editor.innerHTML = message || "";
+    }
+  }, [message, showCreate]);
+
   const numberById = useMemo(() => {
     const map = new Map();
     const sorted = [...items].sort((a, b) => {
@@ -210,6 +342,110 @@ export default function BroadcastsPage() {
     }
   };
 
+  const clearExistingImagePreview = useCallback(() => {
+    if (existingImageObjectUrlRef.current) {
+      URL.revokeObjectURL(existingImageObjectUrlRef.current);
+      existingImageObjectUrlRef.current = "";
+    }
+    setExistingImagePreviewUrl("");
+  }, []);
+
+  const loadExistingImagePreview = useCallback(async (broadcastId) => {
+    clearExistingImagePreview();
+    try {
+      const { buffer, contentType } = await apiFetchBinary(`/admin/broadcasts/${broadcastId}/image`);
+      if (!buffer || buffer.byteLength === 0) {
+        return;
+      }
+      const blob = new Blob([buffer], {
+        type: contentType || "image/jpeg",
+      });
+      const objectUrl = URL.createObjectURL(blob);
+      existingImageObjectUrlRef.current = objectUrl;
+      setExistingImagePreviewUrl(objectUrl);
+    } catch (err) {
+      // Broadcast may not have image; no-op.
+    }
+  }, [clearExistingImagePreview]);
+
+  useEffect(() => () => {
+    if (existingImageObjectUrlRef.current) {
+      URL.revokeObjectURL(existingImageObjectUrlRef.current);
+      existingImageObjectUrlRef.current = "";
+    }
+  }, []);
+
+  const syncMessageFromEditor = useCallback(() => {
+    const editor = messageInputRef.current;
+    if (!editor) {
+      return;
+    }
+    setMessage(editor.innerHTML || "");
+  }, []);
+
+  const handleMessageKeyDown = useCallback((event) => {
+    const mod = event.metaKey || event.ctrlKey;
+    if (!mod) {
+      return;
+    }
+    const key = String(event.key || "").toLowerCase();
+    const withShift = Boolean(event.shiftKey);
+
+    const runCommand = (command, value = null) => {
+      document.execCommand(command, false, value);
+      syncMessageFromEditor();
+    };
+
+    if (key === "b" && !withShift) {
+      event.preventDefault();
+      runCommand("bold");
+      return;
+    }
+    if (key === "i" && !withShift) {
+      event.preventDefault();
+      runCommand("italic");
+      return;
+    }
+    if (key === "u" && !withShift) {
+      event.preventDefault();
+      runCommand("underline");
+      return;
+    }
+    if (key === "k" && !withShift) {
+      event.preventDefault();
+      const href = window.prompt("URL del enlace (https://...)", "https://");
+      if (!href) {
+        return;
+      }
+      if (!/^https?:\/\//i.test(href.trim())) {
+        setCreateErrorMessage("El enlace debe iniciar por http:// o https://");
+        return;
+      }
+      runCommand("createLink", href.trim());
+      return;
+    }
+    if (key === "x" && withShift) {
+      event.preventDefault();
+      runCommand("strikeThrough");
+      return;
+    }
+    if (key === "." && withShift) {
+      event.preventDefault();
+      runCommand("formatBlock", "blockquote");
+      return;
+    }
+    if (key === "m" && withShift) {
+      event.preventDefault();
+      const selection = window.getSelection();
+      const selected = selection ? selection.toString() : "";
+      if (selected.includes("\n")) {
+        runCommand("formatBlock", "pre");
+      } else {
+        runCommand("insertHTML", `<code>${escapeHtml(selected || "texto")}</code>`);
+      }
+    }
+  }, [setCreateErrorMessage, syncMessageFromEditor]);
+
   const isValidUrl = (value) => {
     if (!value) {
       return false;
@@ -226,7 +462,7 @@ export default function BroadcastsPage() {
     if (!file) {
       return;
     }
-    if (imageDataUrl) {
+    if (imageDataUrl || existingImagePreviewUrl) {
       setCreateErrorMessage("Solo se permite una imagen por difusión. Quita la actual.");
       return;
     }
@@ -240,6 +476,7 @@ export default function BroadcastsPage() {
     }
     const reader = new FileReader();
     reader.onload = () => {
+      clearExistingImagePreview();
       setImageDataUrl(reader.result || "");
       setImageName(file.name || "imagen");
       setImageCleared(false);
@@ -265,20 +502,35 @@ export default function BroadcastsPage() {
     setButtons((prev) => prev.filter((_, i) => i !== index));
   };
 
-  const startEdit = (broadcast) => {
+  const startEdit = async (broadcast) => {
     if (!broadcast) {
       return;
     }
+    let source = broadcast;
+    try {
+      const detail = await apiFetch(`/admin/broadcasts/${broadcast.id}`);
+      if (detail && detail.broadcast) {
+        source = detail.broadcast;
+        setDetails((prev) => ({ ...prev, [broadcast.id]: detail }));
+      }
+    } catch (err) {
+      // Fall back to list row data if detail fetch fails.
+    }
     setEditingId(broadcast.id);
     setShowCreate(true);
-    setMessage(broadcast.message_text || "");
-    setSegments([broadcast.segment || "ALL_USERS"]);
+    setMessage(markdownToEditorHtml(source.message_text || ""));
+    setSegments([source.segment || "ALL_USERS"]);
     setCustomIdsText("");
     setChatIdsText("");
-    setButtons(Array.isArray(broadcast.buttons) ? broadcast.buttons : []);
+    setExceptIdsText(Array.isArray(source.except_ids) ? source.except_ids.join(", ") : "");
+    setButtons(Array.isArray(source.buttons) ? source.buttons : []);
+    clearExistingImagePreview();
     setImageDataUrl("");
-    setImageName(broadcast.image_filename ? `Imagen actual: ${broadcast.image_filename}` : "");
+    setImageName(source.image_filename ? `Imagen actual: ${source.image_filename}` : "");
     setImageCleared(false);
+    if (source.image_filename) {
+      await loadExistingImagePreview(broadcast.id);
+    }
   };
 
   const resetCreateForm = () => {
@@ -286,6 +538,8 @@ export default function BroadcastsPage() {
     setMessage("");
     setCustomIdsText("");
     setChatIdsText("");
+    setExceptIdsText("");
+    clearExistingImagePreview();
     setImageDataUrl("");
     setImageName("");
     setImageCleared(false);
@@ -351,11 +605,31 @@ export default function BroadcastsPage() {
       ) {
         payload.chat_ids = detail.broadcast.chat_ids;
       }
+      if (
+        detail.broadcast.segment === "ALL_USERS"
+        && Array.isArray(detail.broadcast.except_ids)
+        && detail.broadcast.except_ids.length > 0
+      ) {
+        payload.except_ids = detail.broadcast.except_ids;
+      }
       const data = await apiFetch(`/admin/broadcasts/${broadcastId}/send`, {
         method: "POST",
         body: JSON.stringify(payload),
       });
       setDetails((prev) => ({ ...prev, [broadcastId]: data }));
+      setItems((prev) =>
+        prev.map((item) =>
+          item.id === broadcastId
+            ? {
+                ...item,
+                ...data.broadcast,
+                last_sent_count: data?.result?.sent_count ?? item.last_sent_count,
+                last_failed_count: data?.result?.failed_count ?? item.last_failed_count,
+                last_target_count: data?.result?.target_count ?? item.last_target_count,
+              }
+            : item
+        )
+      );
       setDetailMessages((prev) => ({
         ...prev,
         [broadcastId]: "Difusión enviada.",
@@ -383,7 +657,16 @@ export default function BroadcastsPage() {
     setCreateErrorMessage("");
     setCreateLoading(true);
     try {
-      if (!message.trim() && !imageDataUrl && !imageName) {
+      const liveEditorMessage = messageInputRef.current
+        ? messageInputRef.current.innerHTML || ""
+        : message;
+      const normalizedMessage = normalizeMessageForSave(liveEditorMessage);
+      const messagePlain = normalizedMessage
+        .replace(/<[^>]+>/g, "")
+        .replace(/&nbsp;/g, " ")
+        .trim();
+
+      if (!messagePlain && !imageDataUrl && !imageName) {
         setCreateErrorMessage("Escribe un mensaje o agrega una imagen.");
         return;
       }
@@ -397,6 +680,7 @@ export default function BroadcastsPage() {
       }
       const telegramIds = parseTelegramIds(customIdsText);
       const chatIds = parseChatIds(chatIdsText);
+      const exceptIds = parseChatIds(exceptIdsText);
       if (segments.includes("CUSTOM") && telegramIds.length === 0) {
         setCreateErrorMessage("Debes ingresar Telegram IDs válidos.");
         return;
@@ -406,6 +690,10 @@ export default function BroadcastsPage() {
         && chatIds.length === 0
       ) {
         setCreateErrorMessage("Debes ingresar Chat IDs válidos.");
+        return;
+      }
+      if (segments.includes("ALL_USERS") && exceptIdsText.trim() && exceptIds.length === 0) {
+        setCreateErrorMessage("Debes ingresar IDs válidos para 'Excepto'.");
         return;
       }
       const cleanedButtons = buttons
@@ -423,7 +711,7 @@ export default function BroadcastsPage() {
       }
       if (editingId) {
         const payload = {
-          message,
+          message: normalizedMessage,
           segment: segments[0],
         };
         if (imageDataUrl) {
@@ -431,6 +719,9 @@ export default function BroadcastsPage() {
         }
         if (imageCleared) {
           payload.clear_image = true;
+        }
+        if (segments[0] === "ALL_USERS") {
+          payload.except_ids = exceptIds;
         }
         payload.buttons = cleanedButtons;
         try {
@@ -441,6 +732,18 @@ export default function BroadcastsPage() {
           setItems((prev) =>
             prev.map((item) => (item.id === editingId ? data.broadcast : item))
           );
+          setDetails((prev) => ({
+            ...prev,
+            [editingId]: prev[editingId]
+              ? {
+                  ...prev[editingId],
+                  broadcast: {
+                    ...(prev[editingId].broadcast || {}),
+                    ...data.broadcast,
+                  },
+                }
+              : { broadcast: data.broadcast },
+          }));
           setToast("Difusión actualizada.");
           resetCreateForm();
           return;
@@ -456,7 +759,7 @@ export default function BroadcastsPage() {
       let hadError = false;
       for (const segment of segments) {
         const payload = {
-          message,
+          message: normalizedMessage,
           segment,
         };
         if (imageDataUrl) {
@@ -470,6 +773,9 @@ export default function BroadcastsPage() {
         }
         if (segment === "GROUPS" || segment === "CHANNELS") {
           payload.chat_ids = chatIds;
+        }
+        if (segment === "ALL_USERS" && exceptIds.length > 0) {
+          payload.except_ids = exceptIds;
         }
         try {
           const data = await apiFetch("/admin/broadcasts", {
@@ -486,6 +792,9 @@ export default function BroadcastsPage() {
           }
           if (segment === "GROUPS" || segment === "CHANNELS") {
             sendPayload.chat_ids = chatIds;
+          }
+          if (segment === "ALL_USERS" && exceptIds.length > 0) {
+            sendPayload.except_ids = exceptIds;
           }
           try {
             const sendData = await apiFetch(
@@ -531,9 +840,11 @@ export default function BroadcastsPage() {
     }
   };
 
+  const activeImagePreviewUrl = imageDataUrl || existingImagePreviewUrl;
+
   return (
-    <main className="page">
-      <section className="card orders-card" style={{ width: "100%" }}>
+    <main className="page broadcasts-page">
+      <section className="card orders-card broadcast-list-card" style={{ width: "100%" }}>
         <div
           style={{
             display: "flex",
@@ -571,10 +882,14 @@ export default function BroadcastsPage() {
                   className={
                     selectedBroadcastIds.includes(broadcast.id) ? "orders-row-active" : ""
                   }
-                  style={broadcast.saved ? { background: "rgba(34, 197, 94, 0.12)" } : undefined}
+                  style={
+                    !selectedBroadcastIds.includes(broadcast.id) && broadcast.saved
+                      ? { background: "rgba(34, 197, 94, 0.12)" }
+                      : undefined
+                  }
                 >
-                  <td>Número: {getBroadcastNumber(broadcast.id)}</td>
-                  <td>{formatStatusLabel(broadcast.status)}</td>
+                  <td>{getBroadcastNumber(broadcast.id)}</td>
+                  <td>{formatStatusLabelWithCount(broadcast.status, broadcast.last_sent_count)}</td>
                   <td>{formatSegmentLabel(broadcast.segment)}</td>
                   <td>{broadcast.created_at ? new Date(broadcast.created_at).toLocaleString() : "-"}</td>
                   <td>
@@ -618,7 +933,7 @@ export default function BroadcastsPage() {
       </section>
       {showCreate && (
         <section
-          className="card orders-card"
+          className="card orders-card broadcast-create-card"
           style={{
             width: "40%",
             marginTop: "20px",
@@ -627,16 +942,47 @@ export default function BroadcastsPage() {
             textAlign: "center",
           }}
         >
-          <h2>{editingId ? "Editar difusión" : "Nueva difusión"}</h2>
+          <div className="broadcast-create-header">
+            <h2 style={{ margin: 0 }}>{editingId ? "Editar difusión" : "Nueva difusión"}</h2>
+            {editingId && (
+              <button
+                type="button"
+                className="link-button broadcast-create-close"
+                onClick={resetCreateForm}
+                title="Cerrar editor"
+              >
+                Cerrar
+              </button>
+            )}
+          </div>
           {createError && <p className="error">{createError}</p>}
-          <form className="form" onSubmit={handleCreate}>
+          <form className="form broadcast-create-form" onSubmit={handleCreate}>
             <label>
               Mensaje
-              <textarea value={message} onChange={(event) => setMessage(event.target.value)} />
+              <div
+                ref={messageInputRef}
+                className="broadcast-message-editor"
+                contentEditable
+                suppressContentEditableWarning
+                role="textbox"
+                aria-label="Mensaje de difusión"
+                onInput={syncMessageFromEditor}
+                onKeyDown={handleMessageKeyDown}
+                onPaste={(event) => {
+                  event.preventDefault();
+                  const text = event.clipboardData.getData("text/plain");
+                  document.execCommand("insertText", false, text);
+                  syncMessageFromEditor();
+                }}
+              />
+              <small className="muted">
+                Atajos: ⌘/Ctrl+B Negrita · ⌘/Ctrl+I Cursiva · ⌘/Ctrl+U Subrayado · ⌘/Ctrl+K Enlace · ⌘/Ctrl+Shift+X Tachado · ⌘/Ctrl+Shift+. Citar · ⌘/Ctrl+Shift+M Monoespaciado
+              </small>
             </label>
             <label>
               Imagen (opcional)
               <div
+                className={`broadcast-image-dropzone${activeImagePreviewUrl ? " has-image" : ""}`}
                 style={{
                   border: "1px dashed #ff4d00",
                   borderRadius: "10px",
@@ -656,25 +1002,35 @@ export default function BroadcastsPage() {
                 <input
                   type="file"
                   accept="image/*"
-                  disabled={Boolean(imageDataUrl)}
+                  disabled={Boolean(activeImagePreviewUrl)}
                   onChange={(event) => handleImageFile(event.target.files[0])}
                 />
-                <span>
+                <span className="broadcast-image-name">
                   {imageName ? `Archivo: ${imageName}` : "Arrastra o selecciona una imagen."}
                 </span>
-                {imageDataUrl && (
+                {activeImagePreviewUrl && (
                   <img
-                    src={imageDataUrl}
+                    src={activeImagePreviewUrl}
                     alt="Vista previa"
+                    className="broadcast-image-preview"
+                    role="button"
+                    tabIndex={0}
+                    onClick={() => setPreviewUrl(activeImagePreviewUrl)}
+                    onKeyDown={(event) => {
+                      if (event.key === "Enter" || event.key === " ") {
+                        setPreviewUrl(activeImagePreviewUrl);
+                      }
+                    }}
                     style={{ maxWidth: "160px", borderRadius: "8px" }}
                   />
                 )}
                 {imageName && (
                   <button
                     type="button"
-                    className="link-button"
+                    className="link-button broadcast-remove-image"
                     style={{ background: "none" }}
                     onClick={() => {
+                      clearExistingImagePreview();
                       setImageDataUrl("");
                       setImageName("");
                       setImageCleared(true);
@@ -687,10 +1043,11 @@ export default function BroadcastsPage() {
             </label>
             <label>
               Botones (opcional)
-              <div style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
+              <div className="broadcast-buttons-wrap" style={{ display: "flex", flexDirection: "column", gap: "10px" }}>
                 {buttons.map((button, index) => (
                   <div
                     key={`button-${index}`}
+                    className="broadcast-button-row"
                     style={{ display: "flex", gap: "8px", flexWrap: "wrap" }}
                   >
                     <input
@@ -718,6 +1075,7 @@ export default function BroadcastsPage() {
                 <button
                   type="button"
                   className="link-button"
+                  data-role="broadcast-add-button"
                   style={{
                     border: "1px solid #ff4d00",
                     width: "30%",
@@ -764,8 +1122,40 @@ export default function BroadcastsPage() {
                 />
               </label>
             )}
+            {segments.includes("ALL_USERS") && (
+              <label>
+                Excepto (usuarios/grupos por ID)
+                <textarea
+                  value={exceptIdsText}
+                  onChange={(event) => setExceptIdsText(event.target.value)}
+                  placeholder="123456789, -1001234567890"
+                />
+                <div className="broadcast-except-actions">
+                  <button
+                    type="button"
+                    className="link-button"
+                    onClick={() => setExceptIdsText("")}
+                  >
+                    Limpiar IDs
+                  </button>
+                </div>
+              </label>
+            )}
             <div className="actions">
-              <button type="submit" disabled={createLoading}>
+              <button
+                type="submit"
+                disabled={createLoading}
+                className={editingId ? "broadcast-save-button-small" : ""}
+                style={
+                  editingId
+                    ? {
+                        maxWidth: "101px",
+                        minWidth: "84px",
+                        padding: "4px 6px",
+                      }
+                    : undefined
+                }
+              >
                 {createLoading
                   ? editingId
                     ? "Guardando..."
@@ -884,6 +1274,23 @@ export default function BroadcastsPage() {
               </section>
             );
           })}
+        </div>
+      )}
+      {previewUrl && (
+        <div
+          className="image-preview-overlay"
+          role="button"
+          tabIndex={0}
+          onClick={() => setPreviewUrl("")}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setPreviewUrl("");
+            }
+          }}
+        >
+          <div className="image-preview-dialog">
+            <img src={previewUrl} alt="Vista previa" />
+          </div>
         </div>
       )}
       {toast && (
