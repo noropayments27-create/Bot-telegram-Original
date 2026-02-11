@@ -376,6 +376,11 @@ export default function TicketsPage() {
     reader.readAsDataURL(file);
   };
 
+  const clearReplyImage = (ticketId) => {
+    setReplyImageById((prev) => ({ ...prev, [ticketId]: "" }));
+    setReplyImageNameById((prev) => ({ ...prev, [ticketId]: "" }));
+  };
+
   const handleClose = async (ticketId) => {
     try {
       await apiFetch(`/admin/tickets/${ticketId}/close`, { method: "POST" });
@@ -445,8 +450,8 @@ export default function TicketsPage() {
   };
 
   return (
-    <main className="page">
-      <section className="card orders-card">
+    <main className="page tickets-page">
+      <section className="card orders-card tickets-list-card">
         <div className="orders-header-row">
           <h1 className="icon-inline"><IconTickets className="panel-icon" /> Tickets</h1>
           {status !== "NEW" && (
@@ -477,8 +482,8 @@ export default function TicketsPage() {
             </select>
           </label>
         </div>
-        <div className="orders-list">
-          <table className="orders-table">
+        <div className="orders-list tickets-list">
+          <table className="orders-table tickets-table">
             <thead>
               <tr>
                 <th align="left">Ticket</th>
@@ -733,31 +738,56 @@ export default function TicketsPage() {
                         </label>
                         <label>
                           Imagen (opcional)
-                          <input
-                            type="file"
-                            accept="image/*"
-                            style={{ width: "60%" }}
-                            onChange={(event) =>
-                              handleReplyImage(ticketId, event.target.files[0])
-                            }
-                          />
-                          {replyImageNameById[ticketId] && (
-                            <div className="muted">
-                              Archivo: {replyImageNameById[ticketId]}
-                            </div>
-                          )}
-                          {replyImageById[ticketId] && (
-                            <img
-                              src={replyImageById[ticketId]}
-                              alt="Vista previa"
-                              style={{ maxWidth: "160px", borderRadius: "8px", cursor: "zoom-in" }}
-                              onClick={(event) => {
-                                event.preventDefault();
-                                event.stopPropagation();
-                                setPreviewImageUrl(replyImageById[ticketId]);
-                              }}
-                            />
-                          )}
+                          <div
+                            className={`ticket-reply-dropzone${replyImageById[ticketId] ? " has-image" : ""}`}
+                            onDragOver={(event) => event.preventDefault()}
+                            onDrop={(event) => {
+                              event.preventDefault();
+                              const file = event.dataTransfer.files && event.dataTransfer.files[0];
+                              handleReplyImage(ticketId, file);
+                            }}
+                          >
+                            {!replyImageById[ticketId] && (
+                              <>
+                                <input
+                                  type="file"
+                                  accept="image/*"
+                                  style={{ width: "100%" }}
+                                  onChange={(event) =>
+                                    handleReplyImage(ticketId, event.target.files[0])
+                                  }
+                                />
+                                <div className="muted">Arrastra o selecciona una imagen.</div>
+                              </>
+                            )}
+                            {replyImageById[ticketId] && (
+                              <>
+                                <img
+                                  src={replyImageById[ticketId]}
+                                  alt="Vista previa"
+                                  className="ticket-reply-image-preview"
+                                  style={{ maxWidth: "170px", borderRadius: "8px", cursor: "zoom-in" }}
+                                  onClick={(event) => {
+                                    event.preventDefault();
+                                    event.stopPropagation();
+                                    setPreviewImageUrl(replyImageById[ticketId]);
+                                  }}
+                                />
+                                <button
+                                  type="button"
+                                  className="link-button ticket-reply-remove"
+                                  onClick={() => clearReplyImage(ticketId)}
+                                >
+                                  Quitar
+                                </button>
+                                {replyImageNameById[ticketId] && (
+                                  <div className="muted ticket-reply-file-name">
+                                    Archivo: {replyImageNameById[ticketId]}
+                                  </div>
+                                )}
+                              </>
+                            )}
+                          </div>
                         </label>
                       </div>
                       <div className="actions">
