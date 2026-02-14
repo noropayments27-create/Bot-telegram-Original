@@ -6,7 +6,97 @@ from ..services.i18n import t
 router = Router()
 
 
-def build_home_text(locale: str | None = None) -> str:
+def _locale_key(locale: str | None) -> str:
+    return "en" if str(locale or "").lower().startswith("en") else "es"
+
+
+def _default_home_buttons(locale: str | None = None) -> list[dict[str, str]]:
+    return [
+        {"label": t(locale, "menu_shop"), "action": "shop:page:1"},
+        {"label": t(locale, "menu_methods"), "action": "category:page:metodos"},
+        {"label": t(locale, "menu_groups"), "action": "category:page:vip"},
+        {"label": t(locale, "menu_programs"), "action": "category:page:programas"},
+        {"label": t(locale, "menu_cart"), "action": "home:cart"},
+        {"label": t(locale, "menu_affiliates"), "action": "home:affiliates"},
+        {"label": t(locale, "menu_community"), "action": "home:community"},
+        {"label": t(locale, "menu_support"), "action": "home:support"},
+        {"label": t(locale, "menu_language"), "action": "home:soon:idioma"},
+    ]
+
+
+def _pair_buttons(buttons: list[dict[str, str]]) -> list[list[dict[str, str]]]:
+    rows: list[list[dict[str, str]]] = []
+    for button in buttons:
+        if rows and len(rows[-1]) < 2:
+            rows[-1].append(button)
+        else:
+            rows.append([button])
+    return rows
+
+
+def _normalize_layout_button(
+    item: object,
+) -> dict[str, str] | None:
+    if not isinstance(item, dict):
+        return None
+    label = str(item.get("label") or item.get("text") or "").strip()
+    action = str(item.get("action") or item.get("callback_data") or "").strip()
+    url = str(item.get("url") or "").strip()
+    if not label:
+        return None
+    if url:
+        return {"label": label[:64], "url": url}
+    if not action:
+        return None
+    return {"label": label[:64], "action": action[:64]}
+
+
+def _normalize_layout_buttons(
+    raw_buttons: object,
+    locale: str | None = None,
+) -> list[list[dict[str, str]]]:
+    fallback = _pair_buttons(_default_home_buttons(locale))
+    if not isinstance(raw_buttons, list):
+        return fallback
+
+    parsed_rows: list[list[dict[str, str]]] = []
+    flat_parsed: list[dict[str, str]] = []
+    for item in raw_buttons:
+        if isinstance(item, list):
+            row: list[dict[str, str]] = []
+            for nested in item:
+                parsed = _normalize_layout_button(nested)
+                if parsed:
+                    row.append(parsed)
+            if row:
+                parsed_rows.append(row[:2])
+            continue
+        parsed = _normalize_layout_button(item)
+        if parsed:
+            flat_parsed.append(parsed)
+
+    if parsed_rows:
+        for button in flat_parsed:
+            if parsed_rows[-1] and len(parsed_rows[-1]) < 2:
+                parsed_rows[-1].append(button)
+            else:
+                parsed_rows.append([button])
+        return parsed_rows or fallback
+
+    return _pair_buttons(flat_parsed) or fallback
+
+
+def build_home_text(
+    locale: str | None = None,
+    home_layout: dict | None = None,
+) -> str:
+    locale_value = _locale_key(locale)
+    if isinstance(home_layout, dict):
+        localized = home_layout.get(locale_value)
+        if isinstance(localized, dict):
+            custom_text = str(localized.get("text") or "").strip()
+            if custom_text:
+                return custom_text
     return t(locale, "home_welcome")
 
 
@@ -14,52 +104,33 @@ def build_community_text(locale: str | None = None) -> str:
     return t(locale, "community_text")
 
 
-def build_main_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "menu_shop"), callback_data="shop:page:1"
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "menu_methods"),
-                    callback_data="category:page:metodos",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "menu_groups"), callback_data="category:page:vip"
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "menu_programs"),
-                    callback_data="category:page:programas",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "menu_cart"), callback_data="home:cart"
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "menu_affiliates"),
-                    callback_data="home:affiliates",
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "menu_community"), callback_data="home:community"
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "menu_support"), callback_data="home:support"
-                ),
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "menu_language"),
-                    callback_data="home:soon:idioma",
-                ),
-            ],
-        ]
-    )
+def build_main_keyboard(
+    locale: str | None = None,
+    home_layout: dict | None = None,
+) -> InlineKeyboardMarkup:
+    locale_value = _locale_key(locale)
+    raw_buttons = None
+    if isinstance(home_layout, dict):
+        localized = home_layout.get(locale_value)
+        if isinstance(localized, dict):
+            raw_buttons = localized.get("buttons")
+    button_rows = _normalize_layout_buttons(raw_buttons, locale)
+
+    inline_rows: list[list[InlineKeyboardButton]] = []
+    for row in button_rows:
+        keyboard_row: list[InlineKeyboardButton] = []
+        for button in row[:2]:
+            text = button.get("label") or "Button"
+            action = button.get("action")
+            url = button.get("url")
+            if url:
+                keyboard_row.append(InlineKeyboardButton(text=text, url=url))
+            elif action:
+                keyboard_row.append(InlineKeyboardButton(text=text, callback_data=action))
+        if keyboard_row:
+            inline_rows.append(keyboard_row)
+
+    return InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
 
 def build_language_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:

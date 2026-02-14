@@ -112,6 +112,38 @@ const NAV_ITEMS = [
     ),
   },
   {
+    label: "Home Bot",
+    href: "/home-menu",
+    icon: (
+      <svg viewBox="0 0 24 24" aria-hidden="true">
+        <path
+          d="M4 11.5l8 -7l8 7"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M7 10.5v8.5h10v-8.5"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M10 19v-4h4v4"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+      </svg>
+    ),
+  },
+  {
     label: "Ordenes",
     href: "/orders",
     icon: (

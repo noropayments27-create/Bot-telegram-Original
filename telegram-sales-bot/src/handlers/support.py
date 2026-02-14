@@ -20,6 +20,7 @@ from ..services.bot_assets import get_bot_asset_image
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from .menu import build_main_keyboard
+from ..utils.home_view import render_home_view
 from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
 
@@ -149,9 +150,8 @@ async def handle_cancel(message: Message, state: FSMContext) -> None:
             )
             return
     await state.clear()
-    await message.answer(
-        t(locale, "support_cancelled"), reply_markup=build_main_keyboard(locale)
-    )
+    if message.from_user:
+        await render_home_view(message, message.from_user.id, locale)
 
 
 async def start_support_flow(

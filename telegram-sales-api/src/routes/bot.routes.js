@@ -2,6 +2,7 @@ const express = require("express");
 const { getPool } = require("../db");
 const { getMaintenanceStatus } = require("../services/maintenance");
 const { getBotAssets } = require("../services/botAssets");
+const { getAdminLayout } = require("../services/adminLayouts");
 
 const router = express.Router();
 
@@ -29,6 +30,20 @@ router.get("/assets", requireBotSecret, async (req, res, next) => {
   try {
     const assets = await getBotAssets(pool);
     return res.json({ assets });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/layouts/:key", requireBotSecret, async (req, res, next) => {
+  const pool = getPool();
+  const key = String(req.params.key || "").trim();
+  if (!key) {
+    return res.status(400).json({ error: "LAYOUT_KEY_REQUIRED" });
+  }
+  try {
+    const layout = await getAdminLayout(pool, key);
+    return res.json({ layout });
   } catch (error) {
     return next(error);
   }

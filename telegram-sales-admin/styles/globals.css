@@ -3153,6 +3153,8 @@ textarea {
   white-space: pre-wrap;
   overflow-wrap: anywhere;
   outline: none;
+  text-align: left;
+  direction: ltr;
 }
 
 .broadcast-message-editor:focus {
@@ -3160,10 +3162,141 @@ textarea {
   box-shadow: 0 0 0 2px rgba(255, 36, 0, 0.2);
 }
 
+.broadcast-message-editor code {
+  display: inline;
+  padding: 0;
+  border: none;
+  background: transparent;
+  color: rgba(255, 120, 100, 0.92);
+  font-family: "SFMono-Regular", Menlo, Monaco, Consolas, "Liberation Mono", "Courier New", monospace;
+  font-size: 0.94em;
+  letter-spacing: 0.08em;
+}
+
+.broadcast-message-editor pre {
+  margin: 8px 0;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+  overflow-x: auto;
+}
+
+.broadcast-message-editor pre code {
+  display: block;
+  padding: 0;
+  border: none;
+  border-radius: 0;
+  background: transparent;
+}
+
 .broadcast-message-editor a,
 .broadcast-message-editor a:visited {
   color: #7cc8ff;
   text-decoration: underline;
+}
+
+.editor-shortcuts-help {
+  position: relative;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  width: fit-content;
+  margin-top: 6px;
+  color: #f1cf52;
+  font-size: 12px;
+  font-weight: 600;
+  cursor: help;
+  outline: none;
+}
+
+.editor-shortcuts-help__icon {
+  width: 16px;
+  height: 16px;
+  border-radius: 999px;
+  border: 1px solid rgba(241, 207, 82, 0.7);
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 11px;
+  color: #f8dc70;
+  background: rgba(241, 207, 82, 0.08);
+}
+
+.editor-shortcuts-help__label {
+  color: #f8dc70;
+}
+
+.editor-shortcuts-tooltip {
+  position: absolute;
+  left: 0;
+  top: calc(100% + 8px);
+  z-index: 1400;
+  display: none;
+  width: max-content;
+  max-width: min(86vw, 360px);
+  padding: 10px 12px;
+  border-radius: 12px;
+  border: 1px solid rgba(241, 207, 82, 0.55);
+  background: rgba(18, 18, 18, 0.96);
+  box-shadow:
+    8px 8px 18px rgba(0, 0, 0, 0.35),
+    -4px -4px 10px rgba(255, 255, 255, 0.04);
+}
+
+.editor-shortcuts-tooltip span {
+  display: block;
+  color: #fff0a8;
+  font-size: 12px;
+  line-height: 1.45;
+}
+
+.editor-shortcuts-help:hover .editor-shortcuts-tooltip,
+.editor-shortcuts-help:focus-visible .editor-shortcuts-tooltip,
+.editor-shortcuts-help:focus-within .editor-shortcuts-tooltip {
+  display: block;
+}
+
+.editor-link-overlay {
+  position: fixed;
+  inset: 0;
+  z-index: 1400;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 20px;
+  background: rgba(0, 0, 0, 0.68);
+}
+
+.editor-link-modal {
+  width: min(420px, 92vw);
+  display: grid;
+  gap: 10px;
+  background: rgba(29, 31, 35, 0.98);
+  border: 1px solid rgba(255, 77, 0, 0.55);
+  border-radius: 14px;
+  padding: 14px;
+  text-align: left;
+  box-shadow:
+    10px 10px 24px rgba(0, 0, 0, 0.4),
+    -5px -5px 12px rgba(255, 255, 255, 0.04);
+}
+
+.editor-link-modal h3 {
+  margin: 0;
+  color: #f5f5f5;
+}
+
+.editor-link-modal label {
+  display: grid;
+  gap: 6px;
+  color: #f2f2f2;
+  font-size: 13px;
+}
+
+.editor-link-actions {
+  margin-top: 4px;
+  justify-content: flex-end;
 }
 
 .broadcast-create-header {
@@ -4054,4 +4187,125 @@ button:disabled {
   margin-top: 12px;
   display: flex;
   justify-content: flex-end;
+}
+
+.home-menu-page {
+  padding-top: 1cm !important;
+}
+
+.home-menu-page .home-menu-card {
+  margin-top: 0 !important;
+}
+
+.home-menu-page .home-menu-card,
+.home-menu-page .home-menu-card p,
+.home-menu-page .home-menu-card label,
+.home-menu-page .home-menu-card small {
+  text-align: left;
+}
+
+.home-menu-page .home-menu-header-actions {
+  margin-top: 0;
+  align-items: center;
+  justify-content: flex-end;
+}
+
+.home-menu-page .home-menu-locale-grid {
+  margin-top: 10px;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  max-width: 420px;
+}
+
+.home-menu-page .home-menu-locale-card {
+  margin-top: 14px;
+}
+
+.home-menu-page .home-menu-text-label {
+  display: grid;
+  gap: 8px;
+  margin-bottom: 12px;
+  color: #f0f0f0;
+}
+
+.home-menu-page .home-message-toolbar {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  margin-top: 2px;
+}
+
+.home-menu-page .home-message-toolbar button {
+  padding: 6px 10px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.home-menu-page .home-message-editor {
+  min-height: 150px;
+}
+
+.home-menu-page .home-menu-rows {
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+
+.home-menu-page .home-menu-row {
+  margin: 0;
+  padding: 12px;
+  border-radius: 16px;
+}
+
+.home-menu-page .home-menu-row-header {
+  align-items: flex-start;
+}
+
+.home-menu-page .home-menu-row-actions {
+  margin-top: 0;
+  gap: 8px;
+}
+
+.home-menu-page .home-menu-row-actions button {
+  padding: 6px 10px;
+  font-size: 12px;
+  box-shadow: none;
+}
+
+.home-menu-page .home-menu-row-buttons {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.home-menu-page .home-menu-button-card {
+  border: 1px solid rgba(255, 36, 0, 0.2);
+  border-radius: 10px;
+  padding: 8px;
+  display: grid;
+  gap: 6px;
+}
+
+.home-menu-page .home-menu-button-title {
+  margin: 0;
+}
+
+.home-menu-page .home-menu-button-field {
+  display: grid;
+  gap: 4px;
+  font-size: 12px;
+}
+
+.home-menu-page .home-menu-button-field input,
+.home-menu-page .home-menu-button-field select {
+  padding: 8px 10px;
+  font-size: 12px;
+}
+
+.home-menu-page .home-menu-button-actions {
+  margin-top: 2px;
+}
+
+.home-menu-page .home-menu-button-actions .delete-button {
+  padding: 6px 10px;
+  font-size: 12px;
 }

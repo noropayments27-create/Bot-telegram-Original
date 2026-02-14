@@ -24,6 +24,7 @@ from ..services.crypto_rates import usd_to_btc_rate, usd_to_ltc_rate
 from ..services.fx import usd_to_cop, usd_to_mxn
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
+from ..services.deeplinks import build_bot_start_link, build_product_start_payload
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
@@ -31,6 +32,7 @@ from ..config import (
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
     BOT_TO_API_SECRET,
+    BOT_USERNAME,
     BINANCE_ID,
     CRYPTO_WALLET_BTC,
     CRYPTO_WALLET_LTC,
@@ -77,6 +79,15 @@ _DEFAULT_PAYMENT_METHODS = [
 ]
 class PaymentStates(StatesGroup):
     waiting_photo = State()
+
+
+def _normalize_category_value(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if not text:
+        return ""
+    text = text.replace("-", "_").replace(" ", "_")
+    text = re.sub(r"[^A-Z0-9_]", "", text)
+    return text[:32]
 
 
 def _is_duplicate_user_image(
@@ -225,7 +236,7 @@ async def _render_product_detail_view(
     text: str,
     product: Dict[str, Any],
     reply_markup: InlineKeyboardMarkup | None = None,
-    parse_mode: ParseMode | str | None = None,
+    parse_mode: ParseMode | str | None = ParseMode.HTML,
 ) -> None:
     image_url = _get_product_image(product) or await get_bot_asset_image(
         api_client, "shop_section_image_url"
@@ -712,12 +723,12 @@ def build_shop_keyboard(
     if total_pages > 1:
         if page > 1:
             nav_row.append(
-                InlineKeyboardButton(text="<<", callback_data=f"shop:page:{page - 1}")
+                InlineKeyboardButton(text="←", callback_data=f"shop:page:{page - 1}")
             )
         if page < total_pages:
             nav_row.append(
                 InlineKeyboardButton(
-                    text=">>", callback_data=f"shop:page:{page + 1}"
+                    text="→", callback_data=f"shop:page:{page + 1}"
                 )
             )
         if nav_row:
@@ -763,7 +774,11 @@ def build_product_detail_keyboard(
         ]
     )
 def build_category_keyboard(
-    category_key: str, count: int, locale: str | None = None
+    category_key: str,
+    count: int,
+    page: int,
+    total_pages: int,
+    locale: str | None = None,
 ) -> InlineKeyboardMarkup:
     rows: List[List[InlineKeyboardButton]] = []
     for idx in range(1, count + 1):
@@ -772,9 +787,27 @@ def build_category_keyboard(
         rows[-1].append(
             InlineKeyboardButton(
                 text=str(idx),
-                callback_data=f"category:select:{category_key}:{idx}",
+                callback_data=f"category:select:{category_key}:{page}:{idx}",
             )
         )
+    if total_pages > 1:
+        nav_row: List[InlineKeyboardButton] = []
+        if page > 1:
+            nav_row.append(
+                InlineKeyboardButton(
+                    text="←",
+                    callback_data=f"category:page:{category_key}:{page - 1}",
+                )
+            )
+        if page < total_pages:
+            nav_row.append(
+                InlineKeyboardButton(
+                    text="→",
+                    callback_data=f"category:page:{category_key}:{page + 1}",
+                )
+            )
+        if nav_row:
+            rows.append(nav_row)
     rows.append(
         [
             InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="nav:back"),
@@ -783,20 +816,20 @@ def build_category_keyboard(
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 def build_category_detail_keyboard(
-    category_key: str, index: int, locale: str | None = None
+    category_key: str, page: int, index: int, locale: str | None = None
 ) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_buy"),
-                    callback_data=f"category:buy:{category_key}:{index}",
+                    callback_data=f"category:buy:{category_key}:{page}:{index}",
                 )
             ],
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_add_to_cart"),
-                    callback_data=f"category:cart:{category_key}:{index}",
+                    callback_data=f"category:cart:{category_key}:{page}:{index}",
                 )
             ],
             [
@@ -807,7 +840,7 @@ def build_category_detail_keyboard(
             [
                 InlineKeyboardButton(
                     text=t(locale, "btn_back"),
-                    callback_data="nav:back",
+                    callback_data=f"category:page:{category_key}:{page}",
                 ),
                 InlineKeyboardButton(
                     text=t(locale, "btn_home"), callback_data="home:show"
@@ -838,6 +871,9 @@ def get_category_title(category_key: str, locale: str | None = None) -> str:
     }
     key = key_map.get(category_key)
     if not key:
+        normalized = _normalize_category_value(category_key)
+        if normalized:
+            return f"📦 {normalized.title().replace('_', ' ')}"
         return t(locale, "category_default_title")
     return t(locale, key)
 def format_products(
@@ -858,12 +894,15 @@ def format_products(
             lines.append(f"   {stock_line}")
     return "\n".join(lines)
 def format_category_products(
-    category_key: str, items: List[Dict[str, Any]], locale: str | None = None
+    category_key: str,
+    items: List[Dict[str, Any]],
+    page: int,
+    locale: str | None = None,
 ) -> str:
     if not items:
         return t(locale, "no_more_products")
     title = get_category_title(category_key, locale)
-    lines = [t(locale, "category_page_title").format(title=title, page=1), ""]
+    lines = [t(locale, "category_page_title").format(title=title, page=page), ""]
     for idx, item in enumerate(items, start=1):
         name = html.escape(str(item.get("display_name") or ""))
         if item.get("out_of_stock") or (
@@ -906,13 +945,29 @@ def _strip_category_prefix(name: str) -> str:
             if maybe_code.isdigit():
                 return rest.strip()
     return cleaned
+def _resolve_product_category_value(product: Dict[str, Any]) -> str:
+    raw = _normalize_category_value(product.get("category_key"))
+    if raw:
+        return raw
+    code = str(product.get("code") or "").strip().upper()
+    if code.startswith("T"):
+        return "TIENDA"
+    if code.startswith("M"):
+        return "METODOS"
+    if code.startswith("V"):
+        return "VIP"
+    if code.startswith("W"):
+        return "PROGRAMAS"
+    return "TIENDA"
+
+
 def _normalize_product(product: Dict[str, Any]) -> Dict[str, Any]:
     name = str(product.get("name") or "")
     return {
         "id": product.get("id"),
         "code": product.get("code"),
         "sku_key": product.get("sku_key"),
-        "category_key": product.get("category_key"),
+        "category_key": _resolve_product_category_value(product),
         "name": name,
         "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "",
@@ -930,7 +985,7 @@ def _format_code_line(product: Dict[str, Any], locale: str | None = None) -> str
     code = str(product.get("code") or "").strip()
     if not code:
         return ""
-    return f"{t(locale, 'product_code_label').format(code=code)}\n\n"
+    return f"{t(locale, 'product_code_label').format(code=html.escape(code))}\n\n"
 def _build_stock_line(product: Dict[str, Any]) -> str:
     if product.get("out_of_stock") is True:
         return "📦 Sin Stock ❌"
@@ -965,7 +1020,7 @@ def _format_price_label(price: float | int | None, locale: str | None = None) ->
     )
 def _format_description(raw: Optional[str], locale: str | None = None) -> str:
     if not raw:
-        return f"⌾ {t(locale, 'description_fallback')}"
+        return f"⌾ {html.escape(t(locale, 'description_fallback'))}"
     lines: List[str] = []
     for line in str(raw).splitlines():
         clean = line.strip()
@@ -975,8 +1030,74 @@ def _format_description(raw: Optional[str], locale: str | None = None) -> str:
         clean = re.sub(r"^(⌾\s*)+", "", clean).strip()
         if not clean:
             continue
-        lines.append(f"⌾ {clean}")
+        lines.append(f"⌾ {html.escape(clean)}")
     return "\n".join(lines)
+
+
+async def _resolve_share_affiliate_code(telegram_id: int) -> str | None:
+    try:
+        data = await api_client.get_affiliate_status(telegram_id)
+    except Exception:
+        return None
+    if not isinstance(data, dict):
+        return None
+    affiliate = data.get("affiliate")
+    if not isinstance(affiliate, dict):
+        return None
+    if str(affiliate.get("status") or "").upper() != "APPROVED":
+        return None
+    user_data = data.get("user") if isinstance(data.get("user"), dict) else {}
+    user_telegram_id = str(user_data.get("telegram_id") or "").strip()
+    if user_telegram_id.isdigit():
+        return user_telegram_id
+    affiliate_id = str(affiliate.get("id") or "").strip()
+    return affiliate_id or None
+
+
+async def _build_product_link_block(
+    product: Dict[str, Any],
+    viewer_telegram_id: int,
+    locale: str | None = None,
+) -> str:
+    if not str(BOT_USERNAME or "").strip():
+        return ""
+    product_id = str(product.get("id") or "").strip()
+    product_code = str(product.get("code") or "").strip().upper()
+    product_token = product_code or product_id
+    if not product_token:
+        return ""
+    affiliate_code = await _resolve_share_affiliate_code(viewer_telegram_id)
+    payload = build_product_start_payload(product_token, affiliate_code)
+    if not payload:
+        payload = build_product_start_payload(product_id, affiliate_code)
+    if not payload:
+        payload = build_product_start_payload(product_token, None)
+    if not payload:
+        payload = build_product_start_payload(product_id, None)
+    if not payload:
+        return ""
+    link = build_bot_start_link(BOT_USERNAME, payload)
+    if not link:
+        return ""
+    return f"\n\n{t(locale, 'product_link_label')}\n{html.escape(link)}"
+
+
+async def _build_product_detail_text(
+    product: Dict[str, Any],
+    viewer_telegram_id: int,
+    locale: str | None = None,
+) -> str:
+    link_block = await _build_product_link_block(product, viewer_telegram_id, locale)
+    display_name = html.escape(str(product.get("display_name") or ""))
+    return (
+        f"{display_name}\n\n"
+        f"{_format_code_line(product, locale)}"
+        f"{t(locale, 'product_description_label')}\n\n"
+        f"{_format_description(product['description'], locale)}\n\n"
+        f"{_format_stock_block(product)}"
+        f"{_format_price_label(product['price'], locale)}"
+        f"{link_block}"
+    )
 async def _get_products_by_category(
     category_key: str, telegram_id: int | None = None
 ) -> List[Dict[str, Any]]:
@@ -994,6 +1115,16 @@ def _paginate(items: List[Dict[str, Any]], page: int) -> List[Dict[str, Any]]:
     start = (page - 1) * _PAGE_SIZE
     end = start + _PAGE_SIZE
     return items[start:end]
+
+
+def _parse_positive_int(value: Any, default: int = 1) -> int:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return default
+    return parsed if parsed > 0 else default
+
+
 async def _get_shop_page_items(
     page: int, telegram_id: int | None = None
 ) -> Dict[str, Any]:
@@ -1003,14 +1134,95 @@ async def _get_shop_page_items(
         "items": _paginate(products, page),
         "total_pages": total_pages,
     }
-async def _get_category_items(
-    category_key: str, telegram_id: int | None = None
-) -> List[Dict[str, Any]]:
-    category_value = _CATEGORY_KEYS.get(category_key)
+async def _get_category_page_items(
+    category_key: str,
+    page: int,
+    telegram_id: int | None = None,
+) -> Dict[str, Any]:
+    normalized_key = str(category_key or "").strip().lower().replace("-", "_")
+    category_value = _CATEGORY_KEYS.get(normalized_key)
     if not category_value:
-        return []
+        category_value = _normalize_category_value(category_key)
+    if not category_value:
+        return {"items": [], "total_pages": 1, "page": 1}
     products = await _get_products_by_category(category_value, telegram_id)
-    return _paginate(products, 1)
+    total_pages = max((len(products) + _PAGE_SIZE - 1) // _PAGE_SIZE, 1)
+    safe_page = max(1, min(_parse_positive_int(page, 1), total_pages))
+    return {
+        "items": _paginate(products, safe_page),
+        "total_pages": total_pages,
+        "page": safe_page,
+    }
+
+
+def _category_key_from_value(category_value: str) -> str:
+    normalized = _normalize_category_value(category_value)
+    for key, value in _CATEGORY_KEYS.items():
+        if value == normalized:
+            return key
+    return normalized.lower() if normalized else "tienda"
+
+
+async def render_product_from_start(
+    target: Message,
+    user_id: int,
+    product_id: str,
+    locale: str | None = None,
+) -> bool:
+    raw_ref = str(product_id or "").strip()
+    if not raw_ref:
+        return False
+    lookup_upper = raw_ref.upper()
+
+    all_products = await _fetch_active_products(user_id)
+    normalized_products = [_normalize_product(item) for item in all_products]
+    selected = next(
+        (
+            item
+            for item in normalized_products
+            if str(item.get("id") or "").strip() == raw_ref
+            or str(item.get("code") or "").strip().upper() == lookup_upper
+            or str(item.get("sku_key") or "").strip().upper() == lookup_upper
+        ),
+        None,
+    )
+    if not selected:
+        return False
+
+    category_value = str(selected.get("category_key") or "").strip().upper()
+    if not category_value:
+        return False
+
+    category_items = await _get_products_by_category(category_value, user_id)
+    absolute_index = next(
+        (
+            idx
+            for idx, item in enumerate(category_items, start=1)
+            if str(item.get("id") or "").strip() == str(selected.get("id") or "").strip()
+        ),
+        None,
+    )
+    if not absolute_index:
+        return False
+
+    page = ((absolute_index - 1) // _PAGE_SIZE) + 1
+    index = ((absolute_index - 1) % _PAGE_SIZE) + 1
+    detail_text = await _build_product_detail_text(selected, user_id, locale)
+
+    if category_value == _CATEGORY_KEYS["tienda"]:
+        keyboard = build_product_detail_keyboard(page, index, locale)
+    else:
+        category_key = _category_key_from_value(category_value)
+        keyboard = build_category_detail_keyboard(category_key, page, index, locale)
+
+    await _render_product_detail_view(
+        target,
+        user_id,
+        detail_text,
+        selected,
+        reply_markup=keyboard,
+    )
+    return True
 async def build_payment_methods_keyboard(
     order_id: str,
     page: int,
@@ -1146,9 +1358,16 @@ async def render_shop_page(
         parse_mode=ParseMode.HTML,
     )
 async def render_category_page(
-    target: Message, user_id: int, category_key: str, locale: str | None = None
+    target: Message,
+    user_id: int,
+    category_key: str,
+    page: int,
+    locale: str | None = None,
 ) -> None:
-    items = await _get_category_items(category_key, user_id)
+    catalog = await _get_category_page_items(category_key, page, user_id)
+    items = catalog["items"]
+    current_page = catalog["page"]
+    total_pages = catalog["total_pages"]
     if not items:
         await _render_shop_view(
             target,
@@ -1166,12 +1385,18 @@ async def render_category_page(
             ),
         )
         return
-    text = format_category_products(category_key, items, locale)
+    text = format_category_products(category_key, items, current_page, locale)
     await _render_shop_view(
         target,
         user_id,
         text,
-        reply_markup=build_category_keyboard(category_key, len(items), locale),
+        reply_markup=build_category_keyboard(
+            category_key,
+            len(items),
+            current_page,
+            total_pages,
+            locale,
+        ),
         parse_mode=ParseMode.HTML,
     )
 @router.message(Command("shop"))
@@ -1243,9 +1468,11 @@ async def handle_category_page(callback: CallbackQuery) -> None:
         await callback.answer(t(locale, "username_required_buy"), show_alert=True)
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    category_key = callback.data.split(":")[-1]
+    parts = callback.data.split(":")
+    category_key = str(parts[2] if len(parts) > 2 else "").strip().lower()
+    page = _parse_positive_int(parts[3] if len(parts) > 3 else 1, 1)
     await render_category_page(
-        callback.message, callback.from_user.id, category_key, locale
+        callback.message, callback.from_user.id, category_key, page, locale
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("shop:select:"))
@@ -1284,14 +1511,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     await state.update_data(selected_product_id=product["id"])
-    text = (
-        f"{product['display_name']}\n\n"
-        f"{_format_code_line(product, locale)}"
-        f"{t(locale, 'product_description_label')}\n\n"
-        f"{_format_description(product['description'], locale)}\n\n"
-        f"{_format_stock_block(product)}"
-        f"{_format_price_label(product['price'], locale)}"
-    )
+    text = await _build_product_detail_text(product, callback.from_user.id, locale)
     keyboard = build_product_detail_keyboard(page, index, locale)
     await _render_product_detail_view(
         callback.message,
@@ -1320,10 +1540,21 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
             show_alert=True,
         )
         return
+    if not callback.from_user.username:
+        await callback.answer(t(locale, "username_required_buy"), show_alert=True)
+        return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _, _, category_key, index_text = callback.data.split(":", 3)
-    index = int(index_text)
-    items = await _get_category_items(category_key, callback.from_user.id)
+    parts = callback.data.split(":")
+    category_key = str(parts[2] if len(parts) > 2 else "").strip().lower()
+    if len(parts) >= 5:
+        page = _parse_positive_int(parts[3], 1)
+        index = _parse_positive_int(parts[4], 1)
+    else:
+        page = 1
+        index = _parse_positive_int(parts[3] if len(parts) > 3 else 1, 1)
+    catalog = await _get_category_page_items(category_key, page, callback.from_user.id)
+    items = catalog["items"]
+    safe_page = catalog["page"]
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
@@ -1332,15 +1563,8 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
     await state.update_data(selected_product_id=item["id"])
-    text = (
-        f"{item['display_name']}\n\n"
-        f"{_format_code_line(item, locale)}"
-        f"{t(locale, 'product_description_label')}\n\n"
-        f"{_format_description(item['description'], locale)}\n\n"
-        f"{_format_stock_block(item)}"
-        f"{_format_price_label(item['price'], locale)}"
-    )
-    keyboard = build_category_detail_keyboard(category_key, index, locale)
+    text = await _build_product_detail_text(item, callback.from_user.id, locale)
+    keyboard = build_category_detail_keyboard(category_key, safe_page, index, locale)
     await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
@@ -1450,10 +1674,21 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
             show_alert=True,
         )
         return
+    if not callback.from_user.username:
+        await callback.answer(t(locale, "username_required_buy"), show_alert=True)
+        return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _, _, category_key, index_text = callback.data.split(":", 3)
-    index = int(index_text)
-    items = await _get_category_items(category_key, callback.from_user.id)
+    parts = callback.data.split(":")
+    category_key = str(parts[2] if len(parts) > 2 else "").strip().lower()
+    if len(parts) >= 5:
+        page = _parse_positive_int(parts[3], 1)
+        index = _parse_positive_int(parts[4], 1)
+    else:
+        page = 1
+        index = _parse_positive_int(parts[3] if len(parts) > 3 else 1, 1)
+    catalog = await _get_category_page_items(category_key, page, callback.from_user.id)
+    items = catalog["items"]
+    safe_page = catalog["page"]
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
@@ -1463,7 +1698,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
             callback.message,
             callback.from_user.id,
             t(locale, "no_products_available"),
-            reply_markup=build_category_detail_keyboard(category_key, index, locale),
+            reply_markup=build_category_detail_keyboard(category_key, safe_page, index, locale),
         )
         await callback.answer()
         return
@@ -1492,7 +1727,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
             callback.message,
             callback.from_user.id,
             t(locale, "order_create_failed"),
-            reply_markup=build_category_detail_keyboard(category_key, index, locale),
+            reply_markup=build_category_detail_keyboard(category_key, safe_page, index, locale),
         )
         await callback.answer()
         return
@@ -1506,8 +1741,8 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         callback.message,
         callback.from_user.id,
         order["id"],
-        1,
-        1,
+        safe_page,
+        index,
         locale,
     )
     await callback.answer()
@@ -1594,16 +1829,10 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
             total_line = t(locale, "cart_added_single").format(qty=total_qty_int)
         else:
             total_line = t(locale, "cart_added_plural").format(qty=total_qty_int)
-    text = (
-        f"{product['display_name']}\n\n"
-        f"{_format_code_line(product, locale)}"
-        f"{t(locale, 'product_description_label')}\n\n"
-        f"{_format_description(product['description'], locale)}\n\n"
-        f"{_format_stock_block(product)}"
-        f"{_format_price_label(product['price'], locale)}\n\n"
-        f"{add_result}\n"
-        f"{total_line}"
-    )
+    base_text = await _build_product_detail_text(product, callback.from_user.id, locale)
+    safe_add_result = html.escape(str(add_result or ""))
+    safe_total_line = html.escape(str(total_line or ""))
+    text = f"{base_text}\n\n{safe_add_result}\n{safe_total_line}"
     keyboard = build_product_detail_keyboard(page, index, locale)
     await _render_product_detail_view(
         callback.message,
@@ -1632,10 +1861,21 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
             show_alert=True,
         )
         return
+    if not callback.from_user.username:
+        await callback.answer(t(locale, "username_required_buy"), show_alert=True)
+        return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    _, _, category_key, index_text = callback.data.split(":", 3)
-    index = int(index_text)
-    items = await _get_category_items(category_key, callback.from_user.id)
+    parts = callback.data.split(":")
+    category_key = str(parts[2] if len(parts) > 2 else "").strip().lower()
+    if len(parts) >= 5:
+        page = _parse_positive_int(parts[3], 1)
+        index = _parse_positive_int(parts[4], 1)
+    else:
+        page = 1
+        index = _parse_positive_int(parts[3] if len(parts) > 3 else 1, 1)
+    catalog = await _get_category_page_items(category_key, page, callback.from_user.id)
+    items = catalog["items"]
+    safe_page = catalog["page"]
     if index < 1 or index > len(items):
         await callback.answer(t(locale, "product_not_found"), show_alert=True)
         return
@@ -1693,17 +1933,11 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
             total_line = t(locale, "cart_added_single").format(qty=total_qty_int)
         else:
             total_line = t(locale, "cart_added_plural").format(qty=total_qty_int)
-    text = (
-        f"{item['display_name']}\n\n"
-        f"{_format_code_line(item, locale)}"
-        f"{t(locale, 'product_description_label')}\n\n"
-        f"{_format_description(item['description'], locale)}\n\n"
-        f"{_format_stock_block(item)}"
-        f"{_format_price_label(item['price'], locale)}\n\n"
-        f"{add_result}\n"
-        f"{total_line}"
-    )
-    keyboard = build_category_detail_keyboard(category_key, index, locale)
+    base_text = await _build_product_detail_text(item, callback.from_user.id, locale)
+    safe_add_result = html.escape(str(add_result or ""))
+    safe_total_line = html.escape(str(total_line or ""))
+    text = f"{base_text}\n\n{safe_add_result}\n{safe_total_line}"
+    keyboard = build_category_detail_keyboard(category_key, safe_page, index, locale)
     await _render_product_detail_view(
         callback.message,
         callback.from_user.id,

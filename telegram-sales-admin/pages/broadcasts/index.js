@@ -165,6 +165,32 @@ const normalizeMessageForSave = (html) => {
     .trim();
 };
 
+const findClosestTag = (node, tagName) => {
+  let current = node;
+  const targetTag = String(tagName || "").toLowerCase();
+  while (current) {
+    if (
+      current.nodeType === Node.ELEMENT_NODE
+      && String(current.tagName || "").toLowerCase() === targetTag
+    ) {
+      return current;
+    }
+    current = current.parentNode;
+  }
+  return null;
+};
+
+const unwrapNode = (node) => {
+  if (!node || !node.parentNode) {
+    return;
+  }
+  const parent = node.parentNode;
+  while (node.firstChild) {
+    parent.insertBefore(node.firstChild, node);
+  }
+  parent.removeChild(node);
+};
+
 export default function BroadcastsPage() {
   const router = useRouter();
   const [items, setItems] = useState([]);
@@ -190,7 +216,12 @@ export default function BroadcastsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [toast, setToast] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [isMessageLinkModalOpen, setIsMessageLinkModalOpen] = useState(false);
+  const [messageLinkText, setMessageLinkText] = useState("");
+  const [messageLinkUrl, setMessageLinkUrl] = useState("https://");
+  const [messageLinkError, setMessageLinkError] = useState("");
   const messageInputRef = useRef(null);
+  const messageLinkSelectionRef = useRef(null);
   const existingImageObjectUrlRef = useRef("");
   const listMaxHeight = 42 + 5 * 52;
 
@@ -335,12 +366,12 @@ export default function BroadcastsPage() {
     });
   };
 
-  const setCreateErrorMessage = (message) => {
+  const setCreateErrorMessage = useCallback((message) => {
     setCreateError(message);
     if (message) {
       setToast(message);
     }
-  };
+  }, []);
 
   const clearExistingImagePreview = useCallback(() => {
     if (existingImageObjectUrlRef.current) {
@@ -383,6 +414,143 @@ export default function BroadcastsPage() {
     setMessage(editor.innerHTML || "");
   }, []);
 
+  const getMessageSelection = useCallback(() => {
+    const editor = messageInputRef.current;
+    const selection = window.getSelection();
+    if (!editor || !selection || selection.rangeCount === 0) {
+      return null;
+    }
+    const range = selection.getRangeAt(0);
+    const startNode = range.startContainer;
+    const endNode = range.endContainer;
+    if (!editor.contains(startNode) || !editor.contains(endNode)) {
+      return null;
+    }
+    return {
+      editor,
+      selection,
+      range,
+      text: selection.toString(),
+    };
+  }, []);
+
+  const requireMessageSelection = useCallback(
+    (errorMessage = "Selecciona texto para aplicar formato.") => {
+      const snapshot = getMessageSelection();
+      if (!snapshot || snapshot.range.collapsed || !snapshot.text.trim()) {
+        setCreateErrorMessage(errorMessage);
+        return null;
+      }
+      setCreateError("");
+      return snapshot;
+    },
+    [getMessageSelection, setCreateErrorMessage]
+  );
+
+  const runMessageCommand = useCallback(
+    (command, value = null, options = {}) => {
+      const { requiresSelection = true, selectionError = "Selecciona texto para aplicar formato." } = options;
+      if (requiresSelection && !requireMessageSelection(selectionError)) {
+        return false;
+      }
+      const editor = messageInputRef.current;
+      if (!editor) {
+        return false;
+      }
+      editor.focus();
+      document.execCommand(command, false, value);
+      syncMessageFromEditor();
+      setCreateError("");
+      return true;
+    },
+    [requireMessageSelection, syncMessageFromEditor]
+  );
+
+  const toggleMessageMonospace = useCallback(() => {
+    const snapshot = requireMessageSelection();
+    if (!snapshot) {
+      return;
+    }
+    const { selection } = snapshot;
+    const anchorNode = selection.anchorNode;
+    const codeNode = findClosestTag(anchorNode, "code");
+    const preNode = findClosestTag(anchorNode, "pre");
+    if (codeNode && !preNode) {
+      unwrapNode(codeNode);
+      syncMessageFromEditor();
+      return;
+    }
+    if (preNode) {
+      unwrapNode(preNode);
+      syncMessageFromEditor();
+      return;
+    }
+    const selected = snapshot.text;
+    if (selected.includes("\n")) {
+      runMessageCommand("formatBlock", "pre");
+    } else {
+      runMessageCommand("insertHTML", `<code>${escapeHtml(selected)}</code>`);
+    }
+  }, [requireMessageSelection, runMessageCommand, syncMessageFromEditor]);
+
+  const openMessageLinkModal = useCallback(() => {
+    const snapshot = requireMessageSelection("Selecciona el texto para crear el enlace.");
+    if (!snapshot) {
+      return;
+    }
+    messageLinkSelectionRef.current = snapshot.range.cloneRange();
+    const anchor = findClosestTag(snapshot.selection.anchorNode, "a")
+      || findClosestTag(snapshot.selection.focusNode, "a");
+    const currentUrl = String(anchor?.getAttribute("href") || "").trim();
+    setMessageLinkText(snapshot.text.trim());
+    setMessageLinkUrl(/^https?:\/\//i.test(currentUrl) ? currentUrl : "https://");
+    setMessageLinkError("");
+    setIsMessageLinkModalOpen(true);
+  }, [requireMessageSelection]);
+
+  const closeMessageLinkModal = useCallback(() => {
+    setIsMessageLinkModalOpen(false);
+    setMessageLinkError("");
+    messageLinkSelectionRef.current = null;
+    const editor = messageInputRef.current;
+    if (editor) {
+      editor.focus();
+    }
+  }, []);
+
+  const submitMessageLinkModal = useCallback(() => {
+    const text = String(messageLinkText || "").trim();
+    const href = String(messageLinkUrl || "").trim();
+    if (!text) {
+      setMessageLinkError("Escribe el texto del enlace.");
+      return;
+    }
+    if (!/^https?:\/\//i.test(href)) {
+      setMessageLinkError("El enlace debe iniciar por http:// o https://");
+      return;
+    }
+    const editor = messageInputRef.current;
+    const savedRange = messageLinkSelectionRef.current;
+    if (!editor || !savedRange) {
+      setMessageLinkError("Selecciona el texto nuevamente.");
+      return;
+    }
+    editor.focus();
+    const selection = window.getSelection();
+    if (selection) {
+      selection.removeAllRanges();
+      selection.addRange(savedRange);
+    }
+    runMessageCommand(
+      "insertHTML",
+      `<a href="${escapeHtml(href)}">${escapeHtml(text)}</a>`,
+      { requiresSelection: false }
+    );
+    setIsMessageLinkModalOpen(false);
+    setMessageLinkError("");
+    messageLinkSelectionRef.current = null;
+  }, [messageLinkText, messageLinkUrl, runMessageCommand]);
+
   const handleMessageKeyDown = useCallback((event) => {
     const mod = event.metaKey || event.ctrlKey;
     if (!mod) {
@@ -391,60 +559,41 @@ export default function BroadcastsPage() {
     const key = String(event.key || "").toLowerCase();
     const withShift = Boolean(event.shiftKey);
 
-    const runCommand = (command, value = null) => {
-      document.execCommand(command, false, value);
-      syncMessageFromEditor();
-    };
-
     if (key === "b" && !withShift) {
       event.preventDefault();
-      runCommand("bold");
+      runMessageCommand("bold");
       return;
     }
     if (key === "i" && !withShift) {
       event.preventDefault();
-      runCommand("italic");
+      runMessageCommand("italic");
       return;
     }
     if (key === "u" && !withShift) {
       event.preventDefault();
-      runCommand("underline");
+      runMessageCommand("underline");
       return;
     }
     if (key === "k" && !withShift) {
       event.preventDefault();
-      const href = window.prompt("URL del enlace (https://...)", "https://");
-      if (!href) {
-        return;
-      }
-      if (!/^https?:\/\//i.test(href.trim())) {
-        setCreateErrorMessage("El enlace debe iniciar por http:// o https://");
-        return;
-      }
-      runCommand("createLink", href.trim());
+      openMessageLinkModal();
       return;
     }
     if (key === "x" && withShift) {
       event.preventDefault();
-      runCommand("strikeThrough");
+      runMessageCommand("strikeThrough");
       return;
     }
     if (key === "." && withShift) {
       event.preventDefault();
-      runCommand("formatBlock", "blockquote");
+      runMessageCommand("formatBlock", "blockquote");
       return;
     }
     if (key === "m" && withShift) {
       event.preventDefault();
-      const selection = window.getSelection();
-      const selected = selection ? selection.toString() : "";
-      if (selected.includes("\n")) {
-        runCommand("formatBlock", "pre");
-      } else {
-        runCommand("insertHTML", `<code>${escapeHtml(selected || "texto")}</code>`);
-      }
+      toggleMessageMonospace();
     }
-  }, [setCreateErrorMessage, syncMessageFromEditor]);
+  }, [openMessageLinkModal, runMessageCommand, toggleMessageMonospace]);
 
   const isValidUrl = (value) => {
     if (!value) {
@@ -939,7 +1088,7 @@ export default function BroadcastsPage() {
             marginTop: "20px",
             marginLeft: 0,
             marginRight: "auto",
-            textAlign: "center",
+            textAlign: "left",
           }}
         >
           <div className="broadcast-create-header">
@@ -975,9 +1124,26 @@ export default function BroadcastsPage() {
                   syncMessageFromEditor();
                 }}
               />
-              <small className="muted">
-                Atajos: ⌘/Ctrl+B Negrita · ⌘/Ctrl+I Cursiva · ⌘/Ctrl+U Subrayado · ⌘/Ctrl+K Enlace · ⌘/Ctrl+Shift+X Tachado · ⌘/Ctrl+Shift+. Citar · ⌘/Ctrl+Shift+M Monoespaciado
-              </small>
+              <div
+                className="editor-shortcuts-help"
+                role="button"
+                tabIndex={0}
+                aria-label="Ver atajos de formato"
+              >
+                <span className="editor-shortcuts-help__icon" aria-hidden="true">i</span>
+                <span className="editor-shortcuts-help__label">
+                  Atajos
+                </span>
+                <div className="editor-shortcuts-tooltip" role="tooltip">
+                  <span>⌘/Ctrl+B: Negrita</span>
+                  <span>⌘/Ctrl+I: Cursiva</span>
+                  <span>⌘/Ctrl+U: Subrayado</span>
+                  <span>⌘/Ctrl+K: Enlace</span>
+                  <span>⌘/Ctrl+Shift+X: Tachado</span>
+                  <span>⌘/Ctrl+Shift+.: Citar</span>
+                  <span>⌘/Ctrl+Shift+M: Monoespaciado</span>
+                </div>
+              </div>
             </label>
             <label>
               Imagen (opcional)
@@ -1290,6 +1456,55 @@ export default function BroadcastsPage() {
         >
           <div className="image-preview-dialog">
             <img src={previewUrl} alt="Vista previa" />
+          </div>
+        </div>
+      )}
+      {isMessageLinkModalOpen && (
+        <div
+          className="editor-link-overlay"
+          role="button"
+          tabIndex={0}
+          onClick={closeMessageLinkModal}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              closeMessageLinkModal();
+            }
+          }}
+        >
+          <div
+            className="editor-link-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Crear enlace"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>Crear enlace</h3>
+            {messageLinkError && <p className="error">{messageLinkError}</p>}
+            <label>
+              Texto
+              <input
+                type="text"
+                value={messageLinkText}
+                onChange={(event) => setMessageLinkText(event.target.value)}
+              />
+            </label>
+            <label>
+              URL
+              <input
+                type="url"
+                value={messageLinkUrl}
+                onChange={(event) => setMessageLinkUrl(event.target.value)}
+                placeholder="https://..."
+              />
+            </label>
+            <div className="actions editor-link-actions">
+              <button type="button" className="ghost" onClick={closeMessageLinkModal}>
+                Cancelar
+              </button>
+              <button type="button" onClick={submitMessageLinkModal}>
+                Crear
+              </button>
+            </div>
           </div>
         </div>
       )}

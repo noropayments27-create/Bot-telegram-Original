@@ -145,6 +145,12 @@ export default function Dashboard() {
       tooltip: "Administrar productos, stock y disponibilidad.",
     },
     {
+      href: "/home-menu",
+      label: "Home Bot",
+      key: "home_menu",
+      tooltip: "Ver en tiempo real el menu home configurado desde Telegram.",
+    },
+    {
       href: "/tickets",
       label: "Tickets",
       key: "tickets",

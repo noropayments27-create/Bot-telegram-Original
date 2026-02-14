@@ -1,4 +1,4 @@
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import {
   IconDashboard,
   IconInventory,
@@ -11,6 +11,90 @@ import {
   clearAuthToken,
   getAuthToken,
 } from "../lib/api";
+
+const HOME_LAYOUT_KEY = "home_menu_v1";
+const DEFAULT_CATEGORY_ORDER = ["tienda", "metodos", "vip", "programas"];
+const DEFAULT_CATEGORY_LABELS = {
+  tienda: "Tienda",
+  metodos: "Métodos",
+  vip: "Grupos VIP",
+  programas: "Programas y Web",
+};
+
+function normalizeCategorySlug(raw) {
+  const cleaned = String(raw || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^a-z0-9_]/g, "")
+    .slice(0, 32);
+  return cleaned;
+}
+
+function categoryValueFromSlug(slug) {
+  const normalized = normalizeCategorySlug(slug);
+  return normalized ? normalized.toUpperCase() : "TIENDA";
+}
+
+function categoryLabelFromSlug(slug) {
+  const normalized = normalizeCategorySlug(slug);
+  if (!normalized) {
+    return "Categoría";
+  }
+  if (DEFAULT_CATEGORY_LABELS[normalized]) {
+    return DEFAULT_CATEGORY_LABELS[normalized];
+  }
+  return normalized
+    .split("_")
+    .filter(Boolean)
+    .map((part) => part.charAt(0).toUpperCase() + part.slice(1))
+    .join(" ");
+}
+
+function extractCategorySlugsFromLayout(rawLayout) {
+  if (!rawLayout || typeof rawLayout !== "object") {
+    return [];
+  }
+  const discovered = new Set();
+  const parseButtonAction = (value) => {
+    const action = String(value || "").trim();
+    if (!action.startsWith("category:page:")) {
+      return;
+    }
+    const parts = action.split(":");
+    if (parts.length < 3) {
+      return;
+    }
+    const key = normalizeCategorySlug(parts[2]);
+    if (key) {
+      discovered.add(key);
+    }
+  };
+
+  for (const localeKey of ["es", "en"]) {
+    const localized = rawLayout[localeKey];
+    if (!localized || typeof localized !== "object") {
+      continue;
+    }
+    const buttons = Array.isArray(localized.buttons) ? localized.buttons : [];
+    for (const rawRow of buttons) {
+      if (Array.isArray(rawRow)) {
+        for (const rawButton of rawRow) {
+          if (!rawButton || typeof rawButton !== "object") {
+            continue;
+          }
+          parseButtonAction(rawButton.action || rawButton.callback_data);
+        }
+        continue;
+      }
+      if (!rawRow || typeof rawRow !== "object") {
+        continue;
+      }
+      parseButtonAction(rawRow.action || rawRow.callback_data);
+    }
+  }
+  return [...discovered];
+}
 
 export default function InventoryPage() {
   const router = useRouter();
@@ -34,6 +118,7 @@ export default function InventoryPage() {
   const [products, setProducts] = useState([]);
   const [productsLoading, setProductsLoading] = useState(false);
   const [productsError, setProductsError] = useState("");
+  const [layoutCategoryKeys, setLayoutCategoryKeys] = useState([]);
   const [modeFilter, setModeFilter] = useState(null);
   const [categoryFilter, setCategoryFilter] = useState(null);
   const [editingProductId, setEditingProductId] = useState(null);
@@ -390,6 +475,12 @@ export default function InventoryPage() {
         page += 1;
       }
       setProducts(all);
+      try {
+        const layoutData = await apiFetch(`/admin/layouts/${HOME_LAYOUT_KEY}`);
+        setLayoutCategoryKeys(extractCategorySlugsFromLayout(layoutData?.layout));
+      } catch (layoutError) {
+        // Keep inventory working even if layout endpoint fails.
+      }
     } catch (err) {
       if (!silent) {
         setProductsError("No se pudo cargar el catálogo.");
@@ -721,7 +812,7 @@ export default function InventoryPage() {
           display_name: trimmedName,
           name_en: trimmedNameEn,
           image_url: imageUrl || null,
-          category_key: createCategory,
+          category_key: categoryValueFromSlug(createCategory),
           price: normalizedPrice,
           stock_mode: createMode,
           show_stock: createShowStock,
@@ -843,11 +934,10 @@ export default function InventoryPage() {
   };
 
   const getCategoryKey = (product) => {
-    const storedCategory = String(product?.category_key || "").toUpperCase();
-    if (storedCategory === "TIENDA") return "tienda";
-    if (storedCategory === "METODOS") return "metodos";
-    if (storedCategory === "VIP") return "vip";
-    if (storedCategory === "PROGRAMAS") return "programas";
+    const storedCategory = normalizeCategorySlug(product?.category_key);
+    if (storedCategory) {
+      return storedCategory;
+    }
     const code = String(product?.code || "").toUpperCase();
     if (code.startsWith("T")) return "tienda";
     if (code.startsWith("M")) return "metodos";
@@ -861,12 +951,58 @@ export default function InventoryPage() {
     return "tienda";
   };
 
-  const categoryOptions = [
-    { key: "tienda", label: "Tienda", prefix: "SHOP " },
-    { key: "metodos", label: "Métodos", prefix: "METODOS " },
-    { key: "vip", label: "Grupos VIP", prefix: "VIP " },
-    { key: "programas", label: "Programas y Web", prefix: "WEB " },
-  ];
+  const categoryOptions = useMemo(() => {
+    const discovered = new Set(DEFAULT_CATEGORY_ORDER);
+    products.forEach((item) => {
+      const key = getCategoryKey(item);
+      if (key) {
+        discovered.add(key);
+      }
+    });
+    layoutCategoryKeys.forEach((key) => {
+      const normalized = normalizeCategorySlug(key);
+      if (normalized) {
+        discovered.add(normalized);
+      }
+    });
+    const extras = [...discovered]
+      .filter((key) => !DEFAULT_CATEGORY_ORDER.includes(key))
+      .sort((a, b) => a.localeCompare(b));
+    const ordered = [...DEFAULT_CATEGORY_ORDER, ...extras].filter((key) =>
+      discovered.has(key)
+    );
+    return ordered.map((key) => ({
+      key,
+      label: categoryLabelFromSlug(key),
+    }));
+  }, [layoutCategoryKeys, products]);
+
+  useEffect(() => {
+    if (categoryOptions.length === 0) {
+      return;
+    }
+    if (!categoryOptions.some((option) => option.key === createCategory)) {
+      setCreateCategory(categoryOptions[0].key);
+    }
+  }, [categoryOptions, createCategory]);
+
+  useEffect(() => {
+    if (categoryOptions.length === 0) {
+      return;
+    }
+    if (!categoryOptions.some((option) => option.key === editCategory)) {
+      setEditCategory(categoryOptions[0].key);
+    }
+  }, [categoryOptions, editCategory]);
+
+  useEffect(() => {
+    if (!categoryFilter) {
+      return;
+    }
+    if (!categoryOptions.some((option) => option.key === categoryFilter)) {
+      setCategoryFilter(null);
+    }
+  }, [categoryFilter, categoryOptions]);
 
   const productsByMode = products.filter(
     (item) => item.stock_mode === modeFilter
@@ -1004,7 +1140,7 @@ export default function InventoryPage() {
           display_name: trimmedName,
           name_en: trimmedNameEn,
           image_url: imageUrl || null,
-          category_key: editCategory,
+          category_key: categoryValueFromSlug(editCategory),
           price: normalizedPrice,
           description: buildDescriptionPayload(editDescription),
           description_en: descriptionEn,

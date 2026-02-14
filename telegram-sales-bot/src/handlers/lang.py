@@ -6,8 +6,8 @@ from ..config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET
 from ..services.api_client import ApiClient
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale, invalidate_user_locale
-from ..utils.main_view import render_main_view, set_main_message_id
-from .menu import build_home_text, build_main_keyboard
+from ..utils.main_view import set_main_message_id
+from ..utils.home_view import render_home_view
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
@@ -79,11 +79,5 @@ async def handle_lang_set(callback: CallbackQuery) -> None:
         await callback.answer(t(locale, "lang_save_failed"), show_alert=True)
         return
     invalidate_user_locale(callback.from_user.id)
-    await render_main_view(
-        callback.message,
-        callback.from_user.id,
-        build_home_text(locale),
-        reply_markup=build_main_keyboard(locale),
-        parse_mode="HTML",
-    )
+    await render_home_view(callback.message, callback.from_user.id, locale)
     await callback.answer()

@@ -16,6 +16,7 @@ from ..config import (
 )
 from ..services.api_client import ApiClient
 from ..services.bot_assets import get_bot_asset_image
+from ..services.deeplinks import parse_start_payload
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
@@ -23,6 +24,7 @@ from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 from .menu import build_main_keyboard, build_community_text
 from .menu import build_language_keyboard
 from .support import start_support_flow
+from .shop import render_product_from_start
 from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id, pop_previous_view, clear_main_message_id
 from ..utils.home_view import render_home_view
 from ..utils.order_watch import stop_order_watch
@@ -84,12 +86,17 @@ async def handle_start(message: Message, state: FSMContext) -> None:
         )
         return
     await stop_order_watch(message.from_user.id, "start")
-    start_payload = None
+    start_payload_raw = None
 
     if message.text:
         parts = message.text.split(maxsplit=1)
         if len(parts) > 1:
-            start_payload = parts[1].strip() or None
+            start_payload_raw = parts[1].strip() or None
+
+    parsed_start = parse_start_payload(start_payload_raw)
+    start_affiliate_code = str(parsed_start.get("affiliate_code") or "").strip() or None
+    start_product_id = str(parsed_start.get("product_id") or "").strip() or None
+    fallback_code = str(parsed_start.get("fallback_code") or "").strip() or None
 
     try:
         photo_file_id = None
@@ -132,7 +139,23 @@ async def handle_start(message: Message, state: FSMContext) -> None:
             referred = None
 
         if referred:
-            if start_payload:
+            if start_product_id:
+                locale = await get_user_locale(
+                    api_client, message.from_user.id, message.from_user.language_code
+                )
+                await state.clear()
+                opened = await render_product_from_start(
+                    message,
+                    message.from_user.id,
+                    start_product_id,
+                    locale,
+                )
+                if opened:
+                    return
+                await message.answer(t(locale, "product_not_found"))
+                await render_home_view(message, message.from_user.id, locale)
+                return
+            if fallback_code:
                 await message.answer(t(locale, "access_code_already_assigned"))
             locale = await get_user_locale(
                 api_client, message.from_user.id, message.from_user.language_code
@@ -141,17 +164,37 @@ async def handle_start(message: Message, state: FSMContext) -> None:
             await render_home_view(message, message.from_user.id, locale)
             return
 
-        if start_payload:
+        provided_code = start_affiliate_code or fallback_code
+        if provided_code:
             locale = await get_user_locale(
                 api_client, message.from_user.id, message.from_user.language_code
             )
             accepted = await _assign_access_code(
-                message, message.from_user.id, start_payload, locale
+                message, message.from_user.id, provided_code, locale
             )
             if accepted:
+                if start_product_id:
+                    await state.clear()
+                    opened = await render_product_from_start(
+                        message,
+                        message.from_user.id,
+                        start_product_id,
+                        locale,
+                    )
+                    if opened:
+                        return
+                    await message.answer(t(locale, "product_not_found"))
                 await state.clear()
                 await render_home_view(message, message.from_user.id, locale)
                 return
+            await state.set_state(AccessStates.awaiting_code)
+            return
+
+        if start_product_id:
+            locale = await get_user_locale(
+                api_client, message.from_user.id, message.from_user.language_code
+            )
+            await message.answer(t(locale, "access_code_prompt"), parse_mode="HTML")
             await state.set_state(AccessStates.awaiting_code)
             return
 
@@ -165,6 +208,17 @@ async def handle_start(message: Message, state: FSMContext) -> None:
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
+    if start_product_id:
+        opened = await render_product_from_start(
+            message,
+            message.from_user.id,
+            start_product_id,
+            locale,
+        )
+        if opened:
+            await state.clear()
+            return
+        await message.answer(t(locale, "product_not_found"))
     await state.clear()
     await render_home_view(message, message.from_user.id, locale)
 

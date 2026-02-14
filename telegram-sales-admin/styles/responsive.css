@@ -2536,6 +2536,75 @@
     border-left: none !important;
     padding-left: 0.2cm !important;
   }
+
+  .home-menu-page {
+    padding-top: 1cm !important;
+  }
+
+  .home-menu-page .home-menu-header {
+    align-items: flex-start !important;
+    gap: 10px !important;
+  }
+
+  .home-menu-page .home-menu-header-actions {
+    display: flex !important;
+    flex-wrap: nowrap !important;
+    justify-content: flex-start !important;
+    gap: 6px !important;
+    overflow-x: auto !important;
+    width: 100% !important;
+    margin-top: 0 !important;
+  }
+
+  .home-menu-page .home-menu-header-actions button {
+    flex: 0 0 auto !important;
+    min-width: 0 !important;
+    padding: 5px 9px !important;
+    font-size: 11px !important;
+    line-height: 1.1 !important;
+    box-shadow: none !important;
+  }
+
+  .home-menu-page .home-menu-locale-grid {
+    max-width: 100% !important;
+  }
+
+  .home-menu-page .home-message-toolbar button {
+    padding: 4px 8px !important;
+    font-size: 11px !important;
+  }
+
+  .home-menu-page .home-menu-row {
+    padding: 10px !important;
+  }
+
+  .home-menu-page .home-menu-row-actions {
+    gap: 6px !important;
+  }
+
+  .home-menu-page .home-menu-row-actions button {
+    padding: 4px 8px !important;
+    font-size: 10px !important;
+  }
+
+  .home-menu-page .home-menu-row-buttons {
+    grid-template-columns: repeat(2, minmax(0, 1fr)) !important;
+    gap: 6px !important;
+  }
+
+  .home-menu-page .home-menu-button-card {
+    padding: 7px !important;
+  }
+
+  .home-menu-page .home-menu-button-field input,
+  .home-menu-page .home-menu-button-field select {
+    padding: 7px 9px !important;
+    font-size: 11px !important;
+  }
+
+  .home-menu-page .home-menu-button-actions .delete-button {
+    width: 100% !important;
+  }
 }
 
 /* Broadcasts page: isolated responsive layout */

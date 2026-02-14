@@ -1,10 +1,12 @@
 import asyncio
 from datetime import datetime
 import html
+import re
 from typing import Any, Dict, Optional
 
 import httpx
 from aiogram import F, Router
+from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
@@ -21,8 +23,10 @@ from ..config import (
     BOT_TO_API_SECRET,
 )
 from ..services.api_client import ApiClient
+from ..services.home_layout import clear_home_layout_cache
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
+from ..utils.home_view import render_home_view
 from ..utils.rate_limit import check_global_rate_limit
 
 router = Router()
@@ -31,6 +35,133 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 
 class AdminUiStates(StatesGroup):
     awaiting_value = State()
+
+
+_PRODUCT_CATEGORY_KEYS = ("TIENDA", "METODOS", "VIP", "PROGRAMAS")
+_PRODUCT_CATEGORY_KEY_SET = set(_PRODUCT_CATEGORY_KEYS)
+_PRODUCT_CATEGORY_LABELS = {
+    "TIENDA": "🛍️ Tienda",
+    "METODOS": "💳 Metodos",
+    "VIP": "👑 VIP",
+    "PROGRAMAS": "🧩 Programas",
+}
+_PRODUCT_IMAGE_SKIP_WORDS = {
+    "skip",
+    "saltar",
+    "omitir",
+    "sin",
+    "sin imagen",
+    "no",
+}
+
+_HOME_LAYOUT_KEY = "home_menu_v1"
+_HOME_LAYOUT_LOCALES = ("es", "en")
+_HOME_BUTTON_LIMIT = 24
+
+_HOME_DEFAULT_BUTTON_KEYS = [
+    ("menu_shop", "shop:page:1"),
+    ("menu_methods", "category:page:metodos"),
+    ("menu_groups", "category:page:vip"),
+    ("menu_programs", "category:page:programas"),
+    ("menu_cart", "home:cart"),
+    ("menu_affiliates", "home:affiliates"),
+    ("menu_community", "home:community"),
+    ("menu_support", "home:support"),
+    ("menu_language", "home:soon:idioma"),
+]
+
+
+def _is_en(locale: str | None) -> bool:
+    return str(locale or "").lower().startswith("en")
+
+
+def _tr(locale: str | None, es_text: str, en_text: str) -> str:
+    return en_text if _is_en(locale) else es_text
+
+
+_ORDER_STATUS_LABELS = {
+    "CREATED": ("Creada", "Created"),
+    "WAITING_PAYMENT": ("Esperando pago", "Waiting payment"),
+    "PAID": ("Pagada", "Paid"),
+    "DELIVERED": ("Entregada", "Delivered"),
+    "CANCELLED": ("Cancelada", "Cancelled"),
+    "REFUNDED": ("Reembolsada", "Refunded"),
+    "EXPIRED": ("Expirada", "Expired"),
+}
+
+_PAYMENT_REVIEW_LABELS = {
+    "PENDING": ("Pendiente", "Pending"),
+    "APPROVED": ("Aprobado", "Approved"),
+    "REJECTED": ("Rechazado", "Rejected"),
+}
+
+_REFUND_TYPE_LABELS = {
+    "FULL": ("Completo", "Full"),
+    "PARTIAL": ("Parcial", "Partial"),
+}
+
+
+def _map_enum_label(value: Any, locale: str | None, labels: Dict[str, tuple[str, str]]) -> str:
+    key = str(value or "").upper().strip()
+    if not key:
+        return "-"
+    pair = labels.get(key)
+    if not pair:
+        return str(value)
+    return pair[1] if _is_en(locale) else pair[0]
+
+
+def _order_status_text(value: Any, locale: str | None) -> str:
+    return _map_enum_label(value, locale, _ORDER_STATUS_LABELS)
+
+
+def _payment_review_text(value: Any, locale: str | None) -> str:
+    return _map_enum_label(value, locale, _PAYMENT_REVIEW_LABELS)
+
+
+def _refund_type_text(value: Any, locale: str | None) -> str:
+    return _map_enum_label(value, locale, _REFUND_TYPE_LABELS)
+
+
+def _build_order_not_found_text(payload: Dict[str, Any], locale: str | None) -> str:
+    lookup = payload.get("order_lookup") if isinstance(payload, dict) else None
+    if not isinstance(lookup, dict):
+        return _tr(
+            locale,
+            "❌ <b>Orden no encontrada.</b>",
+            "❌ <b>Order not found.</b>",
+        )
+    min_label = lookup.get("min_label")
+    max_label = lookup.get("max_label")
+    requested_label = lookup.get("requested_label")
+    total = lookup.get("total")
+    if not min_label or not max_label or int(total or 0) <= 0:
+        return _tr(
+            locale,
+            "❌ <b>No hay órdenes disponibles todavía.</b>",
+            "❌ <b>There are no available orders yet.</b>",
+        )
+    if requested_label:
+        return _tr(
+            locale,
+            "❌ <b>Orden no existe.</b>\n\n"
+            f"Referencia consultada: <code>{_escape_html(requested_label)}</code>\n"
+            "Solo están disponibles las órdenes de "
+            f"<code>{_escape_html(min_label)}</code> a <code>{_escape_html(max_label)}</code>.",
+            "❌ <b>Order does not exist.</b>\n\n"
+            f"Requested reference: <code>{_escape_html(requested_label)}</code>\n"
+            "Only orders from "
+            f"<code>{_escape_html(min_label)}</code> to <code>{_escape_html(max_label)}</code> are available.",
+        )
+    return _tr(
+        locale,
+        "❌ <b>Orden no existe.</b>\n\n"
+        "Solo están disponibles las órdenes de "
+        f"<code>{_escape_html(min_label)}</code> a <code>{_escape_html(max_label)}</code>.",
+        "❌ <b>Order does not exist.</b>\n\n"
+        "Only orders from "
+        f"<code>{_escape_html(min_label)}</code> to <code>{_escape_html(max_label)}</code> are available.",
+    )
 
 
 def _extract_args(text: str | None) -> str:
@@ -71,6 +202,453 @@ def _fmt_amount(value: Any, digits: int = 2) -> str:
     return f"{number:,.{digits}f}"
 
 
+def _normalize_category_key(raw: Any) -> str:
+    text = str(raw or "").strip().upper()
+    if not text:
+        return ""
+    text = text.replace("-", "_").replace(" ", "_")
+    text = re.sub(r"[^A-Z0-9_]", "", text)
+    return text[:32]
+
+
+def _category_button_label(category_key: str, locale: str | None = "es") -> str:
+    normalized = _normalize_category_key(category_key)
+    if not normalized:
+        return _tr(locale, "📦 Categoría", "📦 Category")
+    known = _PRODUCT_CATEGORY_LABELS.get(normalized)
+    if known:
+        return known
+    pretty = normalized.replace("_", " ").title()
+    return f"📦 {pretty}"
+
+
+async def _list_active_product_categories(page_size: int = 100) -> list[str]:
+    page = 1
+    seen: set[str] = set()
+    while True:
+        response = await api_client.list_products(
+            page=page,
+            page_size=page_size,
+            telegram_id=None,
+        )
+        items = response.get("items", [])
+        if not items:
+            break
+        for item in items:
+            key = _normalize_category_key(item.get("category_key"))
+            if key:
+                seen.add(key)
+        total_pages = int(response.get("total_pages") or 1)
+        if page >= total_pages:
+            break
+        page += 1
+
+    ordered = [key for key in _PRODUCT_CATEGORY_KEYS if key in seen]
+    extras = sorted(key for key in seen if key not in _PRODUCT_CATEGORY_KEY_SET)
+    if ordered or extras:
+        return ordered + extras
+    return list(_PRODUCT_CATEGORY_KEYS)
+
+
+def _normalize_locale_code(locale: str | None) -> str:
+    return "en" if _is_en(locale) else "es"
+
+
+def _default_home_buttons(locale: str) -> list[Dict[str, str]]:
+    normalized = _normalize_locale_code(locale)
+    return [
+        {"label": t(normalized, label_key), "action": action}
+        for label_key, action in _HOME_DEFAULT_BUTTON_KEYS
+    ]
+
+
+def _pair_home_buttons(buttons: list[Dict[str, str]]) -> list[list[Dict[str, str]]]:
+    rows: list[list[Dict[str, str]]] = []
+    for button in buttons:
+        if rows and len(rows[-1]) < 2:
+            rows[-1].append(button)
+        else:
+            rows.append([button])
+    return rows
+
+
+def _default_home_button_rows(locale: str) -> list[list[Dict[str, str]]]:
+    return _pair_home_buttons(_default_home_buttons(locale))
+
+
+def _normalize_home_button(raw: Any) -> Optional[Dict[str, str]]:
+    if not isinstance(raw, dict):
+        return None
+    label = str(raw.get("label") or raw.get("text") or "").strip()
+    action = str(raw.get("action") or raw.get("callback_data") or "").strip()
+    url = str(raw.get("url") or "").strip()
+    if not label:
+        return None
+    label = label[:64]
+    if url:
+        return {"label": label, "url": url}
+    if not action:
+        return None
+    return {"label": label, "action": action[:64]}
+
+
+def _clone_home_button_rows(rows: Any) -> list[list[Dict[str, str]]]:
+    cloned: list[list[Dict[str, str]]] = []
+    if not isinstance(rows, list):
+        return cloned
+    flat_mode: list[Dict[str, str]] = []
+    for row in rows:
+        if isinstance(row, dict):
+            parsed = _normalize_home_button(row)
+            if parsed:
+                flat_mode.append(parsed)
+            continue
+        if not isinstance(row, list):
+            continue
+        clean_row: list[Dict[str, str]] = []
+        for button in row:
+            parsed = _normalize_home_button(button)
+            if parsed:
+                clean_row.append(parsed)
+            if len(clean_row) == 2:
+                break
+        if clean_row:
+            cloned.append(clean_row)
+    if not cloned and flat_mode:
+        cloned = _pair_home_buttons(flat_mode)
+    return cloned
+
+
+def _trim_home_button_rows(rows: list[list[Dict[str, str]]]) -> list[list[Dict[str, str]]]:
+    trimmed: list[list[Dict[str, str]]] = []
+    count = 0
+    for row in rows:
+        if count >= _HOME_BUTTON_LIMIT:
+            break
+        clean_row: list[Dict[str, str]] = []
+        for button in row[:2]:
+            if count >= _HOME_BUTTON_LIMIT:
+                break
+            clean_row.append(button)
+            count += 1
+        if clean_row:
+            trimmed.append(clean_row)
+    return trimmed
+
+
+def _default_home_layout() -> Dict[str, Any]:
+    return {
+        "es": {
+            "text": t("es", "home_welcome"),
+            "buttons": _default_home_button_rows("es"),
+        },
+        "en": {
+            "text": t("en", "home_welcome"),
+            "buttons": _default_home_button_rows("en"),
+        },
+    }
+
+
+def _normalize_home_buttons(raw_buttons: Any, locale: str) -> list[list[Dict[str, str]]]:
+    fallback = _default_home_button_rows(locale)
+    if not isinstance(raw_buttons, list):
+        return fallback
+
+    row_mode: list[list[Dict[str, str]]] = []
+    flat_mode: list[Dict[str, str]] = []
+    for raw in raw_buttons:
+        if isinstance(raw, list):
+            row: list[Dict[str, str]] = []
+            for nested in raw:
+                parsed = _normalize_home_button(nested)
+                if parsed:
+                    row.append(parsed)
+                if len(row) == 2:
+                    break
+            if row:
+                row_mode.append(row)
+            continue
+        parsed = _normalize_home_button(raw)
+        if parsed:
+            flat_mode.append(parsed)
+
+    if row_mode:
+        for button in flat_mode:
+            if row_mode and len(row_mode[-1]) < 2:
+                row_mode[-1].append(button)
+            else:
+                row_mode.append([button])
+        normalized_rows = _trim_home_button_rows(row_mode)
+        return normalized_rows or fallback
+
+    normalized_rows = _trim_home_button_rows(_pair_home_buttons(flat_mode))
+    return normalized_rows or fallback
+
+
+def _flatten_home_buttons(rows: list[list[Dict[str, str]]]) -> list[Dict[str, str]]:
+    flat: list[Dict[str, str]] = []
+    for row in rows:
+        for button in row:
+            flat.append(button)
+    return flat
+
+
+def _find_home_button_slot(
+    rows: list[list[Dict[str, str]]], index: int
+) -> Optional[tuple[int, int]]:
+    current = 0
+    for row_index, row in enumerate(rows):
+        for col_index, _ in enumerate(row):
+            current += 1
+            if current == index:
+                return row_index, col_index
+    return None
+
+
+def _remove_home_button_by_index(
+    rows: list[list[Dict[str, str]]], index: int
+) -> tuple[list[list[Dict[str, str]]], Optional[Dict[str, str]]]:
+    mutable_rows = _clone_home_button_rows(rows)
+    slot = _find_home_button_slot(mutable_rows, index)
+    if not slot:
+        return mutable_rows, None
+    row_index, col_index = slot
+    button = mutable_rows[row_index].pop(col_index)
+    if not mutable_rows[row_index]:
+        mutable_rows.pop(row_index)
+    return mutable_rows, button
+
+
+def _insert_home_button(
+    rows: list[list[Dict[str, str]]],
+    button: Dict[str, str],
+    *,
+    row_number: Optional[int] = None,
+    position: Optional[int] = None,
+    force_solo_row: bool = False,
+    overflow_mode: str = "shift",
+) -> tuple[list[list[Dict[str, str]]], Optional[str]]:
+    mutable_rows = _clone_home_button_rows(rows)
+    if force_solo_row:
+        target_row = row_number or (len(mutable_rows) + 1)
+        target_row = max(1, min(target_row, len(mutable_rows) + 1))
+        mutable_rows.insert(target_row - 1, [button])
+        return _trim_home_button_rows(mutable_rows), None
+
+    if row_number is None and position is None:
+        if mutable_rows and len(mutable_rows[-1]) < 2:
+            mutable_rows[-1].append(button)
+        else:
+            mutable_rows.append([button])
+        return _trim_home_button_rows(mutable_rows), None
+
+    mode = str(overflow_mode or "shift").strip().lower()
+    if mode != "strict":
+        flat = _flatten_home_buttons(mutable_rows)
+        target_row = row_number or len(mutable_rows)
+        target_row = max(1, min(target_row, len(mutable_rows) + 1))
+        if target_row == len(mutable_rows) + 1:
+            insert_index = len(flat)
+        else:
+            row_start = sum(len(row) for row in mutable_rows[: target_row - 1])
+            row_len = len(mutable_rows[target_row - 1])
+            if position is None:
+                insert_index = row_start + row_len
+            else:
+                target_position = 1 if position <= 1 else 2
+                insert_index = row_start + min(target_position - 1, row_len)
+        flat.insert(insert_index, button)
+        return _trim_home_button_rows(_pair_home_buttons(flat)), None
+
+    target_row = row_number or len(mutable_rows)
+    target_row = max(1, min(target_row, len(mutable_rows) + 1))
+    if target_row == len(mutable_rows) + 1:
+        mutable_rows.append([button])
+        return _trim_home_button_rows(mutable_rows), None
+
+    row = mutable_rows[target_row - 1]
+    if len(row) >= 2:
+        return mutable_rows, "ROW_FULL"
+    if position is None:
+        row.append(button)
+        return _trim_home_button_rows(mutable_rows), None
+    target_position = 1 if position <= 1 else 2
+    insert_at = min(target_position - 1, len(row))
+    row.insert(insert_at, button)
+    return _trim_home_button_rows(mutable_rows), None
+
+
+def _parse_positive_int_or_none(value: str) -> Optional[int]:
+    try:
+        parsed = int(str(value).strip())
+    except (TypeError, ValueError):
+        return None
+    return parsed if parsed > 0 else None
+
+
+def _parse_home_overflow_mode(value: str | None) -> Optional[str]:
+    raw = str(value or "").strip().lower()
+    if not raw:
+        return "shift"
+    if raw in {"correr", "shift", "run", "auto"}:
+        return "shift"
+    if raw in {"estricto", "strict"}:
+        return "strict"
+    return None
+
+
+def _normalize_home_layout(layout: Any) -> Dict[str, Any]:
+    defaults = _default_home_layout()
+    normalized: Dict[str, Any] = {}
+    source = layout if isinstance(layout, dict) else {}
+    for locale_code in _HOME_LAYOUT_LOCALES:
+        fallback = defaults[locale_code]
+        locale_payload = source.get(locale_code)
+        if not isinstance(locale_payload, dict):
+            locale_payload = {}
+        text_value = str(locale_payload.get("text") or "").strip()
+        normalized[locale_code] = {
+            "text": text_value or fallback["text"],
+            "buttons": _normalize_home_buttons(locale_payload.get("buttons"), locale_code),
+        }
+    return normalized
+
+
+def _home_locale_title(locale_target: str, locale_admin: str | None) -> str:
+    return _tr(
+        locale_admin,
+        "Español" if locale_target == "es" else "Inglés",
+        "Spanish" if locale_target == "es" else "English",
+    )
+
+
+def _format_home_buttons_list(buttons: list[Dict[str, str]]) -> str:
+    rows = _clone_home_button_rows(buttons)
+    lines: list[str] = []
+    index = 0
+    for row_number, row in enumerate(rows, start=1):
+        for col_number, button in enumerate(row, start=1):
+            index += 1
+            label = _escape_html(button.get("label") or "-")
+            action = _escape_html(button.get("action") or f"url:{button.get('url') or ''}")
+            lines.append(
+                f"{index}. [F{row_number}-P{col_number}] {label} → <code>{action}</code>"
+            )
+    return "\n".join(lines) if lines else "-"
+
+
+async def _load_home_layout() -> Dict[str, Any]:
+    try:
+        response = await api_client.admin_get_layout(_HOME_LAYOUT_KEY)
+    except Exception:
+        return _default_home_layout()
+    return _normalize_home_layout(response.get("layout") if isinstance(response, dict) else None)
+
+
+async def _save_home_layout(layout: Dict[str, Any]) -> Dict[str, Any]:
+    response = await api_client.admin_set_layout(_HOME_LAYOUT_KEY, layout)
+    clear_home_layout_cache(_HOME_LAYOUT_KEY)
+    return _normalize_home_layout(response.get("layout") if isinstance(response, dict) else None)
+
+
+def _build_home_locale_keyboard(mode: str, locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🇪🇸 Español", "🇪🇸 Spanish"),
+                    callback_data=f"adminui:homecfg:{mode}:es",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🇺🇸 Inglés", "🇺🇸 English"),
+                    callback_data=f"adminui:homecfg:{mode}:en",
+                ),
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Panel", "⬅️ Panel"), callback_data="adminui:home")],
+        ]
+    )
+
+
+def _build_home_buttons_ops_keyboard(locale_target: str, locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Renombrar", "✏️ Rename"),
+                    callback_data="adminui:homecfg:btnop:rename",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Agregar", "➕ Add"),
+                    callback_data="adminui:homecfg:btnop:add",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🗑 Eliminar", "🗑 Delete"),
+                    callback_data="adminui:homecfg:btnop:delete",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📍 Mover", "📍 Move"),
+                    callback_data="adminui:homecfg:btnop:move",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🧱 Fila sola", "🧱 Solo row"),
+                    callback_data="adminui:homecfg:btnop:solo",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "♻️ Restaurar", "♻️ Reset"),
+                    callback_data=f"adminui:homecfg:btnreset:{locale_target}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔁 Cambiar idioma", "🔁 Change language"),
+                    callback_data="adminui:homecfg:buttons",
+                ),
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Panel", "⬅️ Panel"), callback_data="adminui:home")],
+        ]
+    )
+
+
+def _build_home_buttons_panel_text(
+    layout: Dict[str, Any],
+    locale_target: str,
+    locale_admin: str | None = "es",
+) -> str:
+    locale_data = layout.get(locale_target) or {}
+    buttons = locale_data.get("buttons") if isinstance(locale_data, dict) else []
+    if not isinstance(buttons, list):
+        buttons = []
+    total_buttons = len(_flatten_home_buttons(_clone_home_button_rows(buttons)))
+    title = _home_locale_title(locale_target, locale_admin)
+    return _tr(
+        locale_admin,
+        f"🏠 <b>Botones Home ({title})</b>\n\n"
+        f"Total: <b>{total_buttons}</b> / {_HOME_BUTTON_LIMIT}\n\n"
+        "Botones actuales:\n"
+        f"{_format_home_buttons_list(buttons)}\n\n"
+        "Opciones rápidas:\n"
+        "• Renombrar: <code>numero | nuevo texto</code>\n"
+        "• Agregar: <code>texto | callback_data</code>\n"
+        "• Agregar con posición: <code>texto | callback_data | fila | posicion(1-2) | modo(correr|estricto)</code>\n"
+        "• Mover: <code>numero | fila | posicion(1-2) | modo(correr|estricto)</code>\n"
+        "• Fila sola: <code>numero | fila</code>\n"
+        "• Eliminar: <code>numero</code>",
+        f"🏠 <b>Home Buttons ({title})</b>\n\n"
+        f"Total: <b>{total_buttons}</b> / {_HOME_BUTTON_LIMIT}\n\n"
+        "Current buttons:\n"
+        f"{_format_home_buttons_list(buttons)}\n\n"
+        "Quick formats:\n"
+        "• Rename: <code>number | new label</code>\n"
+        "• Add: <code>label | callback_data</code>\n"
+        "• Add with position: <code>label | callback_data | row | position(1-2) | mode(shift|strict)</code>\n"
+        "• Move: <code>number | row | position(1-2) | mode(shift|strict)</code>\n"
+        "• Solo row: <code>number | row</code>\n"
+        "• Delete: <code>number</code>",
+    )
+
+
 async def _admin_guard(message: Message) -> Optional[str]:
     if not message.from_user:
         return None
@@ -98,43 +676,179 @@ def _admin_http_configured() -> bool:
     return bool(API_TOKEN or ADMIN_API_KEY)
 
 
-def _build_admin_panel_keyboard() -> InlineKeyboardMarkup:
+def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="📋 Pendientes", callback_data="adminui:orders"),
-                InlineKeyboardButton(text="🔎 Ver orden", callback_data="adminui:order"),
-                InlineKeyboardButton(text="✅ Aprobar", callback_data="adminui:approve"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "📋 Pendientes", "📋 Pending"),
+                    callback_data="adminui:orders",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔎 Ver orden", "🔎 View order"),
+                    callback_data="adminui:order",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "✅ Aprobar", "✅ Approve"),
+                    callback_data="adminui:approve",
+                ),
             ],
             [
-                InlineKeyboardButton(text="❌ Rechazar", callback_data="adminui:reject"),
-                InlineKeyboardButton(text="💸 Reembolso", callback_data="adminui:refund"),
-                InlineKeyboardButton(text="🚫 Banear", callback_data="adminui:ban"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "❌ Rechazar", "❌ Reject"),
+                    callback_data="adminui:reject",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💸 Reembolso", "💸 Refund"),
+                    callback_data="adminui:refund",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🚫 Banear", "🚫 Ban"),
+                    callback_data="adminui:ban",
+                ),
             ],
             [
-                InlineKeyboardButton(text="♻️ Desbanear", callback_data="adminui:unban"),
-                InlineKeyboardButton(text="🛠 Mantenimiento", callback_data="adminui:maint"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "♻️ Desbanear", "♻️ Unban"),
+                    callback_data="adminui:unban",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🛠 Mantenimiento", "🛠 Maintenance"),
+                    callback_data="adminui:maint",
+                ),
                 InlineKeyboardButton(text="📣 Broadcast", callback_data="adminui:broadcast"),
             ],
             [
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Agregar prod", "➕ Add product"),
+                    callback_data="adminui:product:add",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🗑 Eliminar prod", "🗑 Delete product"),
+                    callback_data="adminui:product:delete",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📝 Home texto", "📝 Home text"),
+                    callback_data="adminui:homecfg:text",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎛 Home botones", "🎛 Home buttons"),
+                    callback_data="adminui:homecfg:buttons",
+                ),
+            ],
+            [
                 InlineKeyboardButton(text="📜 Logs", callback_data="adminui:logs"),
-                InlineKeyboardButton(text="📊 Estado", callback_data="adminui:status"),
-                InlineKeyboardButton(text="❓ Ayuda", callback_data="adminui:home"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "📊 Estado", "📊 Status"),
+                    callback_data="adminui:status",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "❓ Ayuda", "❓ Help"),
+                    callback_data="adminui:home",
+                ),
             ],
         ]
     )
 
 
-def _build_admin_panel_text() -> str:
-    return (
-        "🧩 <b>Panel Admin del Bot</b>\n\n"
-        "Selecciona una acción desde los botones.\n\n"
-        "📌 Todo el flujo está guiado paso a paso.\n"
-        "🛑 Puedes cancelar en cualquier momento con <code>/cancel</code>."
+def _build_back_to_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ]
+        ]
     )
 
 
-def _build_orders_limit_keyboard() -> InlineKeyboardMarkup:
+async def _build_delete_categories_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    category_keys = await _list_active_product_categories()
+    rows: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    for category_key in category_keys:
+        current_row.append(
+            InlineKeyboardButton(
+                text=_category_button_label(category_key, locale),
+                callback_data=f"adminui:product:delete:cat:{category_key}",
+            )
+        )
+        if len(current_row) == 2:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                callback_data="adminui:home",
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_delete_products_keyboard(
+    items: list[Dict[str, Any]],
+    category_key: str,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    for index, item in enumerate(items, start=1):
+        product_id = str(item.get("id") or "").strip()
+        if not product_id:
+            continue
+        current_row.append(
+            InlineKeyboardButton(
+                text=str(index),
+                callback_data=f"adminui:product:delete:item:{product_id}",
+            )
+        )
+        if len(current_row) == 5:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr(locale, "🔄 Refrescar", "🔄 Refresh"),
+                callback_data=f"adminui:product:delete:cat:{category_key}",
+            ),
+            InlineKeyboardButton(
+                text=_tr(locale, "↩️ Categorías", "↩️ Categories"),
+                callback_data="adminui:product:delete",
+            ),
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                callback_data="adminui:home",
+            ),
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_admin_panel_text(locale: str | None = "es") -> str:
+    return _tr(
+        locale,
+        "🧩 <b>Panel Admin del Bot</b>\n\n"
+        "Selecciona una acción desde los botones.\n\n"
+        "📌 Todo el flujo está guiado paso a paso.\n"
+        "🛑 Puedes cancelar en cualquier momento con <code>/cancel</code>.",
+        "🧩 <b>Bot Admin Panel</b>\n\n"
+        "Choose an action from the buttons.\n\n"
+        "📌 The full flow is guided step by step.\n"
+        "🛑 You can cancel anytime with <code>/cancel</code>.",
+    )
+
+
+def _build_orders_limit_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -144,124 +858,302 @@ def _build_orders_limit_keyboard() -> InlineKeyboardMarkup:
             ],
             [
                 InlineKeyboardButton(text="30", callback_data="adminui:orders:list:30"),
-                InlineKeyboardButton(text="⬅️ Panel", callback_data="adminui:home"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
             ],
         ]
     )
 
 
-def _build_maint_keyboard() -> InlineKeyboardMarkup:
+def _build_maint_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(text="🟢 ON", callback_data="adminui:maint:set:on"),
-                InlineKeyboardButton(text="🔴 OFF", callback_data="adminui:maint:set:off"),
-                InlineKeyboardButton(text="⬅️ Panel", callback_data="adminui:home"),
+                InlineKeyboardButton(
+                    text=f"🟢 {_tr(locale, 'ACTIVO', 'ON')}",
+                    callback_data="adminui:maint:set:on",
+                ),
+                InlineKeyboardButton(
+                    text=f"🔴 {_tr(locale, 'INACTIVO', 'OFF')}",
+                    callback_data="adminui:maint:set:off",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
             ]
         ]
     )
 
 
-def _build_logs_keyboard() -> InlineKeyboardMarkup:
+def _build_logs_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text="Payments 10", callback_data="adminui:logs:list:payments:10"
+                    text=_tr(locale, "Pagos 10", "Payments 10"),
+                    callback_data="adminui:logs:list:payments:10",
                 ),
                 InlineKeyboardButton(
-                    text="Errors 10", callback_data="adminui:logs:list:errors:10"
+                    text=_tr(locale, "Errores 10", "Errors 10"),
+                    callback_data="adminui:logs:list:errors:10",
                 ),
                 InlineKeyboardButton(
-                    text="Support 10", callback_data="adminui:logs:list:support:10"
+                    text=_tr(locale, "Soporte 10", "Support 10"),
+                    callback_data="adminui:logs:list:support:10",
                 ),
             ],
             [
                 InlineKeyboardButton(
-                    text="Payments 20", callback_data="adminui:logs:list:payments:20"
+                    text=_tr(locale, "Pagos 20", "Payments 20"),
+                    callback_data="adminui:logs:list:payments:20",
                 ),
                 InlineKeyboardButton(
-                    text="Errors 20", callback_data="adminui:logs:list:errors:20"
+                    text=_tr(locale, "Errores 20", "Errors 20"),
+                    callback_data="adminui:logs:list:errors:20",
                 ),
                 InlineKeyboardButton(
-                    text="Support 20", callback_data="adminui:logs:list:support:20"
+                    text=_tr(locale, "Soporte 20", "Support 20"),
+                    callback_data="adminui:logs:list:support:20",
                 ),
             ],
             [
-                InlineKeyboardButton(text="⬅️ Panel", callback_data="adminui:home"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
             ],
         ]
     )
 
 
-def _guide_text(action: str) -> str:
+def _guide_text(action: str, locale: str | None = "es") -> str:
     guides = {
         "orders": (
-            "📋 <b>Órdenes Pendientes</b>\n\n"
-            "Visualiza las órdenes que están en espera de revisión de pago.\n\n"
-            "✍️ Ejemplo en texto:\n"
-            "<code>/orders pending 10</code>\n\n"
-            "🎯 Ahora elige cuántas quieres listar:"
+            _tr(
+                locale,
+                "📋 <b>Órdenes Pendientes</b>\n\n"
+                "Visualiza las órdenes que están en espera de revisión de pago.\n\n"
+                "✍️ Ejemplo en texto:\n"
+                "<code>/orders pending 10</code>\n\n"
+                "🎯 Ahora elige cuántas quieres listar:",
+                "📋 <b>Pending Orders</b>\n\n"
+                "View orders waiting for payment review.\n\n"
+                "✍️ Text example:\n"
+                "<code>/orders pending 10</code>\n\n"
+                "🎯 Now choose how many to list:",
+            )
         ),
         "order": (
-            "🔎 <b>Ver Orden</b>\n"
-            "Envía ahora el <b>order number</b> corto o el UUID.\n\n"
-            "✍️ Ejemplos:\n"
-            "<code>00004</code>\n"
-            "<code>47f78e05-7086-4504-afb4-04da86acc2d9</code>"
+            _tr(
+                locale,
+                "🔎 <b>Ver Orden</b>\n"
+                "Envía ahora el <b>número de orden</b> corto o el UUID.\n\n"
+                "✍️ Ejemplos:\n"
+                "<code>00004</code>\n"
+                "<code>47f78e05-7086-4504-afb4-04da86acc2d9</code>",
+                "🔎 <b>View Order</b>\n"
+                "Send the short <b>order number</b> or the UUID.\n\n"
+                "✍️ Examples:\n"
+                "<code>00004</code>\n"
+                "<code>47f78e05-7086-4504-afb4-04da86acc2d9</code>",
+            )
         ),
         "approve": (
-            "✅ <b>Aprobar Orden</b>\n"
-            "Envía ahora el order number o UUID para aprobar la orden.\n\n"
-            "✍️ Ejemplo:\n"
-            "<code>00004</code>"
+            _tr(
+                locale,
+                "✅ <b>Aprobar Orden</b>\n"
+                "Envía ahora el número de orden o UUID para aprobar la orden.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>00004</code>",
+                "✅ <b>Approve Order</b>\n"
+                "Send the order number or UUID to approve the order.\n\n"
+                "✍️ Example:\n"
+                "<code>00004</code>",
+            )
         ),
         "reject": (
-            "❌ <b>Rechazar Orden</b>\n"
-            "Envía ahora el order number o UUID para rechazar la orden.\n\n"
-            "✍️ Ejemplo:\n"
-            "<code>00004</code>"
+            _tr(
+                locale,
+                "❌ <b>Rechazar Orden</b>\n"
+                "Envía ahora el número de orden o UUID para rechazar la orden.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>00004</code>",
+                "❌ <b>Reject Order</b>\n"
+                "Send the order number or UUID to reject the order.\n\n"
+                "✍️ Example:\n"
+                "<code>00004</code>",
+            )
         ),
         "refund": (
-            "💸 <b>Reembolso</b>\n"
-            "Envía ahora el order number o UUID para iniciar reembolso.\n\n"
-            "✍️ Ejemplo:\n"
-            "<code>00004</code>"
+            _tr(
+                locale,
+                "💸 <b>Reembolso</b>\n"
+                "Envía ahora el número de orden o UUID para iniciar reembolso.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>00004</code>",
+                "💸 <b>Refund</b>\n"
+                "Send the order number or UUID to start the refund.\n\n"
+                "✍️ Example:\n"
+                "<code>00004</code>",
+            )
         ),
         "ban": (
-            "🚫 <b>Banear Usuario</b>\n"
-            "Envía ahora el telegram_id del usuario a banear.\n\n"
-            "✍️ Ejemplo:\n"
-            "<code>7621162350</code>"
+            _tr(
+                locale,
+                "🚫 <b>Banear Usuario</b>\n"
+                "Envía ahora el telegram_id del usuario a banear.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>7621162350</code>",
+                "🚫 <b>Ban User</b>\n"
+                "Send the user's telegram_id to ban.\n\n"
+                "✍️ Example:\n"
+                "<code>7621162350</code>",
+            )
         ),
         "unban": (
-            "♻️ <b>Desbanear Usuario</b>\n"
-            "Envía ahora el telegram_id del usuario a desbanear.\n\n"
-            "✍️ Ejemplo:\n"
-            "<code>7621162350</code>"
+            _tr(
+                locale,
+                "♻️ <b>Desbanear Usuario</b>\n"
+                "Envía ahora el telegram_id del usuario a desbanear.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>7621162350</code>",
+                "♻️ <b>Unban User</b>\n"
+                "Send the user's telegram_id to unban.\n\n"
+                "✍️ Example:\n"
+                "<code>7621162350</code>",
+            )
         ),
         "maint": (
-            "🛠 <b>Mantenimiento</b>\n"
-            "Activa o desactiva el mantenimiento global.\n\n"
-            "🎯 Selecciona ON u OFF:"
+            _tr(
+                locale,
+                "🛠 <b>Mantenimiento</b>\n"
+                "Activa o desactiva el mantenimiento global.\n\n"
+                "🎯 Selecciona ACTIVO o INACTIVO:",
+                "🛠 <b>Maintenance</b>\n"
+                "Enable or disable global maintenance.\n\n"
+                "🎯 Choose ON or OFF:",
+            )
         ),
         "broadcast": (
-            "📣 <b>Broadcast</b>\n"
-            "Envía ahora el texto del mensaje masivo.\n\n"
-            "✍️ Ejemplo:\n"
-            "<code>Nuevo aviso importante para todos los usuarios.</code>"
+            _tr(
+                locale,
+                "📣 <b>Broadcast</b>\n"
+                "Envía ahora el texto del mensaje masivo.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>Nuevo aviso importante para todos los usuarios.</code>",
+                "📣 <b>Broadcast</b>\n"
+                "Send the mass-message text now.\n\n"
+                "✍️ Example:\n"
+                "<code>Important update for all users.</code>",
+            )
         ),
         "logs": (
-            "📜 <b>Logs</b>\n"
-            "Consulta eventos recientes por categoría.\n\n"
-            "🎯 Selecciona categoría y cantidad:"
+            _tr(
+                locale,
+                "📜 <b>Logs</b>\n"
+                "Consulta eventos recientes por categoría.\n\n"
+                "🎯 Selecciona categoría y cantidad:",
+                "📜 <b>Logs</b>\n"
+                "Check recent events by category.\n\n"
+                "🎯 Choose category and amount:",
+            )
         ),
         "status": (
-            "📊 <b>Estado</b>\n"
-            "Consulta el estado general de la API y los contadores principales."
+            _tr(
+                locale,
+                "📊 <b>Estado</b>\n"
+                "Consulta el estado general de la API y los contadores principales.",
+                "📊 <b>Status</b>\n"
+                "Check API health and the main counters.",
+            )
+        ),
+        "product_add": (
+            _tr(
+                locale,
+                "➕ <b>Agregar Producto</b>\n\n"
+                "Paso 1/3 · Envía en una sola línea este formato:\n"
+                "<code>nombre | precio | categoria</code>\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>Netflix Premium | 9.99 | TIENDA</code>\n\n"
+                "Puedes usar categorías por defecto o nuevas.\n"
+                "Ejemplo nueva: <code>Canva Pro | 5 | cuentas</code> → <code>CUENTAS</code>\n"
+                "Si creas botón Home para esa categoría: <code>category:page:cuentas</code>\n"
+                "Si no envías categoría, se usa <code>TIENDA</code>.",
+                "➕ <b>Add Product</b>\n\n"
+                "Step 1/3 · Send this format in one line:\n"
+                "<code>name | price | category</code>\n\n"
+                "✍️ Example:\n"
+                "<code>Netflix Premium | 9.99 | STORE</code>\n\n"
+                "You can use default or custom categories.\n"
+                "Custom example: <code>Canva Pro | 5 | accounts</code> → <code>ACCOUNTS</code>\n"
+                "If you create a Home button for it: <code>category:page:accounts</code>\n"
+                "If no category is sent, <code>TIENDA</code> is used.",
+            )
+        ),
+        "product_delete": (
+            _tr(
+                locale,
+                "🗑 <b>Eliminar Producto</b>\n\n"
+                "Selecciona primero la categoría.",
+                "🗑 <b>Delete Product</b>\n\n"
+                "Select the category first.",
+            )
         ),
     }
-    return guides.get(action, _build_admin_panel_text())
+    return guides.get(action, _build_admin_panel_text(locale))
+
+
+async def _edit_panel_message(
+    message: Message,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+) -> None:
+    try:
+        await message.edit_text(text, reply_markup=reply_markup, parse_mode="HTML")
+    except TelegramBadRequest as exc:
+        detail = str(exc).lower()
+        if "message is not modified" in detail:
+            return
+        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception:
+        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+async def _edit_state_panel_message(
+    message: Message,
+    state: FSMContext,
+    text: str,
+    reply_markup: Optional[InlineKeyboardMarkup] = None,
+) -> None:
+    data = await state.get_data()
+    chat_id = data.get("admin_ui_panel_chat_id")
+    message_id = data.get("admin_ui_panel_message_id")
+    if chat_id and message_id:
+        try:
+            await message.bot.edit_message_text(
+                text=text,
+                chat_id=int(chat_id),
+                message_id=int(message_id),
+                reply_markup=reply_markup,
+                parse_mode="HTML",
+            )
+            return
+        except TelegramBadRequest as exc:
+            if "message is not modified" in str(exc).lower():
+                return
+        except Exception:
+            pass
+    await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+
+
+async def _delete_message_safe(message: Message) -> None:
+    try:
+        await message.delete()
+    except Exception:
+        pass
 
 
 async def _ensure_admin_http(message: Message) -> bool:
@@ -271,38 +1163,67 @@ async def _ensure_admin_http(message: Message) -> bool:
     return False
 
 
-async def _send_status(message: Message) -> None:
+def _build_status_text(
+    health: Dict[str, Any],
+    maintenance: Dict[str, Any],
+    counts: Dict[str, Any],
+    locale: str | None = "es",
+) -> str:
+    waiting = counts.get("counts", {}).get("WAITING_PAYMENT", 0)
+    paid = counts.get("counts", {}).get("PAID", 0)
+    delivered = counts.get("counts", {}).get("DELIVERED", 0)
+    cancelled = counts.get("counts", {}).get("CANCELLED", 0)
+    api_state = "OK" if health.get("ok") else "ERROR"
+    maint_state = _tr(locale, "ACTIVO", "ON") if maintenance.get("active") else _tr(locale, "INACTIVO", "OFF")
+    return _tr(
+        locale,
+        "📊 <b>Estado del Sistema</b>\n\n"
+        f"🧠 API: <b>{api_state}</b>\n"
+        f"🛠 Mantenimiento: <b>{maint_state}</b>\n\n"
+        "🧾 <b>Órdenes</b>\n"
+        f"• ⏳ Pendientes de pago: <b>{waiting}</b>\n"
+        f"• ✅ Pagadas: <b>{paid}</b>\n"
+        f"• 📦 Entregadas: <b>{delivered}</b>\n"
+        f"• ❌ Canceladas: <b>{cancelled}</b>",
+        "📊 <b>System Status</b>\n\n"
+        f"🧠 API: <b>{api_state}</b>\n"
+        f"🛠 Maintenance: <b>{maint_state}</b>\n\n"
+        "🧾 <b>Orders</b>\n"
+        f"• ⏳ Waiting payment: <b>{waiting}</b>\n"
+        f"• ✅ Paid: <b>{paid}</b>\n"
+        f"• 📦 Delivered: <b>{delivered}</b>\n"
+        f"• ❌ Cancelled: <b>{cancelled}</b>",
+    )
+
+
+async def _fetch_status_text(locale: str | None = "es") -> str:
     health, maintenance, counts = await asyncio.gather(
         api_client.ping_health(),
         api_client.admin_get_maintenance(),
         api_client.admin_get_order_status_counts(),
     )
-    waiting = counts.get("counts", {}).get("WAITING_PAYMENT", 0)
-    paid = counts.get("counts", {}).get("PAID", 0)
-    delivered = counts.get("counts", {}).get("DELIVERED", 0)
-    cancelled = counts.get("counts", {}).get("CANCELLED", 0)
-    text = (
-        "📊 <b>Estado del Sistema</b>\n\n"
-        f"🧠 API: <b>{'OK' if health.get('ok') else 'ERROR'}</b>\n"
-        f"🛠 Mantenimiento: <b>{'ON' if maintenance.get('active') else 'OFF'}</b>\n\n"
-        "🧾 <b>Órdenes</b>\n"
-        f"• ⏳ Pendientes de pago: <b>{waiting}</b>\n"
-        f"• ✅ Pagadas: <b>{paid}</b>\n"
-        f"• 📦 Entregadas: <b>{delivered}</b>\n"
-        f"• ❌ Canceladas: <b>{cancelled}</b>"
-    )
-    await message.answer(text, parse_mode="HTML")
+    return _build_status_text(health, maintenance, counts, locale)
 
 
-async def _send_orders_pending(message: Message, limit: int) -> None:
+async def _build_orders_pending_text(limit: int, locale: str | None = "es") -> str:
     response = await api_client.admin_list_orders(
         status="WAITING_PAYMENT", page=1, page_size=limit
     )
     items = response.get("items", [])
     if not items:
-        await message.answer("✅ <b>No hay órdenes pendientes</b> en este momento.", parse_mode="HTML")
-        return
-    lines = [f"📋 <b>Órdenes pendientes</b>: <b>{len(items)}</b>\n"]
+        return _tr(
+            locale,
+            "✅ <b>No hay órdenes pendientes</b> en este momento.",
+            "✅ <b>There are no pending orders</b> right now.",
+        )
+
+    lines = [
+        _tr(
+            locale,
+            f"📋 <b>Órdenes pendientes</b>: <b>{len(items)}</b>\n",
+            f"📋 <b>Pending orders</b>: <b>{len(items)}</b>\n",
+        )
+    ]
     for index, row in enumerate(items, start=1):
         order_number = row.get("order_number")
         order_label = (
@@ -318,7 +1239,310 @@ async def _send_orders_pending(message: Message, limit: int) -> None:
             f"   👤 @{username}\n"
             f"   🕒 {_fmt_dt(row.get('created_at'))}\n"
         )
-    await message.answer("\n".join(lines), parse_mode="HTML")
+    return "\n".join(lines)
+
+
+async def _build_logs_text(category: str, limit: int, locale: str | None = "es") -> str:
+    data = await api_client.admin_get_logs(category=category, limit=limit)
+    items = data.get("items", [])
+    if not items:
+        return _tr(
+            locale,
+            f"ℹ️ <b>Sin registros</b> en la categoría <code>{_escape_html(category)}</code>.",
+            f"ℹ️ <b>No records</b> in category <code>{_escape_html(category)}</code>.",
+        )
+
+    lines = [f"📚 <b>Logs</b> · <code>{_escape_html(category)}</code> · <b>{len(items)}</b>\n"]
+    for row in items:
+        created = _fmt_dt(row.get("created_at"))
+        action = _escape_html(row.get("action") or row.get("kind") or "-")
+        ref_id = _escape_html(row.get("ref_id") or row.get("entity_id") or "-")
+        message_text = _escape_html((row.get("message") or "").strip().replace("\n", " "))
+        message_short = message_text[:120] if message_text else ""
+        lines.append(
+            f"• 🕒 {created}\n"
+            f"  ⚙️ {action}\n"
+            f"  🆔 <code>{ref_id}</code>"
+            + (f"\n  📝 {message_short}" if message_short else "")
+            + "\n"
+        )
+    return "\n".join(lines)
+
+
+async def _build_product_delete_view(
+    category_key: str,
+    header: str | None = None,
+    page_size: int = 50,
+    locale: str | None = "es",
+) -> tuple[str, InlineKeyboardMarkup]:
+    category_key = _normalize_category_key(category_key) or "TIENDA"
+    page = 1
+    all_items: list[Dict[str, Any]] = []
+    while True:
+        response = await api_client.list_products(page=page, page_size=50, telegram_id=None)
+        batch = response.get("items", [])
+        if not batch:
+            break
+        all_items.extend(batch)
+        total_pages = int(response.get("total_pages") or 1)
+        if page >= total_pages:
+            break
+        page += 1
+
+    items = [
+        item
+        for item in all_items
+        if _normalize_category_key(item.get("category_key")) == category_key
+    ][:page_size]
+
+    if not items:
+        base_text = _tr(
+            locale,
+            f"🗑 <b>Eliminar Producto · {_escape_html(category_key)}</b>\n\n"
+            "No hay productos activos en esta categoría.",
+            f"🗑 <b>Delete Product · {_escape_html(category_key)}</b>\n\n"
+            "There are no active products in this category.",
+        )
+        if header:
+            base_text = f"{header}\n\n{base_text}"
+        return base_text, await _build_delete_categories_keyboard(locale)
+
+    lines = [_tr(
+        locale,
+        f"🗑 <b>Eliminar Producto · {_escape_html(category_key)}</b>\n",
+        f"🗑 <b>Delete Product · {_escape_html(category_key)}</b>\n",
+    ), _tr(locale, "Selecciona uno para desactivarlo:\n", "Select one to deactivate:\n")]
+    for index, item in enumerate(items, start=1):
+        name = _escape_html(item.get("name") or "Producto")
+        lines.append(f"{index}. {name}")
+    text = "\n".join(lines)
+    if header:
+        text = f"{header}\n\n{text}"
+    return text, _build_delete_products_keyboard(items, category_key, locale)
+
+
+def _build_product_create_payload(raw_text: str, locale: str | None = "es") -> Dict[str, Any]:
+    parts = [part.strip() for part in raw_text.split("|")]
+    if len(parts) < 2:
+        raise ValueError(
+            _tr(
+                locale,
+                "Formato inválido. Usa: <code>nombre | precio | categoria</code>",
+                "Invalid format. Use: <code>name | price | category</code>",
+            )
+        )
+
+    name = parts[0]
+    if not name:
+        raise ValueError(_tr(locale, "El nombre no puede estar vacío.", "Name cannot be empty."))
+
+    price_raw = parts[1].replace(",", ".")
+    try:
+        price = float(price_raw)
+    except ValueError as exc:
+        raise ValueError(_tr(locale, "El precio debe ser numérico.", "Price must be numeric.")) from exc
+
+    if price < 0:
+        raise ValueError(_tr(locale, "El precio no puede ser negativo.", "Price cannot be negative."))
+
+    raw_category = parts[2] if len(parts) > 2 else ""
+    if raw_category:
+        category = _normalize_category_key(raw_category)
+        if not category:
+            raise ValueError(
+                _tr(
+                    locale,
+                    "Categoría inválida. Usa letras/números y guion bajo.",
+                    "Invalid category. Use letters/numbers and underscore.",
+                )
+            )
+    else:
+        category = "TIENDA"
+
+    return {
+        "display_name": name,
+        "price": round(price, 2),
+        "category_key": category,
+        "stock_mode": "SIMPLE",
+        "show_stock": True,
+        "unique_purchase": False,
+        "out_of_stock": False,
+        "delivery_type": "TEXT",
+        "delivery_payload": {"text": ""},
+        "description": "",
+        "image_url": None,
+    }
+
+
+def _build_product_description(description_text: str, locale: str | None = "es") -> str:
+    lines = [line.strip() for line in description_text.splitlines() if line.strip()]
+    if not lines:
+        raise ValueError(_tr(locale, "La descripcion no puede estar vacia.", "Description cannot be empty."))
+    if len(lines) > 8:
+        raise ValueError(_tr(locale, "La descripcion admite maximo 8 lineas.", "Description allows up to 8 lines."))
+    return "\n".join(lines)
+
+
+def _build_product_created_text(product: Dict[str, Any], locale: str | None = "es") -> str:
+    code = _escape_html(product.get("code") or "-")
+    name = _escape_html(product.get("name") or "-")
+    category = _escape_html(product.get("category_key") or "-")
+    product_id = _escape_html(product.get("id"))
+    price = _fmt_amount(product.get("price"))
+    return _tr(
+        locale,
+        "✅ <b>Producto creado</b>\n\n"
+        f"🏷 Código: <b>{code}</b>\n"
+        f"📦 Nombre: <b>{name}</b>\n"
+        f"🧩 Categoría: <b>{category}</b>\n"
+        f"💵 Precio: <b>${price}</b>\n"
+        f"🆔 ID: <code>{product_id}</code>",
+        "✅ <b>Product created</b>\n\n"
+        f"🏷 Code: <b>{code}</b>\n"
+        f"📦 Name: <b>{name}</b>\n"
+        f"🧩 Category: <b>{category}</b>\n"
+        f"💵 Price: <b>${price}</b>\n"
+        f"🆔 ID: <code>{product_id}</code>",
+    )
+
+
+async def _build_order_detail_text(order_ref: str, locale: str | None = "es") -> str:
+    data = await api_client.admin_get_order(order_ref)
+    order = data.get("order", {})
+    user = data.get("user", {})
+    payment = data.get("payment") or {}
+    totals = data.get("totals") or {}
+    local_total = data.get("local_total") or {}
+    items = data.get("items") or []
+
+    item_lines = []
+    for item in items[:5]:
+        name = _escape_html(item.get("name") or "-")
+        qty = item.get("qty") or 1
+        total = item.get("line_total_usd")
+        if total is None:
+            total = item.get("unit_price_usd") or 0
+        item_lines.append(f"• {name} x{qty} — <b>${_fmt_amount(total)}</b>")
+    items_block = "\n".join(item_lines) if item_lines else _tr(locale, "- Sin items", "- No items")
+
+    order_number = order.get("order_number")
+    order_number_text = str(order_number).zfill(5) if order_number is not None else "-"
+    markup_percent = totals.get("markup_percent")
+    markup_text = f"{markup_percent}%" if markup_percent is not None else "-"
+
+    return (
+        _tr(locale, "🧾 <b>Detalle de la Orden</b>\n\n", "🧾 <b>Order Detail</b>\n\n")
+        + f"🆔 ID: <code>{_escape_html(order.get('id'))}</code>\n"
+        + f"🏷 {_tr(locale, 'Número', 'Number')}: <b>#{order_number_text}</b>\n"
+        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_text(order.get('status'), locale))}</b>\n\n"
+        + _tr(locale, "👤 <b>Usuario</b>\n", "👤 <b>User</b>\n")
+        + f"• ID: <code>{_escape_html(user.get('telegram_id'))}</code>\n"
+        + f"• Username: @{_escape_html(user.get('telegram_username') or '-')}\n\n"
+        + _tr(locale, "💳 <b>Pago</b>\n", "💳 <b>Payment</b>\n")
+        + f"• {_tr(locale, 'Método', 'Method')}: <b>{_escape_html(payment.get('payment_method') or '-')}</b>\n"
+        + f"• {_tr(locale, 'Revisión', 'Review')}: <b>{_escape_html(_payment_review_text(payment.get('review_status'), locale))}</b>\n\n"
+        + _tr(locale, "💰 <b>Totales</b>\n", "💰 <b>Totals</b>\n")
+        + f"• USD: <b>${_fmt_amount(totals.get('total_usd'))}</b>\n"
+        + f"• Markup: <b>{markup_text}</b>\n"
+        + f"• Local: <b>{_fmt_amount(local_total.get('amount'))} {_escape_html(local_total.get('currency') or '-')}</b>\n\n"
+        + _tr(locale, "🕒 <b>Fechas</b>\n", "🕒 <b>Dates</b>\n")
+        + f"• {_tr(locale, 'Creada', 'Created')}: {_fmt_dt(order.get('created_at'))}\n"
+        + f"• {_tr(locale, 'Pagada', 'Paid')}: {_fmt_dt(order.get('paid_at'))}\n\n"
+        + _tr(locale, "📦 <b>Productos</b>\n", "📦 <b>Products</b>\n")
+        + f"{items_block}"
+    )
+
+
+async def _build_approve_order_text(order_ref: str, locale: str | None = "es") -> str:
+    response = await api_client.admin_mark_order_paid(order_ref)
+    status = response.get("order", {}).get("status") or response.get("status") or "OK"
+    return (
+        _tr(locale, "✅ <b>Orden aprobada correctamente</b>\n\n", "✅ <b>Order approved successfully</b>\n\n")
+        + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
+        f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_text(status, locale))}</b>"
+    )
+
+
+async def _build_reject_order_text(order_ref: str, reason: str, locale: str | None = "es") -> str:
+    await api_client.admin_reject_order(order_ref, mode="retry", reason=reason)
+    return (
+        _tr(locale, "❌ <b>Orden rechazada (modo reintento)</b>\n\n", "❌ <b>Order rejected (retry mode)</b>\n\n")
+        + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
+        f"📝 {_tr(locale, 'Motivo', 'Reason')}: {_escape_html(reason)}"
+    )
+
+
+async def _build_refund_order_text(order_ref: str, reason: str, locale: str | None = "es") -> str:
+    response = await api_client.admin_refund_order(order_ref, reason=reason)
+    refund = response.get("refund", {})
+    return (
+        _tr(locale, "💸 <b>Reembolso aplicado</b>\n\n", "💸 <b>Refund applied</b>\n\n")
+        + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
+        f"💰 {_tr(locale, 'Monto', 'Amount')}: <b>${_fmt_amount(refund.get('amount'))}</b>\n"
+        f"🏷 {_tr(locale, 'Tipo', 'Type')}: <b>{_escape_html(_refund_type_text(refund.get('refund_type'), locale))}</b>\n"
+        f"📝 {_tr(locale, 'Motivo', 'Reason')}: {_escape_html(reason)}"
+    )
+
+
+async def _build_ban_user_text(admin_telegram_id: int | None, telegram_id: int, reason: str) -> str:
+    if BOT_TO_API_SECRET:
+        response = await api_client.ban_user(
+            telegram_id,
+            {
+                "reason": reason,
+                "admin_telegram_id": admin_telegram_id,
+            },
+            BOT_TO_API_SECRET,
+        )
+        if isinstance(response, dict) and response.get("status_code"):
+            return "❌ <b>No se pudo banear usuario.</b>"
+        already = bool(response.get("already_banned")) if isinstance(response, dict) else False
+        if already:
+            return "ℹ️ <b>El usuario ya estaba baneado.</b>"
+        return "✅ <b>Usuario baneado correctamente.</b>"
+
+    if not _admin_http_configured():
+        return "⚠️ <b>Falta BOT_TO_API_SECRET o credencial admin para banear.</b>"
+
+    result = await api_client.admin_toggle_ban(telegram_id)
+    if result.get("banned"):
+        return "✅ <b>Usuario baneado correctamente.</b>"
+    return "ℹ️ <b>El usuario ya estaba desbaneado.</b>"
+
+
+async def _build_unban_user_text(telegram_id: int) -> str:
+    status = await api_client.get_ban_status(telegram_id)
+    if not status.get("banned"):
+        return "ℹ️ <b>Ese usuario no está baneado.</b>"
+    result = await api_client.admin_toggle_ban(telegram_id)
+    if result.get("banned") is False:
+        return "✅ <b>Usuario desbaneado correctamente.</b>"
+    return "❌ <b>No se pudo desbanear al usuario.</b>"
+
+
+async def _build_broadcast_result_text(text: str) -> str:
+    create_res = await api_client.admin_create_broadcast(text, segment="ALL_USERS")
+    broadcast = create_res.get("broadcast", {})
+    broadcast_id = str(broadcast.get("id"))
+    if not broadcast_id:
+        return "❌ <b>No se pudo crear el broadcast.</b>"
+    send_res = await api_client.admin_send_broadcast(broadcast_id)
+    result = send_res.get("result", {})
+    return (
+        "📣 <b>Broadcast enviado</b>\n\n"
+        f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
+        f"🎯 Objetivo: <b>{result.get('target_count')}</b>\n"
+        f"✅ Enviados: <b>{result.get('sent_count')}</b>\n"
+        f"❌ Fallidos: <b>{result.get('failed_count')}</b>"
+    )
+
+
+async def _send_status(message: Message, locale: str | None = "es") -> None:
+    await message.answer(await _fetch_status_text(locale), parse_mode="HTML")
+
+
+async def _send_orders_pending(message: Message, limit: int, locale: str | None = "es") -> None:
+    await message.answer(await _build_orders_pending_text(limit, locale), parse_mode="HTML")
 
 
 async def _send_order_detail(message: Message, order_ref: str) -> None:
@@ -482,30 +1706,10 @@ async def _send_broadcast(message: Message, text: str) -> None:
     )
 
 
-async def _send_logs(message: Message, category: str, limit: int) -> None:
-    data = await api_client.admin_get_logs(category=category, limit=limit)
-    items = data.get("items", [])
-    if not items:
-        await message.answer(
-            f"ℹ️ <b>Sin registros</b> en la categoría <code>{_escape_html(category)}</code>.",
-            parse_mode="HTML",
-        )
-        return
-    lines = [f"📚 <b>Logs</b> · <code>{_escape_html(category)}</code> · <b>{len(items)}</b>\n"]
-    for row in items:
-        created = _fmt_dt(row.get("created_at"))
-        action = _escape_html(row.get("action") or row.get("kind") or "-")
-        ref_id = _escape_html(row.get("ref_id") or row.get("entity_id") or "-")
-        message_text = _escape_html((row.get("message") or "").strip().replace("\n", " "))
-        message_short = message_text[:120] if message_text else ""
-        lines.append(
-            f"• 🕒 {created}\n"
-            f"  ⚙️ {action}\n"
-            f"  🆔 <code>{ref_id}</code>"
-            + (f"\n  📝 {message_short}" if message_short else "")
-            + "\n"
-        )
-    await message.answer("\n".join(lines), parse_mode="HTML")
+async def _send_logs(
+    message: Message, category: str, limit: int, locale: str | None = "es"
+) -> None:
+    await message.answer(await _build_logs_text(category, limit, locale), parse_mode="HTML")
 
 
 async def _admin_guard_callback(callback: CallbackQuery) -> Optional[str]:
@@ -540,10 +1744,14 @@ async def cmd_admin_panel(message: Message, state: FSMContext) -> None:
     if not locale:
         return
     await state.clear()
-    await message.answer(
-        _build_admin_panel_text(),
-        reply_markup=_build_admin_panel_keyboard(),
+    panel_message = await message.answer(
+        _build_admin_panel_text(locale),
+        reply_markup=_build_admin_panel_keyboard(locale),
         parse_mode="HTML",
+    )
+    await state.update_data(
+        admin_ui_panel_chat_id=panel_message.chat.id,
+        admin_ui_panel_message_id=panel_message.message_id,
     )
 
 
@@ -557,152 +1765,480 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
         return
     parts = (callback.data or "adminui:home").split(":")
     action = parts[1] if len(parts) > 1 else "home"
-
-    if action == "home":
-        await state.clear()
-        await callback.message.answer(
-            _build_admin_panel_text(),
-            reply_markup=_build_admin_panel_keyboard(),
-            parse_mode="HTML",
-        )
-        await callback.answer()
-        return
-
-    if not await _ensure_admin_http(callback.message):
-        await callback.answer()
-        return
+    panel_anchor = {
+        "admin_ui_panel_chat_id": callback.message.chat.id,
+        "admin_ui_panel_message_id": callback.message.message_id,
+    }
 
     try:
+        if action == "home":
+            await state.clear()
+            await _edit_panel_message(
+                callback.message,
+                _build_admin_panel_text(locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
+            return
+
+        if not _admin_http_configured():
+            await _edit_panel_message(
+                callback.message,
+                _tr(
+                    locale,
+                    "⚠️ Falta API_TOKEN o ADMIN_API_KEY en <code>telegram-sales-bot/.env</code>.",
+                    "⚠️ API_TOKEN or ADMIN_API_KEY is missing in <code>telegram-sales-bot/.env</code>.",
+                ),
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
         if action == "status":
             await state.clear()
-            await callback.message.answer(_guide_text("status"), parse_mode="HTML")
-            await _send_status(callback.message)
-            await callback.answer()
+            await _edit_panel_message(
+                callback.message,
+                await _fetch_status_text(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
             return
 
         if action == "orders":
             if len(parts) >= 4 and parts[2] == "list":
                 limit = _safe_int(parts[3], 10, 1, 30)
                 await state.clear()
-                await _send_orders_pending(callback.message, limit)
+                await _edit_panel_message(
+                    callback.message,
+                    await _build_orders_pending_text(limit, locale),
+                    reply_markup=_build_orders_limit_keyboard(locale),
+                )
             else:
                 await state.clear()
-                await callback.message.answer(
-                    _guide_text("orders"),
-                    reply_markup=_build_orders_limit_keyboard(),
-                    parse_mode="HTML",
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("orders", locale),
+                    reply_markup=_build_orders_limit_keyboard(locale),
                 )
-            await callback.answer()
             return
 
         if action == "order":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="order_ref_view")
-            await callback.message.answer(_guide_text("order"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="order_ref_view", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("order", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "approve":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="order_ref_approve")
-            await callback.message.answer(_guide_text("approve"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="order_ref_approve", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("approve", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "reject":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="order_ref_reject")
-            await callback.message.answer(_guide_text("reject"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="order_ref_reject", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("reject", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "refund":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="order_ref_refund")
-            await callback.message.answer(_guide_text("refund"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="order_ref_refund", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("refund", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "ban":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="ban_telegram_id")
-            await callback.message.answer(_guide_text("ban"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="ban_telegram_id", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("ban", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "unban":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="unban_telegram_id")
-            await callback.message.answer(_guide_text("unban"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="unban_telegram_id", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("unban", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "maint":
             if len(parts) >= 4 and parts[2] == "set":
                 active = parts[3].lower() == "on"
                 await state.clear()
-                await _set_maintenance(callback.message, active)
+                response = await api_client.admin_set_maintenance(active)
+                state_text = (
+                    _tr(locale, "ACTIVO", "ON")
+                    if response.get("active")
+                    else _tr(locale, "INACTIVO", "OFF")
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🛠 <b>Mantenimiento actualizado</b>\n\n"
+                        f"Estado actual: <b>{state_text}</b>",
+                        "🛠 <b>Maintenance updated</b>\n\n"
+                        f"Current state: <b>{state_text}</b>",
+                    ),
+                    reply_markup=_build_maint_keyboard(locale),
+                )
             else:
                 await state.clear()
-                await callback.message.answer(
-                    _guide_text("maint"),
-                    reply_markup=_build_maint_keyboard(),
-                    parse_mode="HTML",
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("maint", locale),
+                    reply_markup=_build_maint_keyboard(locale),
                 )
-            await callback.answer()
             return
 
         if action == "broadcast":
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="broadcast_message")
-            await callback.message.answer(_guide_text("broadcast"), parse_mode="HTML")
-            await callback.answer()
+            await state.update_data(admin_ui_action="broadcast_message", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("broadcast", locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             return
 
         if action == "logs":
             if len(parts) >= 5 and parts[2] == "list":
                 category = parts[3].lower()
                 if category not in {"errors", "payments", "support"}:
-                    await callback.message.answer("❌ <b>Categoría inválida.</b>", parse_mode="HTML")
-                    await callback.answer()
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Categoría inválida.</b>", "❌ <b>Invalid category.</b>"),
+                        reply_markup=_build_logs_keyboard(locale),
+                    )
                     return
                 limit = _safe_int(parts[4], 10, 1, 25)
                 await state.clear()
-                await _send_logs(callback.message, category, limit)
+                await _edit_panel_message(
+                    callback.message,
+                    await _build_logs_text(category, limit, locale),
+                    reply_markup=_build_logs_keyboard(locale),
+                )
             else:
                 await state.clear()
-                await callback.message.answer(
-                    _guide_text("logs"),
-                    reply_markup=_build_logs_keyboard(),
-                    parse_mode="HTML",
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("logs", locale),
+                    reply_markup=_build_logs_keyboard(locale),
                 )
-            await callback.answer()
             return
 
-        await callback.message.answer(
-            _build_admin_panel_text(),
-            reply_markup=_build_admin_panel_keyboard(),
-            parse_mode="HTML",
+        if action == "homecfg":
+            mode = parts[2] if len(parts) > 2 else ""
+            if mode == "text":
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "📝 <b>Editar texto Home</b>\n\nSelecciona el idioma a editar:",
+                        "📝 <b>Edit Home text</b>\n\nSelect the language to edit:",
+                    ),
+                    reply_markup=_build_home_locale_keyboard("textloc", locale),
+                )
+                return
+
+            if mode == "textloc":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_home_locale_keyboard("textloc", locale),
+                    )
+                    return
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="homecfg_text_value",
+                    admin_ui_home_locale=locale_target,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        f"📝 <b>Texto Home ({_home_locale_title(locale_target, locale)})</b>\n\n"
+                        "Envía el nuevo texto completo del home.\n"
+                        "Puedes usar formato HTML básico.",
+                        f"📝 <b>Home text ({_home_locale_title(locale_target, locale)})</b>\n\n"
+                        "Send the new full home text.\n"
+                        "You can use basic HTML format.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+
+            if mode == "buttons":
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🎛 <b>Editar botones Home</b>\n\nSelecciona el idioma a editar:",
+                        "🎛 <b>Edit Home buttons</b>\n\nSelect the language to edit:",
+                    ),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                return
+
+            if mode == "btnloc":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_home_layout()
+                await state.clear()
+                await state.update_data(
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_layout=layout,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _build_home_buttons_panel_text(layout, locale_target, locale),
+                    reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                )
+                return
+
+            if mode == "btnop":
+                operation = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(
+                            locale,
+                            "⚠️ Primero selecciona el idioma de botones.",
+                            "⚠️ Select the button language first.",
+                        ),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                if operation not in {"rename", "add", "delete", "move", "solo"}:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Operación inválida.</b>", "❌ <b>Invalid operation.</b>"),
+                        reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                    )
+                    return
+                action_map = {
+                    "rename": "homecfg_btn_rename",
+                    "add": "homecfg_btn_add",
+                    "delete": "homecfg_btn_delete",
+                    "move": "homecfg_btn_move",
+                    "solo": "homecfg_btn_solo",
+                }
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action=action_map[operation],
+                    admin_ui_home_locale=locale_target,
+                    **panel_anchor,
+                )
+                if operation == "rename":
+                    prompt = _tr(
+                        locale,
+                        "✏️ <b>Renombrar botón</b>\n\nFormato: <code>numero | nuevo texto</code>",
+                        "✏️ <b>Rename button</b>\n\nFormat: <code>number | new label</code>",
+                    )
+                elif operation == "add":
+                    prompt = _tr(
+                        locale,
+                        "➕ <b>Agregar botón</b>\n\n"
+                        "Formato básico: <code>texto | callback_data</code>\n"
+                        "Formato con posición: <code>texto | callback_data | fila | posicion(1-2) | modo(correr|estricto)</code>\n"
+                        "Ejemplo: <code>🔥 Promos | category:page:metodos | 2 | 1 | correr</code>",
+                        "➕ <b>Add button</b>\n\n"
+                        "Basic format: <code>label | callback_data</code>\n"
+                        "With position: <code>label | callback_data | row | position(1-2) | mode(shift|strict)</code>\n"
+                        "Example: <code>🔥 Deals | category:page:metodos | 2 | 1 | shift</code>",
+                    )
+                elif operation == "move":
+                    prompt = _tr(
+                        locale,
+                        "📍 <b>Mover botón</b>\n\nFormato: <code>numero | fila | posicion(1-2) | modo(correr|estricto)</code>",
+                        "📍 <b>Move button</b>\n\nFormat: <code>number | row | position(1-2) | mode(shift|strict)</code>",
+                    )
+                elif operation == "solo":
+                    prompt = _tr(
+                        locale,
+                        "🧱 <b>Poner en fila sola</b>\n\nFormato: <code>numero | fila</code>",
+                        "🧱 <b>Put in solo row</b>\n\nFormat: <code>number | row</code>",
+                    )
+                else:
+                    prompt = _tr(
+                        locale,
+                        "🗑 <b>Eliminar botón</b>\n\nFormato: <code>numero</code>",
+                        "🗑 <b>Delete button</b>\n\nFormat: <code>number</code>",
+                    )
+                await _edit_panel_message(
+                    callback.message,
+                    prompt,
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+
+            if mode == "btnreset":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_home_layout()
+                layout[locale_target]["buttons"] = _default_home_button_rows(locale_target)
+                saved = await _save_home_layout(layout)
+                await state.clear()
+                await state.update_data(
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_layout=saved,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "♻️ <b>Botones restaurados.</b>\n\n",
+                        "♻️ <b>Buttons restored.</b>\n\n",
+                    ) + _build_home_buttons_panel_text(saved, locale_target, locale),
+                    reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                )
+                return
+
+        if action == "product":
+            sub_action = parts[2] if len(parts) > 2 else "home"
+            if sub_action == "add":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="product_create_base", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("product_add", locale),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            if sub_action == "delete":
+                mode = parts[3] if len(parts) > 3 else ""
+                if mode == "cat":
+                    category_key = _normalize_category_key(parts[4] if len(parts) > 4 else "")
+                    if not category_key:
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(locale, "❌ <b>Categoría inválida.</b>", "❌ <b>Invalid category.</b>"),
+                            reply_markup=await _build_delete_categories_keyboard(locale),
+                        )
+                        return
+                    await state.clear()
+                    await state.update_data(
+                        admin_ui_delete_category=category_key,
+                        **panel_anchor,
+                    )
+                    text, keyboard = await _build_product_delete_view(
+                        category_key=category_key,
+                        locale=locale,
+                    )
+                    await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                    return
+                if mode == "item":
+                    product_id = parts[4] if len(parts) > 4 else ""
+                    data = await state.get_data()
+                    category_key = _normalize_category_key(data.get("admin_ui_delete_category")) or "TIENDA"
+                    if not product_id:
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(locale, "❌ <b>Producto inválido.</b>", "❌ <b>Invalid product.</b>"),
+                            reply_markup=await _build_delete_categories_keyboard(locale),
+                        )
+                        return
+                    await api_client.admin_deactivate_product(product_id)
+                    text, keyboard = await _build_product_delete_view(
+                        category_key=category_key,
+                        header=_tr(
+                            locale,
+                            "✅ <b>Producto eliminado correctamente.</b>",
+                            "✅ <b>Product deleted successfully.</b>",
+                        ),
+                        locale=locale,
+                    )
+                    await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                    return
+                await state.clear()
+                await state.update_data(**panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("product_delete", locale),
+                    reply_markup=await _build_delete_categories_keyboard(locale),
+                )
+                return
+
+        await _edit_panel_message(
+            callback.message,
+            _build_admin_panel_text(locale),
+            reply_markup=_build_admin_panel_keyboard(locale),
         )
-        await callback.answer()
     except httpx.HTTPStatusError as exc:
         try:
             payload = exc.response.json()
         except Exception:
             payload = {}
-        await callback.message.answer(
-            "❌ <b>Error en la acción del panel</b>\n\n"
-            f"Código: <b>{exc.response.status_code}</b>\n"
-            f"Detalle: <code>{_escape_html(payload.get('error') or 'ERROR')}</code>",
-            parse_mode="HTML",
+        error_code = payload.get("error") if isinstance(payload, dict) else None
+        if error_code == "ORDER_NOT_FOUND":
+            text = _build_order_not_found_text(payload, locale)
+        else:
+            text = _tr(
+                locale,
+                "❌ <b>Error en la acción del panel</b>\n\n"
+                f"Código: <b>{exc.response.status_code}</b>\n"
+                f"Detalle: <code>{_escape_html(error_code or 'ERROR')}</code>",
+                "❌ <b>Panel action error</b>\n\n"
+                f"Code: <b>{exc.response.status_code}</b>\n"
+                f"Detail: <code>{_escape_html(error_code or 'ERROR')}</code>",
+            )
+        await _edit_panel_message(
+            callback.message,
+            text,
+            reply_markup=_build_admin_panel_keyboard(locale),
         )
-        await callback.answer()
     except Exception as exc:
-        await callback.message.answer(
-            "❌ <b>Error del panel admin</b>\n\n"
-            f"<code>{_escape_html(exc)}</code>",
-            parse_mode="HTML",
+        await _edit_panel_message(
+            callback.message,
+            _tr(
+                locale,
+                "❌ <b>Error del panel admin</b>\n\n"
+                f"<code>{_escape_html(exc)}</code>",
+                "❌ <b>Admin panel error</b>\n\n"
+                f"<code>{_escape_html(exc)}</code>",
+            ),
+            reply_markup=_build_admin_panel_keyboard(locale),
         )
+    finally:
         await callback.answer()
 
 
@@ -715,139 +2251,924 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
         return
 
     raw_text = (message.text or "").strip()
-    if not raw_text:
-        await message.answer(
-            "⚠️ <b>Entrada inválida</b>\n\n"
-            "Envía un valor válido o escribe <code>/cancel</code>.",
-            parse_mode="HTML",
-        )
-        return
-
-    if raw_text.lower() in {"/cancel", "cancel", "salir"}:
-        await state.clear()
-        await message.answer(
-            "❎ <b>Flujo cancelado.</b>\n\nPuedes abrir el panel nuevamente con <code>/admin</code>.",
-            reply_markup=_build_admin_panel_keyboard(),
-            parse_mode="HTML",
-        )
-        return
-
+    photo_file_id = message.photo[-1].file_id if message.photo else ""
     data = await state.get_data()
     action = str(data.get("admin_ui_action") or "").strip()
+    panel_resume: Dict[str, Any] = {}
+    panel_chat_id = data.get("admin_ui_panel_chat_id")
+    panel_message_id = data.get("admin_ui_panel_message_id")
+    if panel_chat_id is not None:
+        panel_resume["admin_ui_panel_chat_id"] = panel_chat_id
+    if panel_message_id is not None:
+        panel_resume["admin_ui_panel_message_id"] = panel_message_id
 
     try:
-        if action == "order_ref_view":
+        if raw_text.lower() in {"/cancel", "cancel", "salir"}:
             await state.clear()
-            await _send_order_detail(message, raw_text)
+            if message.from_user:
+                await render_home_view(message, message.from_user.id, locale)
+            return
+
+        if action != "product_create_image" and not raw_text:
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "⚠️ <b>Entrada inválida</b>\n\n"
+                    "Envía un valor válido o escribe <code>/cancel</code>.",
+                    "⚠️ <b>Invalid input</b>\n\n"
+                    "Send a valid value or write <code>/cancel</code>.",
+                ),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
+            return
+
+        if action == "homecfg_text_value":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Idioma inválido. Vuelve a elegir idioma para editar Home.",
+                        "⚠️ Invalid language. Choose language again to edit Home.",
+                    ),
+                    reply_markup=_build_home_locale_keyboard("textloc", locale),
+                )
+                await state.clear()
+                return
+            layout = await _load_home_layout()
+            layout[locale_target]["text"] = raw_text
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "✅ <b>Texto Home actualizado.</b>\n\n"
+                    f"Idioma: <b>{_home_locale_title(locale_target, locale)}</b>",
+                    "✅ <b>Home text updated.</b>\n\n"
+                    f"Language: <b>{_home_locale_title(locale_target, locale)}</b>",
+                ),
+                reply_markup=_build_home_locale_keyboard("textloc", locale),
+            )
+            return
+
+        if action == "homecfg_btn_rename":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta idioma objetivo.", "⚠️ Target language missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            parts = [part.strip() for part in raw_text.split("|", maxsplit=1)]
+            if len(parts) != 2:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Formato inválido.\nUsa: <code>numero | nuevo texto</code>",
+                        "⚠️ Invalid format.\nUse: <code>number | new label</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            index = _parse_positive_int_or_none(parts[0])
+            if index is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número inválido.", "⚠️ Invalid number."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            new_label = parts[1].strip()[:64]
+            if not new_label:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ El texto no puede ir vacío.", "⚠️ Label cannot be empty."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout = _normalize_home_layout(data.get("admin_ui_home_layout"))
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            slot = _find_home_button_slot(rows, index)
+            if not slot:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número fuera de rango.", "⚠️ Number out of range."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            row_index, col_index = slot
+            rows[row_index][col_index]["label"] = new_label
+            layout[locale_target]["buttons"] = _trim_home_button_rows(rows)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón renombrado.</b>\n\n", "✅ <b>Button renamed.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+            )
+            return
+
+        if action == "homecfg_btn_add":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta idioma objetivo.", "⚠️ Target language missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            parts = [part.strip() for part in raw_text.split("|")]
+            if len(parts) < 2 or len(parts) > 5:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Formato inválido.\nUsa:\n"
+                        "<code>texto | callback_data</code>\n"
+                        "o\n"
+                        "<code>texto | callback_data | fila | posicion(1-2) | modo(correr|estricto)</code>",
+                        "⚠️ Invalid format.\nUse:\n"
+                        "<code>label | callback_data</code>\n"
+                        "or\n"
+                        "<code>label | callback_data | row | position(1-2) | mode(shift|strict)</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            label = parts[0][:64]
+            target = parts[1].strip()
+            if not label or not target:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Texto/acción inválidos.", "⚠️ Invalid label/action."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            row_number = None
+            position = None
+            overflow_mode_raw: str | None = None
+            if len(parts) >= 3:
+                row_number = _parse_positive_int_or_none(parts[2])
+                if row_number is None:
+                    await _edit_state_panel_message(
+                        message,
+                        state,
+                        _tr(
+                            locale,
+                            "⚠️ Fila inválida. Usa un número mayor a 0.",
+                            "⚠️ Invalid row. Use a number greater than 0.",
+                        ),
+                        reply_markup=_build_admin_panel_keyboard(locale),
+                    )
+                    return
+            if len(parts) == 4:
+                candidate_pos = _parse_positive_int_or_none(parts[3])
+                if candidate_pos in {1, 2}:
+                    position = candidate_pos
+                else:
+                    overflow_mode_raw = parts[3]
+            if len(parts) == 5:
+                position = _parse_positive_int_or_none(parts[3])
+                if position not in {1, 2}:
+                    await _edit_state_panel_message(
+                        message,
+                        state,
+                        _tr(
+                            locale,
+                            "⚠️ Posición inválida. Solo permite 1 o 2.",
+                            "⚠️ Invalid position. Only 1 or 2 is allowed.",
+                        ),
+                        reply_markup=_build_admin_panel_keyboard(locale),
+                    )
+                    return
+                overflow_mode_raw = parts[4]
+
+            overflow_mode = _parse_home_overflow_mode(overflow_mode_raw)
+            if overflow_mode is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Modo inválido. Usa <code>correr</code> o <code>estricto</code>.",
+                        "⚠️ Invalid mode. Use <code>shift</code> or <code>strict</code>.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout = _normalize_home_layout(data.get("admin_ui_home_layout"))
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            if len(_flatten_home_buttons(rows)) >= _HOME_BUTTON_LIMIT:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ Límite alcanzado ({_HOME_BUTTON_LIMIT} botones).",
+                        f"⚠️ Limit reached ({_HOME_BUTTON_LIMIT} buttons).",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            new_button: Dict[str, str]
+            if target.startswith("url:http://") or target.startswith("url:https://"):
+                new_button = {"label": label, "url": target[4:]}
+            elif target.startswith("http://") or target.startswith("https://"):
+                new_button = {"label": label, "url": target}
+            else:
+                new_button = {"label": label, "action": target[:64]}
+            inserted_rows, insert_error = _insert_home_button(
+                rows,
+                new_button,
+                row_number=row_number,
+                position=position,
+                overflow_mode=overflow_mode,
+            )
+            if insert_error == "ROW_FULL":
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Esa fila ya tiene 2 botones. Usa modo <code>correr</code> para reacomodar.",
+                        "⚠️ That row already has 2 buttons. Use <code>shift</code> mode to reflow.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout[locale_target]["buttons"] = inserted_rows
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón agregado.</b>\n\n", "✅ <b>Button added.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+            )
+            return
+
+        if action == "homecfg_btn_move":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta idioma objetivo.", "⚠️ Target language missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            parts = [part.strip() for part in raw_text.split("|")]
+            if len(parts) < 3 or len(parts) > 4:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Formato inválido.\nUsa: <code>numero | fila | posicion(1-2) | modo(correr|estricto)</code>",
+                        "⚠️ Invalid format.\nUse: <code>number | row | position(1-2) | mode(shift|strict)</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            index = _parse_positive_int_or_none(parts[0])
+            row_number = _parse_positive_int_or_none(parts[1])
+            position = _parse_positive_int_or_none(parts[2])
+            overflow_mode = _parse_home_overflow_mode(parts[3] if len(parts) == 4 else None)
+            if index is None or row_number is None or position not in {1, 2}:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Número/fila/posición inválidos.",
+                        "⚠️ Invalid number/row/position.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            if overflow_mode is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Modo inválido. Usa <code>correr</code> o <code>estricto</code>.",
+                        "⚠️ Invalid mode. Use <code>shift</code> or <code>strict</code>.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout = _normalize_home_layout(data.get("admin_ui_home_layout"))
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            total = len(_flatten_home_buttons(rows))
+            if index > total:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número fuera de rango.", "⚠️ Number out of range."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            remaining_rows, button = _remove_home_button_by_index(rows, index)
+            if not button:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            moved_rows, insert_error = _insert_home_button(
+                remaining_rows,
+                button,
+                row_number=row_number,
+                position=position,
+                overflow_mode=overflow_mode,
+            )
+            if insert_error == "ROW_FULL":
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Esa fila ya tiene 2 botones. Usa modo <code>correr</code> para reacomodar.",
+                        "⚠️ That row already has 2 buttons. Use <code>shift</code> mode to reflow.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout[locale_target]["buttons"] = moved_rows or _default_home_button_rows(locale_target)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón movido.</b>\n\n", "✅ <b>Button moved.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+            )
+            return
+
+        if action == "homecfg_btn_solo":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta idioma objetivo.", "⚠️ Target language missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            parts = [part.strip() for part in raw_text.split("|")]
+            if len(parts) != 2:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Formato inválido.\nUsa: <code>numero | fila</code>",
+                        "⚠️ Invalid format.\nUse: <code>number | row</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            index = _parse_positive_int_or_none(parts[0])
+            row_number = _parse_positive_int_or_none(parts[1])
+            if index is None or row_number is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número/fila inválidos.", "⚠️ Invalid number/row."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout = _normalize_home_layout(data.get("admin_ui_home_layout"))
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            total = len(_flatten_home_buttons(rows))
+            if index > total:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número fuera de rango.", "⚠️ Number out of range."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            remaining_rows, button = _remove_home_button_by_index(rows, index)
+            if not button:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            solo_rows, _ = _insert_home_button(
+                remaining_rows,
+                button,
+                row_number=row_number,
+                force_solo_row=True,
+            )
+            layout[locale_target]["buttons"] = solo_rows or _default_home_button_rows(locale_target)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón movido a fila sola.</b>\n\n", "✅ <b>Button moved to solo row.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+            )
+            return
+
+        if action == "homecfg_btn_delete":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta idioma objetivo.", "⚠️ Target language missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            index = _parse_positive_int_or_none(raw_text)
+            if index is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número inválido.", "⚠️ Invalid number."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout = _normalize_home_layout(data.get("admin_ui_home_layout"))
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            total = len(_flatten_home_buttons(rows))
+            if index < 1 or index > total:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Número fuera de rango.", "⚠️ Number out of range."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            remaining_rows, removed = _remove_home_button_by_index(rows, index)
+            if not removed:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            layout[locale_target]["buttons"] = remaining_rows or _default_home_button_rows(locale_target)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón eliminado.</b>\n\n", "✅ <b>Button removed.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+            )
+            return
+
+        if action == "order_ref_view":
+            text = await _build_order_detail_text(raw_text, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
+            await state.clear()
             return
 
         if action == "order_ref_approve":
+            text = await _build_approve_order_text(raw_text, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             await state.clear()
-            await _approve_order(message, raw_text)
             return
 
         if action == "order_ref_reject":
             await state.update_data(admin_ui_action="reject_reason", admin_ui_order_ref=raw_text)
-            await message.answer(
-                "📝 <b>Motivo del rechazo</b>\n\n"
-                "Envía el motivo.\n"
-                "Ejemplo: <code>Comprobante borroso</code>",
-                parse_mode="HTML",
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "📝 <b>Motivo del rechazo</b>\n\n"
+                    "Envía el motivo.\n"
+                    "Ejemplo: <code>Comprobante borroso</code>",
+                    "📝 <b>Reject reason</b>\n\n"
+                    "Send the reason.\n"
+                    "Example: <code>Blurry proof screenshot</code>",
+                ),
+                reply_markup=_build_admin_panel_keyboard(locale),
             )
             return
 
         if action == "reject_reason":
             order_ref = str(data.get("admin_ui_order_ref") or "").strip()
-            reason = raw_text or "Comprobante inválido. Envía una nueva captura."
+            reason = raw_text or _tr(
+                locale,
+                "Comprobante inválido. Envía una nueva captura.",
+                "Invalid payment proof. Send a new screenshot.",
+            )
+            text = await _build_reject_order_text(order_ref, reason, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             await state.clear()
-            await _reject_order(message, order_ref, reason)
             return
 
         if action == "order_ref_refund":
             await state.update_data(admin_ui_action="refund_reason", admin_ui_order_ref=raw_text)
-            await message.answer(
-                "📝 <b>Motivo del reembolso</b>\n\n"
-                "Envía el motivo.\n"
-                "Ejemplo: <code>Reembolso solicitado por cliente</code>",
-                parse_mode="HTML",
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "📝 <b>Motivo del reembolso</b>\n\n"
+                    "Envía el motivo.\n"
+                    "Ejemplo: <code>Reembolso solicitado por cliente</code>",
+                    "📝 <b>Refund reason</b>\n\n"
+                    "Send the reason.\n"
+                    "Example: <code>Refund requested by customer</code>",
+                ),
+                reply_markup=_build_admin_panel_keyboard(locale),
             )
             return
 
         if action == "refund_reason":
             order_ref = str(data.get("admin_ui_order_ref") or "").strip()
-            reason = raw_text or "Reembolso procesado por admin."
+            reason = raw_text or _tr(locale, "Reembolso procesado por admin.", "Refund processed by admin.")
+            text = await _build_refund_order_text(order_ref, reason, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             await state.clear()
-            await _refund_order(message, order_ref, reason)
             return
 
         if action == "ban_telegram_id":
             try:
                 telegram_id = int(raw_text.split()[0])
             except ValueError:
-                await message.answer(
-                    "❌ <b>telegram_id inválido</b>\n\nEjemplo: <code>7621162350</code>",
-                    parse_mode="HTML",
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "❌ <b>telegram_id inválido</b>\n\nEjemplo: <code>7621162350</code>",
+                        "❌ <b>Invalid telegram_id</b>\n\nExample: <code>7621162350</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
                 )
                 return
             await state.update_data(admin_ui_action="ban_reason", admin_ui_telegram_id=telegram_id)
-            await message.answer(
-                "📝 <b>Motivo del ban</b>\n\n"
-                "Envía el motivo.\n"
-                "Ejemplo: <code>Fraude en comprobantes</code>",
-                parse_mode="HTML",
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "📝 <b>Motivo del ban</b>\n\n"
+                    "Envía el motivo.\n"
+                    "Ejemplo: <code>Fraude en comprobantes</code>",
+                    "📝 <b>Ban reason</b>\n\n"
+                    "Send the reason.\n"
+                    "Example: <code>Payment proof fraud</code>",
+                ),
+                reply_markup=_build_admin_panel_keyboard(locale),
             )
             return
 
         if action == "ban_reason":
             telegram_id = int(data.get("admin_ui_telegram_id"))
             reason = raw_text or "Baneado por admin."
+            text = await _build_ban_user_text(
+                message.from_user.id if message.from_user else None,
+                telegram_id,
+                reason,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             await state.clear()
-            await _ban_user(message, telegram_id, reason)
             return
 
         if action == "unban_telegram_id":
             try:
                 telegram_id = int(raw_text.split()[0])
             except ValueError:
-                await message.answer(
-                    "❌ <b>telegram_id inválido</b>\n\nEjemplo: <code>7621162350</code>",
-                    parse_mode="HTML",
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "❌ <b>telegram_id inválido</b>\n\nEjemplo: <code>7621162350</code>",
+                        "❌ <b>Invalid telegram_id</b>\n\nExample: <code>7621162350</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
                 )
                 return
+            text = await _build_unban_user_text(telegram_id)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             await state.clear()
-            await _unban_user(message, telegram_id)
             return
 
         if action == "broadcast_message":
+            text = await _build_broadcast_result_text(raw_text)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
             await state.clear()
-            await _send_broadcast(message, raw_text)
             return
 
-        await state.clear()
-        await message.answer(
-            _build_admin_panel_text(),
-            reply_markup=_build_admin_panel_keyboard(),
-            parse_mode="HTML",
+        if action == "product_create_base":
+            try:
+                payload = _build_product_create_payload(raw_text, locale)
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Datos inválidos</b>\n\n"
+                        f"{_escape_html(exc)}\n\n"
+                        "Formato: <code>nombre | precio | categoria</code>",
+                        "⚠️ <b>Invalid data</b>\n\n"
+                        f"{_escape_html(exc)}\n\n"
+                        "Format: <code>name | price | category</code>",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            await state.update_data(
+                admin_ui_action="product_create_description",
+                admin_ui_product_payload=payload,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "📝 <b>Paso 2/3 · Descripción</b>\n\n"
+                    "Envía la descripción del producto en máximo <b>8 líneas</b>.\n"
+                    "Cada salto de línea cuenta.",
+                    "📝 <b>Step 2/3 · Description</b>\n\n"
+                    "Send the product description with a maximum of <b>8 lines</b>.\n"
+                    "Each line break counts.",
+                ),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
+            return
+
+        if action == "product_create_description":
+            try:
+                description = _build_product_description(raw_text, locale)
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Vuelve a enviar la descripción (máximo 8 líneas).",
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Please send the description again (max 8 lines).",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+            payload = dict(data.get("admin_ui_product_payload") or {})
+            if not payload:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Se perdió el contexto de creación.</b>\n\nInicia de nuevo con el botón de agregar producto.",
+                        "⚠️ <b>The create context was lost.</b>\n\nStart again using the add-product button.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                await state.clear()
+                return
+            payload["description"] = description
+            await state.update_data(
+                admin_ui_action="product_create_image",
+                admin_ui_product_payload=payload,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "🖼️ <b>Paso 3/3 · Imagen</b>\n\n"
+                    "Envía una <b>foto</b> del producto.\n"
+                    "También puedes enviar una URL (<code>https://...</code>)\n"
+                    "o escribir <code>sin imagen</code>.",
+                    "🖼️ <b>Step 3/3 · Image</b>\n\n"
+                    "Send a product <b>photo</b>.\n"
+                    "You can also send a URL (<code>https://...</code>)\n"
+                    "or type <code>no image</code>.",
+                ),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
+            return
+
+        if action == "product_create_image":
+            payload = dict(data.get("admin_ui_product_payload") or {})
+            if not payload:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Se perdió el contexto de creación.</b>\n\nInicia de nuevo con el botón de agregar producto.",
+                        "⚠️ <b>The create context was lost.</b>\n\nStart again using the add-product button.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                await state.clear()
+                return
+
+            image_value: Optional[str] = None
+            if photo_file_id:
+                image_value = photo_file_id
+            elif raw_text:
+                low = raw_text.lower()
+                if low in _PRODUCT_IMAGE_SKIP_WORDS:
+                    image_value = None
+                elif raw_text.startswith("http://") or raw_text.startswith("https://"):
+                    image_value = raw_text
+                else:
+                    await _edit_state_panel_message(
+                        message,
+                        state,
+                        _tr(
+                            locale,
+                            "⚠️ <b>Imagen inválida.</b>\n\n"
+                            "Envía una foto, una URL válida, o escribe <code>sin imagen</code>.",
+                            "⚠️ <b>Invalid image.</b>\n\n"
+                            "Send a photo, a valid URL, or type <code>no image</code>.",
+                        ),
+                        reply_markup=_build_admin_panel_keyboard(locale),
+                    )
+                    return
+            else:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Falta la imagen.</b>\n\n"
+                        "Envía una foto, una URL válida, o escribe <code>sin imagen</code>.",
+                        "⚠️ <b>Image is required.</b>\n\n"
+                        "Send a photo, a valid URL, or type <code>no image</code>.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                return
+
+            payload["image_url"] = image_value
+            created = await api_client.admin_create_product(payload)
+            try:
+                await api_client.admin_recalculate_products()
+            except Exception:
+                pass
+            product = created.get("product") or {}
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_product_created_text(product, locale),
+                reply_markup=_build_admin_panel_keyboard(locale),
+            )
+            await state.clear()
+            return
+
+        await _edit_state_panel_message(
+            message,
+            state,
+            _build_admin_panel_text(locale),
+            reply_markup=_build_admin_panel_keyboard(locale),
         )
+        await state.clear()
     except httpx.HTTPStatusError as exc:
         try:
             payload = exc.response.json()
         except Exception:
             payload = {}
-        await state.clear()
-        await message.answer(
-            "❌ <b>Error ejecutando acción</b>\n\n"
-            f"Código: <b>{exc.response.status_code}</b>\n"
-            f"Detalle: <code>{_escape_html(payload.get('error') or 'ERROR')}</code>",
-            parse_mode="HTML",
+        error_code = payload.get("error") if isinstance(payload, dict) else None
+        if error_code == "ORDER_NOT_FOUND":
+            text = _build_order_not_found_text(payload, locale)
+        else:
+            text = _tr(
+                locale,
+                "❌ <b>Error ejecutando acción</b>\n\n"
+                f"Código: <b>{exc.response.status_code}</b>\n"
+                f"Detalle: <code>{_escape_html(error_code or 'ERROR')}</code>",
+                "❌ <b>Error running action</b>\n\n"
+                f"Code: <b>{exc.response.status_code}</b>\n"
+                f"Detail: <code>{_escape_html(error_code or 'ERROR')}</code>",
+            )
+        await _edit_state_panel_message(
+            message,
+            state,
+            text,
+            reply_markup=_build_admin_panel_keyboard(locale),
         )
+        await state.clear()
     except Exception as exc:
-        await state.clear()
-        await message.answer(
-            "❌ <b>Error ejecutando acción</b>\n\n"
-            f"<code>{_escape_html(exc)}</code>",
-            parse_mode="HTML",
+        await _edit_state_panel_message(
+            message,
+            state,
+            _tr(
+                locale,
+                "❌ <b>Error ejecutando acción</b>\n\n"
+                f"<code>{_escape_html(exc)}</code>",
+                "❌ <b>Error running action</b>\n\n"
+                f"<code>{_escape_html(exc)}</code>",
+            ),
+            reply_markup=_build_admin_panel_keyboard(locale),
         )
+        await state.clear()
+    finally:
+        await _delete_message_safe(message)
 
 
 @router.message(Command("astatus"))

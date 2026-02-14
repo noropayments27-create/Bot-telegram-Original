@@ -247,6 +247,42 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_create_product(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/products"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_deactivate_product(self, product_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/products/{product_id}/deactivate"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={},
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_recalculate_products(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/products/recalculate"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json={},
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/orders/{order_id}"
         async with httpx.AsyncClient() as client:
@@ -268,6 +304,35 @@ class ApiClient:
             async with httpx.AsyncClient() as client:
                 response = await client.get(
                     url, headers=self._headers(), timeout=15
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
+    async def admin_get_layout(self, key: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/layouts/{key}"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url, headers=self._headers(), timeout=15
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
+    async def admin_set_layout(self, key: str, layout: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/layouts/{key}"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json=layout,
+                    headers=self._headers(),
+                    timeout=20,
                 )
                 response.raise_for_status()
                 return response.json()
@@ -302,6 +367,19 @@ class ApiClient:
 
     async def get_bot_assets(self) -> Dict[str, Any]:
         url = f"{self.base_url}/bot/assets"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url, headers=self._headers(), timeout=10
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
+    async def get_bot_layout(self, key: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/layouts/{key}"
 
         async def _do() -> Dict[str, Any]:
             async with httpx.AsyncClient() as client:

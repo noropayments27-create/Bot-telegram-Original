@@ -607,7 +607,11 @@ function parsePagination(query) {
 }
 
 function parseOrderLookupRef(rawValue) {
-  const ref = String(rawValue || "").trim();
+  const rawRef = String(rawValue || "").trim();
+  if (!rawRef) {
+    return { ref: "", orderNumber: null };
+  }
+  const ref = rawRef.replace(/^#/, "").trim();
   if (!ref) {
     return { ref: "", orderNumber: null };
   }
@@ -620,6 +624,42 @@ function parseOrderLookupRef(rawValue) {
     return { ref, orderNumber: null };
   }
   return { ref, orderNumber: parsed };
+}
+
+async function getOrderLookupRange(pool) {
+  const rangeRes = await pool.query(
+    `SELECT COUNT(*)::int AS total
+     FROM orders`
+  );
+  const total = Number.parseInt(rangeRes.rows[0]?.total, 10) || 0;
+  if (total <= 0) {
+    return {
+      total: 0,
+      min: null,
+      max: null,
+      min_label: null,
+      max_label: null,
+    };
+  }
+  return {
+    total,
+    min: 1,
+    max: total,
+    min_label: "00001",
+    max_label: String(total).padStart(5, "0"),
+  };
+}
+
+async function sendOrderNotFound(res, pool, orderLookupNumber) {
+  const payload = { error: "ORDER_NOT_FOUND" };
+  if (Number.isFinite(orderLookupNumber) && orderLookupNumber > 0) {
+    payload.order_lookup = {
+      requested: orderLookupNumber,
+      requested_label: String(orderLookupNumber).padStart(5, "0"),
+      ...(await getOrderLookupRange(pool)),
+    };
+  }
+  return res.status(404).json(payload);
 }
 
 async function recalcSkuKeys(client) {
@@ -2855,18 +2895,32 @@ router.get("/orders/:id", async (req, res, next) => {
     const orderRes = await pool.query(
       `SELECT o.*, u.telegram_id, u.telegram_username,
               b.telegram_id AS banned_telegram_id,
-              p.id AS product_id, p.code AS product_code,
+              p.id AS linked_product_id, p.code AS product_code,
               p.name AS product_name, p.price AS product_price
        FROM orders o
        JOIN users u ON u.id = o.user_id
        LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
-       JOIN products p ON p.id = o.product_id
-       WHERE (o.id::text = $1 OR ($2::bigint IS NOT NULL AND o.order_number = $2))`,
+       LEFT JOIN products p ON p.id = o.product_id
+       WHERE (
+         o.id::text = $1
+         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
+         OR (
+           $2::bigint IS NOT NULL
+           AND $2::bigint > 0
+           AND o.id = (
+             SELECT oo.id
+             FROM orders oo
+             ORDER BY oo.created_at ASC, oo.id ASC
+             OFFSET ($2::bigint - 1)
+             LIMIT 1
+           )
+         )
+       )`,
       [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
-      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+      return sendOrderNotFound(res, pool, orderLookupNumber);
     }
     const order = orderRes.rows[0];
     const orderId = order.id;
@@ -2911,12 +2965,15 @@ router.get("/orders/:id", async (req, res, next) => {
       `SELECT
          oi.product_id,
          p.code,
-         p.name,
+         COALESCE(p.name, 'Producto eliminado') AS name,
          oi.qty,
-         oi.unit_price_usd,
-         oi.line_total_usd
+         COALESCE(oi.unit_price_usd, p.price) AS unit_price_usd,
+         COALESCE(
+           oi.line_total_usd,
+           COALESCE(oi.unit_price_usd, p.price, 0) * COALESCE(oi.qty, 1)
+         ) AS line_total_usd
        FROM order_items oi
-       JOIN products p ON p.id = oi.product_id
+       LEFT JOIN products p ON p.id = oi.product_id
        WHERE oi.order_id = $1
        ORDER BY oi.created_at ASC`,
       [orderId]
@@ -3586,14 +3643,28 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
        LEFT JOIN order_payments op ON op.order_id = o.id
-       WHERE (o.id::text = $1 OR ($2::bigint IS NOT NULL AND o.order_number = $2))
+       WHERE (
+         o.id::text = $1
+         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
+         OR (
+           $2::bigint IS NOT NULL
+           AND $2::bigint > 0
+           AND o.id = (
+             SELECT oo.id
+             FROM orders oo
+             ORDER BY oo.created_at ASC, oo.id ASC
+             OFFSET ($2::bigint - 1)
+             LIMIT 1
+           )
+         )
+       )
        FOR UPDATE OF o`,
       [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+      return sendOrderNotFound(res, pool, orderLookupNumber);
     }
 
     const order = orderRes.rows[0];
@@ -4082,7 +4153,11 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 });
 
 router.post("/orders/:id/refund", async (req, res, next) => {
-  const orderId = req.params.id;
+  const { ref: orderLookupRef, orderNumber: orderLookupNumber } =
+    parseOrderLookupRef(req.params.id);
+  if (!orderLookupRef) {
+    return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
+  }
   const { amount, reason } = req.body || {};
   const pool = getPool();
   const client = await pool.connect();
@@ -4094,17 +4169,32 @@ router.post("/orders/:id/refund", async (req, res, next) => {
       `SELECT o.*, u.telegram_id, u.telegram_username, u.locale
        FROM orders o
        JOIN users u ON u.id = o.user_id
-       WHERE o.id = $1
+       WHERE (
+         o.id::text = $1
+         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
+         OR (
+           $2::bigint IS NOT NULL
+           AND $2::bigint > 0
+           AND o.id = (
+             SELECT oo.id
+             FROM orders oo
+             ORDER BY oo.created_at ASC, oo.id ASC
+             OFFSET ($2::bigint - 1)
+             LIMIT 1
+           )
+         )
+       )
        FOR UPDATE OF o`,
-      [orderId]
+      [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+      return sendOrderNotFound(res, pool, orderLookupNumber);
     }
 
     const order = orderRes.rows[0];
+    const orderId = order.id;
     if (order.status !== "PAID" && order.status !== "DELIVERED") {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "ORDER_NOT_REFUNDABLE" });
@@ -4314,14 +4404,28 @@ router.post("/orders/:id/reject", async (req, res, next) => {
       `SELECT o.*, u.telegram_id
        FROM orders o
        JOIN users u ON u.id = o.user_id
-       WHERE (o.id::text = $1 OR ($2::bigint IS NOT NULL AND o.order_number = $2))
+       WHERE (
+         o.id::text = $1
+         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
+         OR (
+           $2::bigint IS NOT NULL
+           AND $2::bigint > 0
+           AND o.id = (
+             SELECT oo.id
+             FROM orders oo
+             ORDER BY oo.created_at ASC, oo.id ASC
+             OFFSET ($2::bigint - 1)
+             LIMIT 1
+           )
+         )
+       )
        FOR UPDATE`,
       [orderLookupRef, orderLookupNumber]
     );
 
     if (orderRes.rowCount === 0) {
       await client.query("ROLLBACK");
-      return res.status(404).json({ error: "ORDER_NOT_FOUND" });
+      return sendOrderNotFound(res, pool, orderLookupNumber);
     }
 
     const orderId = orderRes.rows[0].id;

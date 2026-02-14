@@ -6,6 +6,7 @@ import { apiFetch, clearAuthToken } from "../lib/api";
 
 const NAV_LINKS = [
   { href: "/dashboard", label: "Principal" },
+  { href: "/home-menu", label: "Home Bot" },
   { href: "/orders", label: "Ordenes" },
   { href: "/inventory", label: "Inventario" },
   { href: "/tickets", label: "Tickets" },
