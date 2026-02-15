@@ -208,6 +208,10 @@ async function sendVideo(telegramId, payload) {
   return sendMedia(telegramId, "sendVideo", "video", payload);
 }
 
+async function sendAnimation(telegramId, payload) {
+  return sendMedia(telegramId, "sendAnimation", "animation", payload);
+}
+
 async function editMessageCaption(telegramId, messageId, caption, options = {}) {
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/bot${token}/editMessageCaption`;
@@ -246,5 +250,6 @@ module.exports = {
   sendDocument,
   sendPhoto,
   sendVideo,
+  sendAnimation,
   editMessageCaption,
 };

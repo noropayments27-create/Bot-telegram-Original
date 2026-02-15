@@ -124,13 +124,17 @@ async def handle_admin_panel_access(callback: CallbackQuery, state: FSMContext) 
         order_id = raw_order_id
     _set_admin_panel_pending(callback.from_user.id, order_id)
     await state.set_state(AdminPanelAccessStates.awaiting_password)
-    await state.update_data(admin_panel_order_id=order_id)
     logger.info(
         "admin_panel_access_requested admin_id=%s order_id=%s",
         callback.from_user.id,
         order_id,
     )
-    await callback.message.answer(t(locale, "admin_panel_password_prompt"))
+    prompt_message = await callback.message.answer(t(locale, "admin_panel_password_prompt"))
+    await state.update_data(
+        admin_panel_order_id=order_id,
+        admin_panel_prompt_chat_id=prompt_message.chat.id,
+        admin_panel_prompt_message_id=prompt_message.message_id,
+    )
     await callback.answer()
 
 
@@ -211,6 +215,8 @@ async def _process_admin_panel_password(
 
     data = await state.get_data()
     state_order_id = str(data.get("admin_panel_order_id") or "").strip()
+    prompt_chat_id = data.get("admin_panel_prompt_chat_id")
+    prompt_message_id = data.get("admin_panel_prompt_message_id")
     pending = _get_admin_panel_pending(message.from_user.id) or {}
     pending_order_id = str(pending.get("order_id") or "").strip()
     order_id = state_order_id or pending_order_id or None
@@ -220,6 +226,14 @@ async def _process_admin_panel_password(
         message.from_user.id,
         order_id or "",
     )
+    if prompt_chat_id and prompt_message_id:
+        try:
+            await message.bot.delete_message(
+                chat_id=int(prompt_chat_id),
+                message_id=int(prompt_message_id),
+            )
+        except Exception:
+            pass
     _clear_admin_panel_pending(message.from_user.id)
     await state.clear()
     if _is_local_url(access_url):
@@ -228,8 +242,8 @@ async def _process_admin_panel_password(
         await message.answer(
             f"{t(locale, 'admin_panel_access_ready')}\n\n"
             "⚠️ Telegram no permite botón con URL local.\n"
-            "Abre este enlace en tu navegador local:\n"
-            f"<a href=\"{safe_url}\">{safe_url}</a>",
+            "Copia este enlace y ábrelo en tu navegador local:\n"
+            f"<code>{safe_url}</code>",
             parse_mode="HTML",
         )
         return
@@ -245,14 +259,21 @@ async def _process_admin_panel_password(
         ]
     )
     try:
-        await message.answer(t(locale, "admin_panel_access_ready"), reply_markup=keyboard)
+        safe_url = html_escape(access_url, quote=True)
+        await message.answer(
+            f"{t(locale, 'admin_panel_access_ready')}\n\n"
+            "🔗 Link de acceso:\n"
+            f"<code>{safe_url}</code>",
+            parse_mode="HTML",
+            reply_markup=keyboard,
+        )
     except TelegramBadRequest:
         safe_url = html_escape(access_url, quote=True)
         await message.answer(
             f"{t(locale, 'admin_panel_access_ready')}\n\n"
             "⚠️ Telegram rechazó el botón URL.\n"
-            "Abre este enlace manualmente:\n"
-            f"<a href=\"{safe_url}\">{safe_url}</a>",
+            "Copia y abre este enlace manualmente:\n"
+            f"<code>{safe_url}</code>",
             parse_mode="HTML",
         )
 

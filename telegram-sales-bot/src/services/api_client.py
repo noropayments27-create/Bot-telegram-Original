@@ -215,10 +215,21 @@ class ApiClient:
             return response.json()
 
     async def admin_create_broadcast(
-        self, message: str, segment: str = "ALL_USERS"
+        self,
+        message: str,
+        segment: str = "ALL_USERS",
+        buttons: Optional[list[Dict[str, str]]] = None,
+        media_file_id: Optional[str] = None,
+        media_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/broadcasts"
-        payload = {"message": message, "segment": segment}
+        payload: Dict[str, Any] = {"message": message, "segment": segment}
+        if buttons is not None:
+            payload["buttons"] = buttons
+        if media_file_id:
+            payload["media_file_id"] = media_file_id
+        if media_kind:
+            payload["media_kind"] = media_kind
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url, json=payload, headers=self._headers(), timeout=30

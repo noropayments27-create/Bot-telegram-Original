@@ -54,6 +54,26 @@ _PRODUCT_IMAGE_SKIP_WORDS = {
     "no",
 }
 
+_BROADCAST_SKIP_WORDS = {
+    "sin",
+    "sin media",
+    "sin multimedia",
+    "sin imagen",
+    "omitir",
+    "saltar",
+    "skip",
+    "none",
+    "no",
+}
+
+_BROADCAST_EDIT_KEEP_WORDS = {
+    "saltar",
+    "skip",
+    "omitir",
+    "mantener",
+    "keep",
+}
+
 _HOME_LAYOUT_KEY = "home_menu_v1"
 _HOME_LAYOUT_LOCALES = ("es", "en")
 _HOME_BUTTON_LIMIT = 24
@@ -716,7 +736,10 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                     text=_tr(locale, "🛠 Mantenimiento", "🛠 Maintenance"),
                     callback_data="adminui:maint",
                 ),
-                InlineKeyboardButton(text="📣 Broadcast", callback_data="adminui:broadcast"),
+                InlineKeyboardButton(
+                    text=_tr(locale, "📣 Difusión", "📣 Broadcast"),
+                    callback_data="adminui:broadcast",
+                ),
             ],
             [
                 InlineKeyboardButton(
@@ -770,6 +793,268 @@ def _build_back_to_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMa
             ]
         ]
     )
+
+
+def _build_broadcast_buttons_prompt_text(locale: str | None = "es") -> str:
+    return _tr(
+        locale,
+        "📣 <b>Difusión</b>\n"
+        "Paso 2/3 · Botones con link (opcional).\n\n"
+        "Formato por línea:\n"
+        "<code>Texto botón | https://enlace</code>\n"
+        "Misma línea: <code>Botón 1 | https://a.com ; Botón 2 | https://b.com</code>\n\n"
+        "Si no quieres botones, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
+        "📣 <b>Broadcast</b>\n"
+        "Step 2/3 · Link buttons (optional).\n\n"
+        "One line format:\n"
+        "<code>Button text | https://link</code>\n"
+        "Same row: <code>Button 1 | https://a.com ; Button 2 | https://b.com</code>\n\n"
+        "If you don't want buttons, type <code>none</code> or use <b>⏭ Skip</b>.",
+    )
+
+
+def _build_broadcast_media_prompt_text(locale: str | None = "es") -> str:
+    return _tr(
+        locale,
+        "📣 <b>Difusión</b>\n"
+        "Paso 3/3 · Multimedia (opcional).\n\n"
+        "Envía una <b>imagen</b>, <b>GIF</b> o <b>video</b>.\n"
+        "Si no quieres multimedia, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
+        "📣 <b>Broadcast</b>\n"
+        "Step 3/3 · Media (optional).\n\n"
+        "Send an <b>image</b>, <b>GIF</b> or <b>video</b>.\n"
+        "If you don't want media, type <code>none</code> or use <b>⏭ Skip</b>.",
+    )
+
+
+def _normalize_broadcast_buttons_state(value: Any) -> list[Dict[str, str]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[Dict[str, str]] = []
+    default_row = 0
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        text = str(item.get("text") or "").strip()
+        url = str(item.get("url") or "").strip()
+        if not text or not url:
+            continue
+        if not (url.startswith("http://") or url.startswith("https://")):
+            continue
+        row_raw = item.get("row")
+        try:
+            row = int(row_raw)
+        except (TypeError, ValueError):
+            row = default_row
+        if row < 0:
+            row = default_row
+        normalized.append({"text": text[:64], "url": url, "row": row})
+        default_row += 1
+    return normalized
+
+
+def _build_broadcast_preview_keyboard(
+    buttons: list[Dict[str, str]],
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    grouped: Dict[int, list[InlineKeyboardButton]] = {}
+    fallback_row = 0
+    for button in buttons:
+        text = str(button.get("text") or "").strip()[:64]
+        url = str(button.get("url") or "").strip()
+        if not text or not url:
+            continue
+        try:
+            row_key = int(button.get("row"))
+        except (TypeError, ValueError):
+            row_key = fallback_row
+        if row_key < 0:
+            row_key = fallback_row
+        grouped.setdefault(row_key, []).append(InlineKeyboardButton(text=text, url=url))
+        fallback_row += 1
+    rows: list[list[InlineKeyboardButton]] = []
+    for key in sorted(grouped.keys()):
+        row_buttons = grouped.get(key) or []
+        if row_buttons:
+            rows.append(row_buttons[:4])
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr(locale, "Salir", "Exit"),
+                callback_data="adminui:broadcast:preview:close",
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_broadcast_step_keyboard(
+    step: str,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    target = "buttons" if step == "buttons" else "media"
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⏭ Saltar", "⏭ Skip"),
+                    callback_data=f"adminui:broadcast:skip:{target}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
+
+
+def _broadcast_media_label(media_kind: str | None, locale: str | None = "es") -> str:
+    media_kind_safe = str(media_kind or "").strip().lower()
+    if media_kind_safe == "photo":
+        return _tr(locale, "Imagen", "Image")
+    if media_kind_safe == "animation":
+        return "GIF"
+    if media_kind_safe == "video":
+        return _tr(locale, "Video", "Video")
+    return _tr(locale, "Sin multimedia", "No media")
+
+
+def _build_broadcast_review_text(
+    text: str,
+    buttons: list[Dict[str, str]],
+    media_kind: str | None,
+    locale: str | None = "es",
+) -> str:
+    return (
+        _tr(
+            locale,
+            "✅ <b>Difusión lista para enviar</b>\n\n",
+            "✅ <b>Broadcast ready to send</b>\n\n",
+        )
+        + f"📝 {_tr(locale, 'Texto', 'Text')}: <b>{_tr(locale, 'configurado', 'configured')}</b>\n"
+        f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons)}</b>\n"
+        f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n\n"
+        + _tr(
+            locale,
+            "Usa los botones para <b>ver previa</b>, <b>editar</b> o <b>enviar</b>.",
+            "Use the buttons to <b>preview</b>, <b>edit</b> or <b>send</b>.",
+        )
+    )
+
+
+def _build_broadcast_review_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👁 Ver previa", "👁 Preview"),
+                    callback_data="adminui:broadcast:review:preview",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "✅ Enviar", "✅ Send"),
+                    callback_data="adminui:broadcast:review:send",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Editar texto", "✏️ Edit text"),
+                    callback_data="adminui:broadcast:review:edit:text",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔗 Editar botones", "🔗 Edit buttons"),
+                    callback_data="adminui:broadcast:review:edit:buttons",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🖼 Editar multimedia", "🖼 Edit media"),
+                    callback_data="adminui:broadcast:review:edit:media",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
+
+
+async def _send_broadcast_preview_message(
+    message: Message,
+    text: str,
+    buttons: list[Dict[str, str]],
+    media_file_id: str | None,
+    media_kind: str | None,
+    locale: str | None = "es",
+) -> None:
+    preview_markup = _build_broadcast_preview_keyboard(buttons, locale)
+    media_kind_safe = str(media_kind or "").strip().lower()
+    media_id = str(media_file_id or "").strip()
+    text_value = text.strip()
+    caption = text_value[:900] if text_value else ""
+
+    try:
+        if media_id:
+            if media_kind_safe == "video":
+                await message.answer_video(
+                    video=media_id,
+                    caption=caption or None,
+                    parse_mode="HTML",
+                    reply_markup=preview_markup,
+                )
+                return
+            if media_kind_safe == "animation":
+                await message.answer_animation(
+                    animation=media_id,
+                    caption=caption or None,
+                    parse_mode="HTML",
+                    reply_markup=preview_markup,
+                )
+                return
+            await message.answer_photo(
+                photo=media_id,
+                caption=caption or None,
+                parse_mode="HTML",
+                reply_markup=preview_markup,
+            )
+            return
+
+        await message.answer(
+            text_value,
+            parse_mode="HTML",
+            reply_markup=preview_markup,
+        )
+    except TelegramBadRequest:
+        if media_id:
+            if media_kind_safe == "video":
+                await message.answer_video(
+                    video=media_id,
+                    caption=caption or None,
+                    reply_markup=preview_markup,
+                )
+                return
+            if media_kind_safe == "animation":
+                await message.answer_animation(
+                    animation=media_id,
+                    caption=caption or None,
+                    reply_markup=preview_markup,
+                )
+                return
+            await message.answer_photo(
+                photo=media_id,
+                caption=caption or None,
+                reply_markup=preview_markup,
+            )
+            return
+        await message.answer(
+            text_value,
+            reply_markup=preview_markup,
+        )
 
 
 async def _build_delete_categories_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
@@ -843,14 +1128,14 @@ def _build_delete_products_keyboard(
 def _build_admin_panel_text(locale: str | None = "es") -> str:
     return _tr(
         locale,
-        "🧩 <b>Panel Admin del Bot</b>\n\n"
+        "📱 <b>Panel Admin del Bot</b> 🤖\n\n"
         "Selecciona una acción desde los botones.\n\n"
         "📌 Todo el flujo está guiado paso a paso.\n"
-        "🛑 Puedes cancelar en cualquier momento con <code>/cancel</code>.",
-        "🧩 <b>Bot Admin Panel</b>\n\n"
+        "🛑 Puedes cancelar en cualquier momento con /cancel.",
+        "📱 <b>Bot Admin Panel</b> 🤖\n\n"
         "Choose an action from the buttons.\n\n"
         "📌 The full flow is guided step by step.\n"
-        "🛑 You can cancel anytime with <code>/cancel</code>.",
+        "🛑 You can cancel anytime with /cancel.",
     )
 
 
@@ -1046,12 +1331,12 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
         "broadcast": (
             _tr(
                 locale,
-                "📣 <b>Broadcast</b>\n"
-                "Envía ahora el texto del mensaje masivo.\n\n"
+                "📣 <b>Difusión</b>\n"
+                "Paso 1/3 · Envía ahora el <b>texto</b> del mensaje masivo.\n\n"
                 "✍️ Ejemplo:\n"
                 "<code>Nuevo aviso importante para todos los usuarios.</code>",
                 "📣 <b>Broadcast</b>\n"
-                "Send the mass-message text now.\n\n"
+                "Step 1/3 · Send the mass-message <b>text</b> now.\n\n"
                 "✍️ Example:\n"
                 "<code>Important update for all users.</code>",
             )
@@ -1526,17 +1811,85 @@ async def _build_unban_user_text(telegram_id: int) -> str:
     return "❌ <b>No se pudo desbanear al usuario.</b>"
 
 
-async def _build_broadcast_result_text(text: str) -> str:
-    create_res = await api_client.admin_create_broadcast(text, segment="ALL_USERS")
+def _parse_broadcast_buttons_input(raw_text: str, locale: str | None = "es") -> list[Dict[str, str]]:
+    text = (raw_text or "").strip()
+    if not text:
+        return []
+    if text.lower() in _BROADCAST_SKIP_WORDS:
+        return []
+
+    parsed: list[Dict[str, str]] = []
+    lines = [line.strip() for line in text.splitlines() if line.strip()]
+    if not lines:
+        return []
+    for row_index, line in enumerate(lines):
+        specs = [segment.strip() for segment in line.split(";") if segment.strip()]
+        if not specs:
+            continue
+        for spec in specs:
+            parts = [part.strip() for part in spec.split("|", 1)]
+            if len(parts) != 2:
+                raise ValueError(
+                    _tr(
+                        locale,
+                        "Formato inválido. Usa: texto | https://enlace",
+                        "Invalid format. Use: text | https://link",
+                    )
+                )
+            label, url = parts
+            if not label:
+                raise ValueError(_tr(locale, "Falta el texto del botón.", "Button text is required."))
+            if not (url.startswith("http://") or url.startswith("https://")):
+                raise ValueError(
+                    _tr(
+                        locale,
+                        "El enlace debe iniciar con http:// o https://",
+                        "Link must start with http:// or https://",
+                    )
+                )
+            parsed.append({"text": label[:64], "url": url, "row": row_index})
+            if len(parsed) >= 12:
+                return parsed
+    return parsed
+
+
+async def _build_broadcast_result_text(
+    text: str,
+    locale: str | None = "es",
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_file_id: str | None = None,
+    media_kind: str | None = None,
+) -> str:
+    create_res = await api_client.admin_create_broadcast(
+        text,
+        segment="ALL_USERS",
+        buttons=buttons or [],
+        media_file_id=media_file_id,
+        media_kind=media_kind,
+    )
     broadcast = create_res.get("broadcast", {})
     broadcast_id = str(broadcast.get("id"))
     if not broadcast_id:
-        return "❌ <b>No se pudo crear el broadcast.</b>"
+        return _tr(
+            locale,
+            "❌ <b>No se pudo crear la difusión.</b>",
+            "❌ <b>Could not create the broadcast.</b>",
+        )
     send_res = await api_client.admin_send_broadcast(broadcast_id)
     result = send_res.get("result", {})
+    media_text = _tr(locale, "Sin multimedia", "No media")
+    media_kind_safe = str(media_kind or "").strip().lower()
+    if media_kind_safe == "photo":
+        media_text = _tr(locale, "Imagen", "Image")
+    elif media_kind_safe == "animation":
+        media_text = _tr(locale, "GIF", "GIF")
+    elif media_kind_safe == "video":
+        media_text = _tr(locale, "Video", "Video")
     return (
-        "📣 <b>Broadcast enviado</b>\n\n"
-        f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
+        _tr(locale, "📣 <b>Difusión enviada</b>\n\n", "📣 <b>Broadcast sent</b>\n\n")
+        + f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
+        f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons or [])}</b>\n"
+        f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(media_text)}</b>\n"
         f"🎯 Objetivo: <b>{result.get('target_count')}</b>\n"
         f"✅ Enviados: <b>{result.get('sent_count')}</b>\n"
         f"❌ Fallidos: <b>{result.get('failed_count')}</b>"
@@ -1831,7 +2184,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("order", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1841,7 +2194,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("approve", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1851,7 +2204,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("reject", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1861,7 +2214,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("refund", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1871,7 +2224,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("ban", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1881,7 +2234,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("unban", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1916,12 +2269,177 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             return
 
         if action == "broadcast":
+            sub_action = parts[2] if len(parts) > 2 else ""
+            if sub_action == "preview":
+                mode = str(parts[3] if len(parts) > 3 else "").lower()
+                if mode == "close":
+                    try:
+                        await callback.message.delete()
+                    except Exception:
+                        pass
+                    await callback.answer(_tr(locale, "Vista previa cerrada.", "Preview closed."))
+                    return
+
+            if sub_action == "skip":
+                step = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                if not message_text:
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
+                    await _edit_panel_message(
+                        callback.message,
+                        _guide_text("broadcast", locale),
+                        reply_markup=_build_back_to_panel_keyboard(locale),
+                    )
+                    return
+
+                buttons = _normalize_broadcast_buttons_state(
+                    data.get("admin_ui_broadcast_buttons")
+                )
+                if step == "buttons":
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(
+                        admin_ui_action="broadcast_media",
+                        admin_ui_broadcast_buttons=[],
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_media_prompt_text(locale),
+                        reply_markup=_build_broadcast_step_keyboard("media", locale),
+                    )
+                    return
+                if step == "media":
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(
+                        admin_ui_action="broadcast_review",
+                        admin_ui_broadcast_buttons=buttons,
+                        admin_ui_broadcast_media_file_id="",
+                        admin_ui_broadcast_media_kind="",
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_review_text(
+                            message_text,
+                            buttons,
+                            None,
+                            locale,
+                        ),
+                        reply_markup=_build_broadcast_review_keyboard(locale),
+                    )
+                    return
+
+            if sub_action == "review":
+                mode = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                if not message_text:
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
+                    await _edit_panel_message(
+                        callback.message,
+                        _guide_text("broadcast", locale),
+                        reply_markup=_build_back_to_panel_keyboard(locale),
+                    )
+                    return
+
+                buttons = _normalize_broadcast_buttons_state(
+                    data.get("admin_ui_broadcast_buttons")
+                )
+                media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+                media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+                if mode == "preview":
+                    await _send_broadcast_preview_message(
+                        callback.message,
+                        message_text,
+                        buttons,
+                        media_file_id or None,
+                        media_kind or None,
+                        locale=locale,
+                    )
+                    await callback.answer(_tr(locale, "Vista previa enviada.", "Preview sent."))
+                    return
+
+                if mode == "send":
+                    text = await _build_broadcast_result_text(
+                        message_text,
+                        locale=locale,
+                        buttons=buttons,
+                        media_file_id=media_file_id or None,
+                        media_kind=media_kind or None,
+                    )
+                    await state.clear()
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=_build_back_to_panel_keyboard(locale),
+                    )
+                    return
+
+                if mode == "edit":
+                    field = str(parts[4] if len(parts) > 4 else "").lower()
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    if field == "text":
+                        await state.update_data(admin_ui_action="broadcast_review_edit_text", **panel_anchor)
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "✏️ <b>Editar texto de difusión</b>\n\nEnvía solo el nuevo texto. "
+                                "Se mantendrán tus botones y multimedia actuales.",
+                                "✏️ <b>Edit broadcast text</b>\n\nSend only the new text. "
+                                "Your current buttons and media will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "buttons":
+                        await state.update_data(admin_ui_action="broadcast_review_edit_buttons", **panel_anchor)
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🔗 <b>Editar botones de difusión</b>\n\n"
+                                "Envía solo los botones nuevos.\n"
+                                "Se mantendrán tu texto y multimedia actuales.\n\n"
+                                + _build_broadcast_buttons_prompt_text(locale),
+                                "🔗 <b>Edit broadcast buttons</b>\n\n"
+                                "Send only the new buttons.\n"
+                                "Your current text and media will be preserved.\n\n"
+                                + _build_broadcast_buttons_prompt_text(locale),
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "media":
+                        await state.update_data(admin_ui_action="broadcast_review_edit_media", **panel_anchor)
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🖼 <b>Editar multimedia de difusión</b>\n\n"
+                                "Envía una imagen, GIF o video para reemplazarla.\n"
+                                "Escribe <code>sin</code> para quitarla.\n"
+                                "Escribe <code>saltar</code> para mantener la actual.\n"
+                                "Se mantendrán tu texto y botones actuales.",
+                                "🖼 <b>Edit broadcast media</b>\n\n"
+                                "Send an image, GIF or video to replace it.\n"
+                                "Type <code>none</code> to remove it.\n"
+                                "Type <code>skip</code> to keep current media.\n"
+                                "Your current text and buttons will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+
             await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="broadcast_message", **panel_anchor)
+            await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
             await _edit_panel_message(
                 callback.message,
                 _guide_text("broadcast", locale),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -1992,7 +2510,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         "Send the new full home text.\n"
                         "You can use basic HTML format.",
                     ),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
                 )
                 return
 
@@ -2106,7 +2624,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 await _edit_panel_message(
                     callback.message,
                     prompt,
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
                 )
                 return
 
@@ -2147,7 +2665,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 await _edit_panel_message(
                     callback.message,
                     _guide_text("product_add", locale),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
                 )
                 return
             if sub_action == "delete":
@@ -2256,8 +2774,10 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
     if not await _ensure_admin_http(message):
         return
 
-    raw_text = (message.text or "").strip()
+    raw_text = (message.text or message.caption or "").strip()
     photo_file_id = message.photo[-1].file_id if message.photo else ""
+    animation_file_id = message.animation.file_id if message.animation else ""
+    video_file_id = message.video.file_id if message.video else ""
     data = await state.get_data()
     action = str(data.get("admin_ui_action") or "").strip()
     panel_resume: Dict[str, Any] = {}
@@ -2275,7 +2795,12 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 await render_home_view(message, message.from_user.id, locale)
             return
 
-        if action != "product_create_image" and not raw_text:
+        allows_media_input = action in {
+            "product_create_image",
+            "broadcast_media",
+            "broadcast_review_edit_media",
+        }
+        if not allows_media_input and not raw_text:
             await _edit_state_panel_message(
                 message,
                 state,
@@ -2286,7 +2811,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "⚠️ <b>Invalid input</b>\n\n"
                     "Send a valid value or write <code>/cancel</code>.",
                 ),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -2797,7 +3322,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return
@@ -2808,7 +3333,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return
@@ -2827,7 +3352,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "Send the reason.\n"
                     "Example: <code>Blurry proof screenshot</code>",
                 ),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -2843,7 +3368,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return
@@ -2862,7 +3387,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "Send the reason.\n"
                     "Example: <code>Refund requested by customer</code>",
                 ),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -2874,7 +3399,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return
@@ -2891,7 +3416,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                         "❌ <b>telegram_id inválido</b>\n\nEjemplo: <code>7621162350</code>",
                         "❌ <b>Invalid telegram_id</b>\n\nExample: <code>7621162350</code>",
                     ),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
                 )
                 return
             await state.update_data(admin_ui_action="ban_reason", admin_ui_telegram_id=telegram_id)
@@ -2907,7 +3432,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "Send the reason.\n"
                     "Example: <code>Payment proof fraud</code>",
                 ),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -2923,7 +3448,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return
@@ -2940,7 +3465,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                         "❌ <b>telegram_id inválido</b>\n\nEjemplo: <code>7621162350</code>",
                         "❌ <b>Invalid telegram_id</b>\n\nExample: <code>7621162350</code>",
                     ),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
                 )
                 return
             text = await _build_unban_user_text(telegram_id)
@@ -2948,18 +3473,247 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return
 
+        if action == "broadcast_text":
+            await state.update_data(
+                admin_ui_action="broadcast_buttons",
+                admin_ui_broadcast_text=raw_text,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_buttons_prompt_text(locale),
+                reply_markup=_build_broadcast_step_keyboard("buttons", locale),
+            )
+            return
+
+        if action == "broadcast_buttons":
+            try:
+                buttons = _parse_broadcast_buttons_input(raw_text, locale)
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Vuelve a enviar los botones o escribe <code>sin</code>.",
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Send the buttons again or type <code>none</code>.",
+                    ),
+                    reply_markup=_build_broadcast_step_keyboard("buttons", locale),
+                )
+                return
+
+            await state.update_data(
+                admin_ui_action="broadcast_media",
+                admin_ui_broadcast_buttons=buttons,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_media_prompt_text(locale),
+                reply_markup=_build_broadcast_step_keyboard("media", locale),
+            )
+            return
+
+        if action == "broadcast_media":
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            if not message_text:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Se perdió el texto de la difusión.</b>\n\nInicia de nuevo desde el botón de difusión.",
+                        "⚠️ <b>Broadcast text context was lost.</b>\n\nStart again from the broadcast button.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                await state.clear()
+                return
+
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+
+            media_file_id: str | None = None
+            media_kind: str | None = None
+            if photo_file_id:
+                media_file_id = photo_file_id
+                media_kind = "photo"
+            elif animation_file_id:
+                media_file_id = animation_file_id
+                media_kind = "animation"
+            elif video_file_id:
+                media_file_id = video_file_id
+                media_kind = "video"
+            elif raw_text and raw_text.lower() in _BROADCAST_SKIP_WORDS:
+                media_file_id = None
+                media_kind = None
+            else:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Multimedia inválida.</b>\n\n"
+                        "Envía una imagen, GIF o video, o escribe <code>sin</code>.",
+                        "⚠️ <b>Invalid media.</b>\n\n"
+                        "Send an image, GIF or video, or type <code>none</code>.",
+                    ),
+                    reply_markup=_build_broadcast_step_keyboard("media", locale),
+                )
+                return
+
+            await state.update_data(
+                admin_ui_action="broadcast_review",
+                admin_ui_broadcast_buttons=buttons,
+                admin_ui_broadcast_media_file_id=media_file_id or "",
+                admin_ui_broadcast_media_kind=media_kind or "",
+            )
+            review_text = _build_broadcast_review_text(
+                message_text,
+                buttons=buttons,
+                media_kind=media_kind,
+                locale=locale,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                review_text,
+                reply_markup=_build_broadcast_review_keyboard(locale),
+            )
+            return
+
+        if action == "broadcast_review":
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+            media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_review_text(message_text, buttons, media_kind, locale),
+                reply_markup=_build_broadcast_review_keyboard(locale),
+            )
+            return
+
+        if action == "broadcast_review_edit_text":
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+            media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            await state.update_data(
+                admin_ui_action="broadcast_review",
+                admin_ui_broadcast_text=raw_text,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_review_text(raw_text, buttons, media_kind, locale),
+                reply_markup=_build_broadcast_review_keyboard(locale),
+            )
+            return
+
+        if action == "broadcast_review_edit_buttons":
+            try:
+                buttons = _parse_broadcast_buttons_input(raw_text, locale)
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Vuelve a enviar los botones.",
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Send the buttons again.",
+                    ),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
+                )
+                return
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            await state.update_data(
+                admin_ui_action="broadcast_review",
+                admin_ui_broadcast_buttons=buttons,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_review_text(message_text, buttons, media_kind, locale),
+                reply_markup=_build_broadcast_review_keyboard(locale),
+            )
+            return
+
+        if action == "broadcast_review_edit_media":
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+            current_media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+            current_media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+
+            next_media_file_id = current_media_file_id
+            next_media_kind = current_media_kind
+            text_lower = raw_text.lower() if raw_text else ""
+            if photo_file_id:
+                next_media_file_id = photo_file_id
+                next_media_kind = "photo"
+            elif animation_file_id:
+                next_media_file_id = animation_file_id
+                next_media_kind = "animation"
+            elif video_file_id:
+                next_media_file_id = video_file_id
+                next_media_kind = "video"
+            elif text_lower in _BROADCAST_EDIT_KEEP_WORDS:
+                next_media_file_id = current_media_file_id
+                next_media_kind = current_media_kind
+            elif text_lower in _BROADCAST_SKIP_WORDS:
+                next_media_file_id = ""
+                next_media_kind = ""
+            else:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Multimedia inválida.</b>\n\n"
+                        "Envía una imagen, GIF o video.\n"
+                        "Escribe <code>sin</code> para quitar multimedia.\n"
+                        "Escribe <code>saltar</code> para mantener la actual.",
+                        "⚠️ <b>Invalid media.</b>\n\n"
+                        "Send an image, GIF or video.\n"
+                        "Type <code>none</code> to remove media.\n"
+                        "Type <code>skip</code> to keep current media.",
+                    ),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
+                )
+                return
+
+            await state.update_data(
+                admin_ui_action="broadcast_review",
+                admin_ui_broadcast_media_file_id=next_media_file_id,
+                admin_ui_broadcast_media_kind=next_media_kind,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_review_text(
+                    message_text,
+                    buttons,
+                    next_media_kind,
+                    locale,
+                ),
+                reply_markup=_build_broadcast_review_keyboard(locale),
+            )
+            return
+
         if action == "broadcast_message":
-            text = await _build_broadcast_result_text(raw_text)
+            text = await _build_broadcast_result_text(raw_text, locale=locale)
             await _edit_state_panel_message(
                 message,
                 state,
                 text,
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             await state.clear()
             return

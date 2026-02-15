@@ -15,6 +15,8 @@ const {
   downloadFile,
   sendMessage,
   sendPhoto,
+  sendVideo,
+  sendAnimation,
   sendDocument,
   editMessageCaption,
 } = require("../services/telegram");
@@ -785,6 +787,7 @@ function normalizeBroadcastButtons(value) {
   if (!Array.isArray(value)) {
     return [];
   }
+  let fallbackRow = 0;
   return value
     .map((button) => {
       if (!button || typeof button !== "object") {
@@ -795,7 +798,11 @@ function normalizeBroadcastButtons(value) {
       if (!text || !url || !/^https?:\/\//i.test(url)) {
         return null;
       }
-      return { text, url };
+      const rawRow = Number(button.row);
+      const row =
+        Number.isInteger(rawRow) && rawRow >= 0 ? rawRow : fallbackRow;
+      fallbackRow += 1;
+      return { text, url, row };
     })
     .filter(Boolean);
 }
@@ -824,18 +831,76 @@ function getImageExtension(mime) {
     "image/jpg": "jpg",
     "image/png": "png",
     "image/webp": "webp",
+    "image/gif": "gif",
+    "video/mp4": "mp4",
+    "video/webm": "webm",
+    "video/quicktime": "mov",
   };
   return map[mime] || "jpg";
+}
+
+function normalizeBroadcastMediaKind(value) {
+  const kind = String(value || "").trim().toLowerCase();
+  if (kind === "photo" || kind === "animation" || kind === "video") {
+    return kind;
+  }
+  return "";
+}
+
+function parseStoredTelegramMedia(imagePath, imageMime) {
+  const pathValue = String(imagePath || "").trim();
+  if (!pathValue.startsWith("tgfile:")) {
+    return null;
+  }
+  const fileId = pathValue.slice("tgfile:".length).trim();
+  if (!fileId) {
+    return null;
+  }
+  const rawMime = String(imageMime || "").trim().toLowerCase();
+  const maybeKind = rawMime.startsWith("tg:") ? rawMime.slice(3) : "";
+  const kind =
+    maybeKind === "animation" || maybeKind === "video" || maybeKind === "photo"
+      ? maybeKind
+      : "photo";
+  return { fileId, kind };
 }
 
 function buildInlineKeyboard(buttons) {
   if (!Array.isArray(buttons) || buttons.length === 0) {
     return null;
   }
+  const grouped = new Map();
+  let fallbackRow = 0;
+  for (const button of buttons) {
+    if (!button || typeof button !== "object") {
+      continue;
+    }
+    const text = String(button.text || "").trim();
+    const url = String(button.url || "").trim();
+    if (!text || !/^https?:\/\//i.test(url)) {
+      continue;
+    }
+    const rawRow = Number(button.row);
+    const rowKey =
+      Number.isInteger(rawRow) && rawRow >= 0 ? rawRow : fallbackRow;
+    fallbackRow += 1;
+    if (!grouped.has(rowKey)) {
+      grouped.set(rowKey, []);
+    }
+    const row = grouped.get(rowKey);
+    if (Array.isArray(row) && row.length < 4) {
+      row.push({ text, url });
+    }
+  }
+  const inlineKeyboard = Array.from(grouped.entries())
+    .sort((a, b) => a[0] - b[0])
+    .map((entry) => entry[1])
+    .filter((row) => Array.isArray(row) && row.length > 0);
+  if (inlineKeyboard.length === 0) {
+    return null;
+  }
   return {
-    inline_keyboard: buttons.map((button) => [
-      { text: button.text, url: button.url },
-    ]),
+    inline_keyboard: inlineKeyboard,
   };
 }
 
@@ -7077,6 +7142,10 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
   const imageDataUrl = req.body && req.body.image_data_url
     ? String(req.body.image_data_url).trim()
     : "";
+  const mediaFileId = req.body && req.body.media_file_id
+    ? String(req.body.media_file_id).trim()
+    : "";
+  const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
   const clearImage = Boolean(req.body && req.body.clear_image);
   const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
   const savedFlag = typeof req.body?.saved === "boolean" ? req.body.saved : null;
@@ -7096,8 +7165,14 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
 
     const broadcast = broadcastRes.rows[0];
     const imagePayload = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
+    if (imageDataUrl && mediaFileId) {
+      return res.status(400).json({ error: "MEDIA_CONFLICT" });
+    }
     if (imageDataUrl && !imagePayload) {
       return res.status(400).json({ error: "IMAGE_INVALID" });
+    }
+    if (mediaFileId && !mediaKind) {
+      return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
     }
     if (imagePayload && imagePayload.buffer.length > 6 * 1024 * 1024) {
       return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
@@ -7107,7 +7182,7 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
     const normalizedSegment = rawSegment ? normalizeBroadcastSegmentInput(rawSegment) : "";
     const nextSegment = normalizedSegment || broadcast.segment;
     const hasImage = Boolean(broadcast.image_path) && !clearImage;
-    if (!nextMessage && !hasImage && !imagePayload) {
+    if (!nextMessage && !hasImage && !imagePayload && !mediaFileId) {
       return res.status(400).json({ error: "MESSAGE_REQUIRED" });
     }
 
@@ -7139,7 +7214,16 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
     );
 
     let updated = updateRes.rows[0];
-    if (imagePayload) {
+    if (mediaFileId) {
+      const mediaRes = await pool.query(
+        `UPDATE broadcasts
+         SET image_path = $1, image_filename = NULL, image_mime = $2
+         WHERE id = $3
+         RETURNING *`,
+        [`tgfile:${mediaFileId}`, `tg:${mediaKind}`, updated.id]
+      );
+      updated = mediaRes.rows[0];
+    } else if (imagePayload) {
       const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "broadcasts");
       await fs.mkdir(uploadsDir, { recursive: true });
       const extension = getImageExtension(imagePayload.mime);
@@ -7212,14 +7296,24 @@ router.post("/broadcasts", async (req, res, next) => {
   const imageDataUrl = req.body && req.body.image_data_url
     ? String(req.body.image_data_url).trim()
     : "";
+  const mediaFileId = req.body && req.body.media_file_id
+    ? String(req.body.media_file_id).trim()
+    : "";
+  const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
   const imagePayload = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
   const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
 
-  if (!messageText && !imagePayload) {
+  if (!messageText && !imagePayload && !mediaFileId) {
     return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+  }
+  if (imageDataUrl && mediaFileId) {
+    return res.status(400).json({ error: "MEDIA_CONFLICT" });
   }
   if (imageDataUrl && !imagePayload) {
     return res.status(400).json({ error: "IMAGE_INVALID" });
+  }
+  if (mediaFileId && !mediaKind) {
+    return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
   }
   if (imagePayload && imagePayload.buffer.length > 6 * 1024 * 1024) {
     return res.status(400).json({ error: "IMAGE_TOO_LARGE" });
@@ -7280,7 +7374,16 @@ router.post("/broadcasts", async (req, res, next) => {
 
     let broadcast = broadcastRes.rows[0];
 
-    if (imagePayload) {
+    if (mediaFileId) {
+      const updateRes = await pool.query(
+        `UPDATE broadcasts
+         SET image_path = $1, image_filename = NULL, image_mime = $2
+         WHERE id = $3
+         RETURNING *`,
+        [`tgfile:${mediaFileId}`, `tg:${mediaKind}`, broadcast.id]
+      );
+      broadcast = updateRes.rows[0];
+    } else if (imagePayload) {
       const uploadsDir = path.resolve(__dirname, "..", "..", "uploads", "broadcasts");
       await fs.mkdir(uploadsDir, { recursive: true });
       const extension = getImageExtension(imagePayload.mime);
@@ -7486,18 +7589,45 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
       ? { parse_mode: "HTML", reply_markup: replyMarkup }
       : { parse_mode: "HTML" };
 
+    const storedTelegramMedia = parseStoredTelegramMedia(
+      broadcast.image_path,
+      broadcast.image_mime
+    );
+
     for (let i = 0; i < recipientIds.length; i += batchSize) {
       const batch = recipientIds.slice(i, i + batchSize);
       for (const telegramId of batch) {
         try {
-          if (broadcast.image_path) {
-            await sendPhoto(telegramId, {
+          if (storedTelegramMedia) {
+            const mediaPayload = {
+              file_id: storedTelegramMedia.fileId,
+              caption: formattedMessage,
+              parse_mode: "HTML",
+              reply_markup: replyMarkup || undefined,
+            };
+            if (storedTelegramMedia.kind === "video") {
+              await sendVideo(telegramId, mediaPayload);
+            } else if (storedTelegramMedia.kind === "animation") {
+              await sendAnimation(telegramId, mediaPayload);
+            } else {
+              await sendPhoto(telegramId, mediaPayload);
+            }
+          } else if (broadcast.image_path) {
+            const mime = String(broadcast.image_mime || "").trim().toLowerCase();
+            const mediaPayload = {
               path: broadcast.image_path,
               filename: broadcast.image_filename || undefined,
               caption: formattedMessage,
               parse_mode: "HTML",
               reply_markup: replyMarkup || undefined,
-            });
+            };
+            if (mime === "image/gif") {
+              await sendAnimation(telegramId, mediaPayload);
+            } else if (mime.startsWith("video/")) {
+              await sendVideo(telegramId, mediaPayload);
+            } else {
+              await sendPhoto(telegramId, mediaPayload);
+            }
           } else {
             await sendMessage(telegramId, formattedMessage, messageOptions);
           }

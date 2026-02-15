@@ -42,10 +42,10 @@ async def main() -> None:
     dp.include_router(start.router)
     dp.include_router(lang.router)
     dp.include_router(shop.router)
-    dp.include_router(support.router)
     dp.include_router(admin_auth.router)
     dp.include_router(admin_actions.router)
     dp.include_router(admin_commands.router)
+    dp.include_router(support.router)
     dp.include_router(affiliates.router)
 
     await dp.start_polling(bot)
