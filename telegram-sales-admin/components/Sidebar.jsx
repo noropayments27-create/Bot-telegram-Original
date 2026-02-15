@@ -1,4 +1,4 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import Link from "next/link";
 import { useRouter } from "next/router";
 
@@ -80,7 +80,7 @@ const NAV_ITEMS = [
     ),
   },
   {
-    label: "Imagenes",
+    label: "Imagenes del bot",
     href: "/images",
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden="true">
@@ -112,12 +112,12 @@ const NAV_ITEMS = [
     ),
   },
   {
-    label: "Home Bot",
+    label: "Bot (Editor)",
     href: "/home-menu",
     icon: (
       <svg viewBox="0 0 24 24" aria-hidden="true">
         <path
-          d="M4 11.5l8 -7l8 7"
+          d="M12 3v3"
           fill="none"
           stroke="currentColor"
           strokeWidth="2.5"
@@ -125,7 +125,7 @@ const NAV_ITEMS = [
           strokeLinejoin="round"
         />
         <path
-          d="M7 10.5v8.5h10v-8.5"
+          d="M7 9h10a2 2 0 0 1 2 2v6a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2v-6a2 2 0 0 1 2-2"
           fill="none"
           stroke="currentColor"
           strokeWidth="2.5"
@@ -133,7 +133,15 @@ const NAV_ITEMS = [
           strokeLinejoin="round"
         />
         <path
-          d="M10 19v-4h4v4"
+          d="M9.5 13.5h.01M14.5 13.5h.01"
+          fill="none"
+          stroke="currentColor"
+          strokeWidth="2.5"
+          strokeLinecap="round"
+          strokeLinejoin="round"
+        />
+        <path
+          d="M9 16h6"
           fill="none"
           stroke="currentColor"
           strokeWidth="2.5"
@@ -347,9 +355,19 @@ const NAV_ITEMS = [
   },
 ];
 
+const PROFILE_IMAGE_STORAGE_KEY = "admin_profile_image_url";
+const PROFILE_NAME_STORAGE_KEY = "admin_profile_name";
+const DEFAULT_PROFILE_IMAGE = "https://i.ibb.co/qYq42F7v/noro.png";
+const DEFAULT_PROFILE_NAME = "Noropayments";
+
 export default function Sidebar({ open, onClose }) {
   const router = useRouter();
   const [totalUsers, setTotalUsers] = useState(null);
+  const [profileImage, setProfileImage] = useState(DEFAULT_PROFILE_IMAGE);
+  const [profileName, setProfileName] = useState(DEFAULT_PROFILE_NAME);
+  const [nameDraft, setNameDraft] = useState(DEFAULT_PROFILE_NAME);
+  const [isEditingName, setIsEditingName] = useState(false);
+  const imageInputRef = useRef(null);
 
   useEffect(() => {
     let active = true;
@@ -373,15 +391,147 @@ export default function Sidebar({ open, onClose }) {
     };
   }, []);
 
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const storedImage = window.localStorage.getItem(PROFILE_IMAGE_STORAGE_KEY);
+    const storedName = window.localStorage.getItem(PROFILE_NAME_STORAGE_KEY);
+    if (storedImage) {
+      setProfileImage(storedImage);
+    }
+    if (storedName) {
+      setProfileName(storedName);
+      setNameDraft(storedName);
+    }
+  }, []);
+
+  const applyProfileName = (rawValue) => {
+    const nextName = String(rawValue || "").trim() || DEFAULT_PROFILE_NAME;
+    setProfileName(nextName);
+    setNameDraft(nextName);
+    setIsEditingName(false);
+    if (typeof window !== "undefined") {
+      window.localStorage.setItem(PROFILE_NAME_STORAGE_KEY, nextName);
+    }
+  };
+
+  const handleImagePick = (event) => {
+    const file = event.target.files?.[0];
+    if (!file || !file.type?.startsWith("image/")) {
+      return;
+    }
+    const reader = new FileReader();
+    reader.onload = () => {
+      const nextImage = String(reader.result || "");
+      if (!nextImage) {
+        return;
+      }
+      setProfileImage(nextImage);
+      if (typeof window !== "undefined") {
+        window.localStorage.setItem(PROFILE_IMAGE_STORAGE_KEY, nextImage);
+      }
+    };
+    reader.readAsDataURL(file);
+    event.target.value = "";
+  };
+
   return (
     <aside className={`${styles.sidebar} ${open ? styles.open : ""}`}>
       <div className={styles.sidebarHeader}>
         <div className={styles.brandGroup}>
-          <div className={styles.logoCircle}>
-            <img src="https://i.ibb.co/qYq42F7v/noro.png" alt="Noropayments" />
+          <div className={styles.logoCircleShell}>
+            <div className={styles.logoCircle}>
+              <img src={profileImage} alt={profileName} />
+            </div>
+            <button
+              type="button"
+              className={styles.logoEditOverlay}
+              onClick={() => imageInputRef.current?.click()}
+              aria-label="Cambiar imagen de perfil"
+            >
+              <svg viewBox="0 0 24 24" aria-hidden="true">
+                <path
+                  d="M12 20h9"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+                <path
+                  d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1l1-4z"
+                  fill="none"
+                  stroke="currentColor"
+                  strokeWidth="2.2"
+                  strokeLinecap="round"
+                  strokeLinejoin="round"
+                />
+              </svg>
+            </button>
+            <input
+              ref={imageInputRef}
+              className={styles.profileInput}
+              type="file"
+              accept="image/*"
+              onChange={handleImagePick}
+            />
           </div>
           <div className={styles.brandText}>
-            <span className={styles.brandTitle}>Noropayments</span>
+            {isEditingName ? (
+              <input
+                className={styles.brandTitleInput}
+                value={nameDraft}
+                onChange={(event) => setNameDraft(event.target.value)}
+                onBlur={() => applyProfileName(nameDraft)}
+                onKeyDown={(event) => {
+                  if (event.key === "Enter") {
+                    event.preventDefault();
+                    applyProfileName(nameDraft);
+                  }
+                  if (event.key === "Escape") {
+                    event.preventDefault();
+                    setNameDraft(profileName);
+                    setIsEditingName(false);
+                  }
+                }}
+                autoFocus
+                aria-label="Nombre de perfil"
+                maxLength={30}
+              />
+            ) : (
+              <div className={styles.brandTitleRow}>
+                <span className={styles.brandTitle}>{profileName}</span>
+                <button
+                  type="button"
+                  className={styles.brandEditButton}
+                  onClick={() => {
+                    setNameDraft(profileName);
+                    setIsEditingName(true);
+                  }}
+                  aria-label="Editar nombre de perfil"
+                >
+                  <svg viewBox="0 0 24 24" aria-hidden="true">
+                    <path
+                      d="M12 20h9"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                    <path
+                      d="M16.5 3.5a2.1 2.1 0 0 1 3 3L7 19l-4 1l1-4z"
+                      fill="none"
+                      stroke="currentColor"
+                      strokeWidth="2.2"
+                      strokeLinecap="round"
+                      strokeLinejoin="round"
+                    />
+                  </svg>
+                </button>
+              </div>
+            )}
             <span className={styles.brandSubtitle}>Admin</span>
           </div>
         </div>

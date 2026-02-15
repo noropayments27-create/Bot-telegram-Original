@@ -749,6 +749,12 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                     callback_data="adminui:home",
                 ),
             ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔐 Login", "🔐 Login"),
+                    callback_data="admin_panel:login",
+                ),
+            ],
         ]
     )
 

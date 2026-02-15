@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 
 import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconTickets } from "../../components/PanelIcons";
+import Toast from "../../components/Toast";
 
 const STATUS_OPTIONS = [
   { value: "NEW", label: "Nuevo" },
@@ -824,30 +825,7 @@ export default function TicketsPage() {
           })}
         </div>
       )}
-      {toast && (
-        <div className="toast">
-          <span className="toast__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <circle
-                cx="12"
-                cy="12"
-                r="9"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              />
-              <path
-                d="M12 8v5M12 16h.01"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </span>
-          <span>{toast}</span>
-        </div>
-      )}
+      <Toast message={toast} />
       {previewImageUrl && (
         <div
           role="dialog"

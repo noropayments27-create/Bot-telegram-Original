@@ -145,21 +145,10 @@ export default function Dashboard() {
       tooltip: "Administrar productos, stock y disponibilidad.",
     },
     {
-      href: "/home-menu",
-      label: "Home Bot",
-      key: "home_menu",
-      tooltip: "Ver en tiempo real el menu home configurado desde Telegram.",
-    },
-    {
       href: "/tickets",
       label: "Tickets",
       key: "tickets",
       tooltip: "Responder soporte y seguimiento de conversaciones.",
-    },
-    {
-      href: "/broadcasts",
-      label: "Difusiones",
-      tooltip: "Crear y enviar anuncios masivos a usuarios.",
     },
     {
       href: "/payouts",
@@ -363,7 +352,7 @@ export default function Dashboard() {
 
   return (
     <main className="page dashboard-page">
-      <section className="card">
+      <section className="card dashboard-main-card">
         <div className="dashboard-header">
           <div>
             <h1 className="icon-inline">

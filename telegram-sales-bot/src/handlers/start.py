@@ -19,12 +19,12 @@ from ..services.bot_assets import get_bot_asset_image
 from ..services.deeplinks import parse_start_payload
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
-from aiogram.types import InlineKeyboardButton, InlineKeyboardMarkup
 
-from .menu import build_main_keyboard, build_community_text
+from .menu import build_main_keyboard, build_community_text, build_community_keyboard
 from .menu import build_language_keyboard
 from .support import start_support_flow
 from .shop import render_product_from_start
+from ..services.home_layout import get_home_layout
 from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id, pop_previous_view, clear_main_message_id
 from ..utils.home_view import render_home_view
 from ..utils.order_watch import stop_order_watch
@@ -34,6 +34,7 @@ from ..states.access import AccessStates
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 logger = logging.getLogger(__name__)
+_COMMUNITY_LAYOUT_KEY = "community_menu_v1"
  
 
 
@@ -432,24 +433,14 @@ async def handle_home_community(callback: CallbackQuery) -> None:
         )
         return
     set_main_message_id(callback.from_user.id, callback.message.message_id)
-    keyboard = InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_back"), callback_data="nav:back"
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "btn_home"), callback_data="home:show"
-                ),
-            ]
-        ]
-    )
+    community_layout = await get_home_layout(api_client, _COMMUNITY_LAYOUT_KEY)
+    keyboard = build_community_keyboard(locale, community_layout)
     community_image_url = await get_bot_asset_image(api_client, "community_image_url")
     if community_image_url:
         await render_main_view_with_photo(
             callback.message,
             callback.from_user.id,
-            build_community_text(locale),
+            build_community_text(locale, community_layout),
             community_image_url,
             reply_markup=keyboard,
             parse_mode="HTML",
@@ -458,7 +449,7 @@ async def handle_home_community(callback: CallbackQuery) -> None:
         await render_main_view(
             callback.message,
             callback.from_user.id,
-            build_community_text(locale),
+            build_community_text(locale, community_layout),
             reply_markup=keyboard,
             parse_mode="HTML",
         )

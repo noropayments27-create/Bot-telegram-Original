@@ -1,3 +1,4 @@
+from html import escape as html_escape
 from urllib.parse import quote
 from urllib.parse import urlparse
 
@@ -36,6 +37,7 @@ class AdminPanelAccessStates(StatesGroup):
 
 _ADMIN_PANEL_PENDING_TTL_SECONDS = 180
 _admin_panel_pending: dict[int, dict[str, str | float]] = {}
+_ADMIN_PANEL_NON_ORDER_KEYS = {"login", "panel", "web", "direct"}
 
 
 def _set_admin_panel_pending(admin_id: int, order_id: str) -> None:
@@ -115,7 +117,11 @@ async def handle_admin_panel_access(callback: CallbackQuery, state: FSMContext) 
         return
 
     parts = callback.data.split(":")
-    order_id = parts[1] if len(parts) > 1 else ""
+    raw_order_id = (parts[1] if len(parts) > 1 else "").strip()
+    if raw_order_id.lower() in _ADMIN_PANEL_NON_ORDER_KEYS:
+        order_id = ""
+    else:
+        order_id = raw_order_id
     _set_admin_panel_pending(callback.from_user.id, order_id)
     await state.set_state(AdminPanelAccessStates.awaiting_password)
     await state.update_data(admin_panel_order_id=order_id)
@@ -218,12 +224,13 @@ async def _process_admin_panel_password(
     await state.clear()
     if _is_local_url(access_url):
         # Telegram no acepta localhost en botones inline URL.
+        safe_url = html_escape(access_url, quote=True)
         await message.answer(
             f"{t(locale, 'admin_panel_access_ready')}\n\n"
             "⚠️ Telegram no permite botón con URL local.\n"
-            "Copia y abre este enlace en tu navegador local:\n"
-            f"`{access_url}`",
-            parse_mode="Markdown",
+            "Abre este enlace en tu navegador local:\n"
+            f"<a href=\"{safe_url}\">{safe_url}</a>",
+            parse_mode="HTML",
         )
         return
 
@@ -240,12 +247,13 @@ async def _process_admin_panel_password(
     try:
         await message.answer(t(locale, "admin_panel_access_ready"), reply_markup=keyboard)
     except TelegramBadRequest:
+        safe_url = html_escape(access_url, quote=True)
         await message.answer(
             f"{t(locale, 'admin_panel_access_ready')}\n\n"
             "⚠️ Telegram rechazó el botón URL.\n"
             "Abre este enlace manualmente:\n"
-            f"`{access_url}`",
-            parse_mode="Markdown",
+            f"<a href=\"{safe_url}\">{safe_url}</a>",
+            parse_mode="HTML",
         )
 
 

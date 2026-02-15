@@ -48,6 +48,7 @@
 
 .sidebarBell {
   display: inline-flex;
+  margin-top: 1cm;
 }
 
 .brandGroup {
@@ -56,6 +57,11 @@
   flex-direction: column;
   gap: 16px;
   text-align: left;
+}
+
+.logoCircleShell {
+  position: relative;
+  margin-left: -45px;
 }
 
 .logoCircle {
@@ -68,7 +74,6 @@
   justify-content: center;
   border: 2px solid var(--scarlet-red);
   overflow: hidden;
-  margin-left: -45px;
 }
 
 
@@ -78,6 +83,35 @@
   object-fit: cover;
 }
 
+.profileInput {
+  display: none;
+}
+
+.logoEditOverlay {
+  position: absolute;
+  inset: 0;
+  border: none;
+  border-radius: 50%;
+  background: rgba(0, 0, 0, 0.55);
+  color: #f5f5f5;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  opacity: 0;
+  cursor: pointer;
+  transition: opacity 0.2s ease;
+}
+
+.logoEditOverlay svg {
+  width: 22px;
+  height: 22px;
+}
+
+.logoCircleShell:hover .logoEditOverlay,
+.logoCircleShell:focus-within .logoEditOverlay {
+  opacity: 1;
+}
+
 .brandText {
   display: flex;
   flex-direction: column;
@@ -85,11 +119,51 @@
   align-items: flex-start;
 }
 
+.brandTitleRow {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+}
+
 .brandTitle {
   font-size: 18px;
   font-weight: 700;
   letter-spacing: 0.02em;
   margin-left: 15px;
+}
+
+.brandTitleInput {
+  margin-left: 15px;
+  width: 150px;
+  border: 1px solid rgba(255, 36, 0, 0.6);
+  border-radius: 10px;
+  background: rgba(255, 36, 0, 0.08);
+  color: var(--scarlet-red);
+  padding: 5px 8px;
+  font-size: 16px;
+  font-weight: 700;
+  outline: none;
+}
+
+.brandEditButton {
+  margin-top: 2px;
+  border: none;
+  background: transparent;
+  color: rgba(255, 36, 0, 0.85);
+  cursor: pointer;
+  padding: 0;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+}
+
+.brandEditButton svg {
+  width: 14px;
+  height: 14px;
+}
+
+.brandEditButton:hover {
+  color: var(--scarlet-red);
 }
 
 .brandSubtitle {

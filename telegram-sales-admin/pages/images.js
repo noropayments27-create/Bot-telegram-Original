@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../lib/api";
 import { IconImages } from "../components/PanelIcons";
+import Toast from "../components/Toast";
 
 const BOT_IMAGE_FIELDS = [
   { key: "main_image_url", label: "Inicio" },
@@ -55,13 +56,23 @@ function parseCryptoAssetImages(value) {
   return { ...emptyCryptoAssets, btc: String(value) };
 }
 
+function isCryptoMethodEntry(method) {
+  const key = String(method?.key || "").trim().toUpperCase();
+  const label = String(method?.label || "").trim().toUpperCase();
+  if (key === "CRYPTO") {
+    return true;
+  }
+  const cryptoTokens = ["CRYPTO", "BTC", "USDT", "LTC", "TRON", "BSC", "ETH", "BINANCE PAY"];
+  return cryptoTokens.some((token) => key.includes(token) || label.includes(token));
+}
+
 export default function ImagesPage() {
   const router = useRouter();
   const [assets, setAssets] = useState(emptyAssets);
   const [methods, setMethods] = useState([]);
   const [cryptoAssets, setCryptoAssets] = useState(emptyCryptoAssets);
-  const [message, setMessage] = useState("");
-  const [error, setError] = useState("");
+  const [toast, setToast] = useState("");
+  const [isHowToOpen, setIsHowToOpen] = useState(false);
   const [savingAssets, setSavingAssets] = useState(false);
   const [savingMethods, setSavingMethods] = useState(false);
 
@@ -70,6 +81,14 @@ export default function ImagesPage() {
       router.replace("/login");
     }
   }, [router]);
+
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setToast(""), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
 
   const loadData = async () => {
     try {
@@ -87,9 +106,8 @@ export default function ImagesPage() {
         (item) => String(item?.key || "").toUpperCase() === "CRYPTO"
       );
       setCryptoAssets(parseCryptoAssetImages(cryptoMethod?.asset_images || ""));
-      setError("");
     } catch (err) {
-      setError("No se pudieron cargar las imágenes del bot.");
+      setToast("No se pudieron cargar las imágenes del bot.");
     }
   };
 
@@ -110,6 +128,16 @@ export default function ImagesPage() {
     });
   }, [methods]);
 
+  const paymentImageMethods = useMemo(
+    () => orderedMethods.filter((method) => !isCryptoMethodEntry(method)),
+    [orderedMethods]
+  );
+
+  const cryptoImageMethods = useMemo(
+    () => orderedMethods.filter((method) => isCryptoMethodEntry(method)),
+    [orderedMethods]
+  );
+
   const handleAssetChange = (key, value) => {
     setAssets((prev) => ({ ...prev, [key]: value }));
   };
@@ -128,8 +156,7 @@ export default function ImagesPage() {
 
   const handleSaveAssets = async () => {
     setSavingAssets(true);
-    setMessage("");
-    setError("");
+    setToast("");
     try {
       const payload = {};
       BOT_IMAGE_FIELDS.forEach((field) => {
@@ -140,9 +167,9 @@ export default function ImagesPage() {
         body: JSON.stringify(payload),
       });
       setAssets({ ...emptyAssets, ...(data?.assets || {}) });
-      setMessage("Imágenes del bot actualizadas.");
+      setToast("Imágenes del bot actualizadas.");
     } catch (err) {
-      setError("No se pudieron guardar las imágenes del bot.");
+      setToast("No se pudieron guardar las imágenes del bot.");
     } finally {
       setSavingAssets(false);
     }
@@ -150,8 +177,7 @@ export default function ImagesPage() {
 
   const handleSaveMethodImages = async () => {
     setSavingMethods(true);
-    setMessage("");
-    setError("");
+    setToast("");
     try {
       const payloads = methods.map((method) => {
         const isCrypto = String(method?.key || "").toUpperCase() === "CRYPTO";
@@ -176,9 +202,9 @@ export default function ImagesPage() {
         )
       );
       await loadData();
-      setMessage("Imágenes de métodos actualizadas.");
+      setToast("Imágenes de métodos actualizadas.");
     } catch (err) {
-      setError("No se pudieron guardar las imágenes de métodos.");
+      setToast("No se pudieron guardar las imágenes de métodos.");
     } finally {
       setSavingMethods(false);
     }
@@ -192,9 +218,15 @@ export default function ImagesPage() {
             <IconImages className="panel-icon" /> Imagenes
           </h1>
           <p className="muted">Pega los enlaces y actualiza.</p>
+          <button
+            type="button"
+            className="images-help-trigger"
+            onClick={() => setIsHowToOpen(true)}
+          >
+            <span className="images-help-trigger__icon" aria-hidden="true">i</span>
+            <span>¿Como agregar imagenes? Click acá</span>
+          </button>
         </div>
-        {message && <p className="muted">{message}</p>}
-        {error && <p className="error">{error}</p>}
         <h3 className="images-section-title">Bot</h3>
         <ol className="images-list">
           {BOT_IMAGE_FIELDS.map((field) => (
@@ -220,7 +252,7 @@ export default function ImagesPage() {
       <section className="card images-card">
         <h3 className="images-section-title">Métodos de pago</h3>
         <ol className="images-list">
-          {orderedMethods.map((method) => (
+          {paymentImageMethods.map((method) => (
             <li key={method.key}>
               <span className="images-label">
                 Pago {method.label || method.key}
@@ -236,9 +268,28 @@ export default function ImagesPage() {
               />
             </li>
           ))}
+          {paymentImageMethods.length === 0 && (
+            <li>
+              <span className="images-label muted">Sin métodos de pago no cripto.</span>
+            </li>
+          )}
         </ol>
         <h3 className="images-section-title">Cripto</h3>
         <ol className="images-list">
+          {cryptoImageMethods.map((method) => (
+            <li key={`crypto-${method.key}`}>
+              <span className="images-label">Pago {method.label || method.key}</span>
+              <input
+                className="images-input"
+                type="text"
+                value={method.image_url || ""}
+                onChange={(event) =>
+                  handleMethodImageChange(method.key, event.target.value)
+                }
+                placeholder="https://..."
+              />
+            </li>
+          ))}
           {CRYPTO_ASSET_OPTIONS.map((asset) => (
             <li key={asset.key}>
               <span className="images-label">{asset.label}</span>
@@ -260,6 +311,91 @@ export default function ImagesPage() {
           </button>
         </div>
       </section>
+      <Toast message={toast} />
+      {isHowToOpen && (
+        <div
+          className="editor-link-overlay"
+          role="button"
+          tabIndex={0}
+          onClick={() => setIsHowToOpen(false)}
+          onKeyDown={(event) => {
+            if (event.key === "Escape") {
+              setIsHowToOpen(false);
+            }
+          }}
+        >
+          <div
+            className="editor-link-modal images-help-modal"
+            role="dialog"
+            aria-modal="true"
+            aria-label="Cómo agregar imágenes"
+            onClick={(event) => event.stopPropagation()}
+          >
+            <h3>Cómo subir una imagen a IMGBB y obtener el enlace directo</h3>
+            <ol className="images-help-steps">
+              <li>
+                <span className="images-help-step-icon" aria-hidden="true">1</span>
+                <div>
+                  <strong>Entra a la página</strong>
+                  <p>
+                    Crea una cuenta GRATIS en:{" "}
+                    <a
+                      className="images-help-link"
+                      href="https://imgbb.com"
+                      target="_blank"
+                      rel="noreferrer"
+                    >
+                      https://imgbb.com
+                    </a>
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span className="images-help-step-icon" aria-hidden="true">2</span>
+                <div>
+                  <strong>Sube tu imagen</strong>
+                  <p>
+                    Haz clic en “Subir” y selecciona la imagen desde tu PC o móvil.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span className="images-help-step-icon" aria-hidden="true">3</span>
+                <div>
+                  <strong>Espera la carga</strong>
+                  <p>
+                    La imagen se subirá en unos segundos y te llevará a una pantalla con varios enlaces.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span className="images-help-step-icon" aria-hidden="true">4</span>
+                <div>
+                  <strong>Copia el enlace directo</strong>
+                  <p>
+                    Busca la opción “Enlaces Directos” y cópialo. Ese link termina normalmente en
+                    <code>.jpg</code>, <code>.png</code> o <code>.webp</code>.
+                  </p>
+                </div>
+              </li>
+              <li>
+                <span className="images-help-step-icon" aria-hidden="true">5</span>
+                <div>
+                  <strong>Úsalo en tu web</strong>
+                  <p>
+                    Ese enlace directo es el que debes pegar en el lugar correspondiente.
+                  </p>
+                </div>
+              </li>
+            </ol>
+            <div className="actions editor-link-actions">
+              <button type="button" onClick={() => setIsHowToOpen(false)}>
+                Entendido
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </main>
   );
 }

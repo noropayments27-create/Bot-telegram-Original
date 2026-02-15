@@ -3,6 +3,10 @@ import { useRouter } from "next/router";
 import { Eye, EyeOff, Pin, PinOff } from "lucide-react";
 
 import { getApiBaseUrl, getAuthToken, setAuthToken } from "../lib/api";
+import Toast from "../components/Toast";
+
+const PROFILE_IMAGE_STORAGE_KEY = "admin_profile_image_url";
+const DEFAULT_PROFILE_IMAGE = "https://i.ibb.co/356LrnLr/bot.png";
 
 export default function Login() {
   const router = useRouter();
@@ -15,6 +19,7 @@ export default function Login() {
   const [requestId, setRequestId] = useState("");
   const [rememberMe, setRememberMe] = useState(false);
   const [toast, setToast] = useState("");
+  const [profileImage, setProfileImage] = useState(DEFAULT_PROFILE_IMAGE);
 
   useEffect(() => {
     return () => {
@@ -31,6 +36,16 @@ export default function Login() {
   }, [toast]);
 
   useEffect(() => {
+    if (typeof window === "undefined") {
+      return;
+    }
+    const storedImage = window.localStorage.getItem(PROFILE_IMAGE_STORAGE_KEY);
+    if (storedImage) {
+      setProfileImage(storedImage);
+    }
+  }, []);
+
+  useEffect(() => {
     if (!waiting || !requestId) {
       return;
     }
@@ -43,7 +58,7 @@ export default function Login() {
         const data = await response.json();
         if (data.status === "APPROVED" && data.token) {
           setAuthToken(data.token);
-          setToast("✅ Bienvenido al panel, acceso concedido.");
+          setToast("Bienvenido al panel, acceso concedido.");
           setWaiting(false);
           setRequestId("");
           setTimeout(() => {
@@ -114,7 +129,7 @@ export default function Login() {
 
   return (
     <>
-      <div className="title-container">
+      <div className="title-container login-title">
         <h1>Admin Bot</h1>
         <p>Noropayments.shop</p>
       </div>
@@ -125,10 +140,10 @@ export default function Login() {
             ? { backgroundImage: `url(${loginBackgroundUrl})` }
             : undefined
         }
-      >
+        >
         <div className="login-container">
           <div className="user-icon-bg">
-            <img src="https://i.ibb.co/356LrnLr/bot.png" alt="Icono usuario" />
+            <img src={profileImage} alt="Icono usuario" />
           </div>
           <form className="login-form" onSubmit={handleSubmit}>
             <input
@@ -175,30 +190,7 @@ export default function Login() {
           </form>
         </div>
       </main>
-      {toast && (
-        <div className="toast">
-          <span className="toast__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <circle
-                cx="12"
-                cy="12"
-                r="9"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              />
-              <path
-                d="M12 8v5M12 16h.01"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </span>
-          <span>{toast}</span>
-        </div>
-      )}
+      <Toast message={toast} />
     </>
   );
 }

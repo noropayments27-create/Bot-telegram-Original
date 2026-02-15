@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 
 import { apiFetch, apiFetchBinary, getAuthToken } from "../../lib/api";
 import { IconBroadcasts } from "../../components/PanelIcons";
+import Toast from "../../components/Toast";
 
 const SEGMENT_OPTIONS = [
   { value: "ALL_USERS", label: "Todos" },
@@ -137,13 +138,32 @@ const normalizeMessageForSave = (html) => {
       return `<s>${inner}</s>`;
     }
     if (tag === "code") {
+      const className = String(node.getAttribute("class") || "").trim();
+      const safeClass = /^language-[a-z0-9_-]+$/i.test(className) ? className : "";
+      if (safeClass) {
+        return `<code class="${escapeHtml(safeClass)}">${inner}</code>`;
+      }
       return `<code>${inner}</code>`;
     }
     if (tag === "pre") {
-      return `<pre><code>${inner}</code></pre>`;
+      const codeChild = Array.from(node.childNodes).find(
+        (child) => child?.nodeType === Node.ELEMENT_NODE && String(child.tagName || "").toLowerCase() === "code"
+      );
+      const codeInner = codeChild
+        ? Array.from(codeChild.childNodes).map(serialize).join("")
+        : inner;
+      const codeClass = codeChild ? String(codeChild.getAttribute("class") || "").trim() : "";
+      const safeClass = /^language-[a-z0-9_-]+$/i.test(codeClass) ? codeClass : "";
+      if (safeClass) {
+        return `<pre><code class="${escapeHtml(safeClass)}">${codeInner}</code></pre>`;
+      }
+      return `<pre><code>${codeInner}</code></pre>`;
     }
     if (tag === "blockquote") {
-      return `<blockquote>${inner}</blockquote>`;
+      const isExpandable = node.hasAttribute("expandable");
+      return isExpandable
+        ? `<blockquote expandable>${inner}</blockquote>`
+        : `<blockquote>${inner}</blockquote>`;
     }
     if (tag === "a") {
       const href = String(node.getAttribute("href") || "").trim();
@@ -176,6 +196,23 @@ const findClosestTag = (node, tagName) => {
       return current;
     }
     current = current.parentNode;
+  }
+  return null;
+};
+
+const findSelectedContainer = (snapshot, tagName) => {
+  if (!snapshot || !snapshot.range) {
+    return null;
+  }
+  const startMatch = findClosestTag(snapshot.range.startContainer, tagName);
+  const endMatch = findClosestTag(snapshot.range.endContainer, tagName);
+  if (startMatch && startMatch === endMatch) {
+    return startMatch;
+  }
+  const anchorMatch = findClosestTag(snapshot.selection?.anchorNode, tagName);
+  const focusMatch = findClosestTag(snapshot.selection?.focusNode, tagName);
+  if (anchorMatch && anchorMatch === focusMatch) {
+    return anchorMatch;
   }
   return null;
 };
@@ -216,6 +253,7 @@ export default function BroadcastsPage() {
   const [showCreate, setShowCreate] = useState(false);
   const [toast, setToast] = useState("");
   const [previewUrl, setPreviewUrl] = useState("");
+  const [messageSyncNonce, setMessageSyncNonce] = useState(0);
   const [isMessageLinkModalOpen, setIsMessageLinkModalOpen] = useState(false);
   const [messageLinkText, setMessageLinkText] = useState("");
   const [messageLinkUrl, setMessageLinkUrl] = useState("https://");
@@ -337,10 +375,11 @@ export default function BroadcastsPage() {
     if (!editor) {
       return;
     }
-    if ((editor.innerHTML || "") !== (message || "")) {
-      editor.innerHTML = message || "";
+    if (!showCreate) {
+      return;
     }
-  }, [message, showCreate]);
+    editor.innerHTML = message || "";
+  }, [messageSyncNonce, showCreate]);
 
   const numberById = useMemo(() => {
     const map = new Map();
@@ -493,6 +532,48 @@ export default function BroadcastsPage() {
     }
   }, [requireMessageSelection, runMessageCommand, syncMessageFromEditor]);
 
+  const preventToolbarBlur = useCallback((event) => {
+    event.preventDefault();
+  }, []);
+
+  const insertMessageQuote = useCallback(() => {
+    const snapshot = requireMessageSelection("Selecciona el texto para citar.");
+    if (!snapshot) {
+      return;
+    }
+    const quoteNode = findSelectedContainer(snapshot, "blockquote");
+    if (quoteNode) {
+      unwrapNode(quoteNode);
+      syncMessageFromEditor();
+      return;
+    }
+    const selected = escapeHtml(snapshot.text || "");
+    const html = `<blockquote>${selected}</blockquote>`;
+    runMessageCommand("insertHTML", html, { requiresSelection: false });
+  }, [requireMessageSelection, runMessageCommand, syncMessageFromEditor]);
+
+  const insertMessageShellCode = useCallback(() => {
+    const snapshot = requireMessageSelection("Selecciona el texto para formatear como código.");
+    if (!snapshot) {
+      return;
+    }
+    const preNode = findSelectedContainer(snapshot, "pre");
+    if (preNode) {
+      unwrapNode(preNode);
+      syncMessageFromEditor();
+      return;
+    }
+    const codeNode = findSelectedContainer(snapshot, "code");
+    if (codeNode && !findClosestTag(codeNode.parentNode, "pre")) {
+      unwrapNode(codeNode);
+      syncMessageFromEditor();
+      return;
+    }
+    const selected = escapeHtml(snapshot.text || "");
+    const html = `<pre>${selected}</pre>`;
+    runMessageCommand("insertHTML", html, { requiresSelection: false });
+  }, [requireMessageSelection, runMessageCommand, syncMessageFromEditor]);
+
   const openMessageLinkModal = useCallback(() => {
     const snapshot = requireMessageSelection("Selecciona el texto para crear el enlace.");
     if (!snapshot) {
@@ -586,14 +667,19 @@ export default function BroadcastsPage() {
     }
     if (key === "." && withShift) {
       event.preventDefault();
-      runMessageCommand("formatBlock", "blockquote");
+      insertMessageQuote();
+      return;
+    }
+    if (key === "c" && withShift) {
+      event.preventDefault();
+      insertMessageShellCode();
       return;
     }
     if (key === "m" && withShift) {
       event.preventDefault();
       toggleMessageMonospace();
     }
-  }, [openMessageLinkModal, runMessageCommand, toggleMessageMonospace]);
+  }, [insertMessageQuote, insertMessageShellCode, openMessageLinkModal, runMessageCommand, toggleMessageMonospace]);
 
   const isValidUrl = (value) => {
     if (!value) {
@@ -668,6 +754,7 @@ export default function BroadcastsPage() {
     setEditingId(broadcast.id);
     setShowCreate(true);
     setMessage(markdownToEditorHtml(source.message_text || ""));
+    setMessageSyncNonce((prev) => prev + 1);
     setSegments([source.segment || "ALL_USERS"]);
     setCustomIdsText("");
     setChatIdsText("");
@@ -685,6 +772,7 @@ export default function BroadcastsPage() {
   const resetCreateForm = () => {
     setEditingId("");
     setMessage("");
+    setMessageSyncNonce((prev) => prev + 1);
     setCustomIdsText("");
     setChatIdsText("");
     setExceptIdsText("");
@@ -1106,8 +1194,18 @@ export default function BroadcastsPage() {
           </div>
           {createError && <p className="error">{createError}</p>}
           <form className="form broadcast-create-form" onSubmit={handleCreate}>
-            <label>
-              Mensaje
+            <div className="broadcast-message-label">
+              <p className="broadcast-message-title">Mensaje</p>
+              <div className="broadcast-message-toolbar">
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runMessageCommand("bold")}>Negrita</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runMessageCommand("italic")}>Cursiva</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runMessageCommand("underline")}>Subrayado</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={openMessageLinkModal}>Enlace</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runMessageCommand("strikeThrough")}>Tachado</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={insertMessageQuote}>Citar</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={insertMessageShellCode}>Codigo</button>
+                <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={toggleMessageMonospace}>Monoespaciado</button>
+              </div>
               <div
                 ref={messageInputRef}
                 className="broadcast-message-editor"
@@ -1126,9 +1224,6 @@ export default function BroadcastsPage() {
               />
               <div
                 className="editor-shortcuts-help"
-                role="button"
-                tabIndex={0}
-                aria-label="Ver atajos de formato"
               >
                 <span className="editor-shortcuts-help__icon" aria-hidden="true">i</span>
                 <span className="editor-shortcuts-help__label">
@@ -1141,10 +1236,11 @@ export default function BroadcastsPage() {
                   <span>⌘/Ctrl+K: Enlace</span>
                   <span>⌘/Ctrl+Shift+X: Tachado</span>
                   <span>⌘/Ctrl+Shift+.: Citar</span>
+                  <span>⌘/Ctrl+Shift+C: Codigo</span>
                   <span>⌘/Ctrl+Shift+M: Monoespaciado</span>
                 </div>
               </div>
-            </label>
+            </div>
             <label>
               Imagen (opcional)
               <div
@@ -1508,30 +1604,7 @@ export default function BroadcastsPage() {
           </div>
         </div>
       )}
-      {toast && (
-        <div className="toast">
-          <span className="toast__icon" aria-hidden="true">
-            <svg viewBox="0 0 24 24">
-              <circle
-                cx="12"
-                cy="12"
-                r="9"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-              />
-              <path
-                d="M12 8v5M12 16h.01"
-                fill="none"
-                stroke="currentColor"
-                strokeWidth="2"
-                strokeLinecap="round"
-              />
-            </svg>
-          </span>
-          <span>{toast}</span>
-        </div>
-      )}
+      <Toast message={toast} />
     </main>
   );
 }

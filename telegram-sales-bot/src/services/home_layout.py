@@ -3,7 +3,7 @@ from typing import Any, Dict
 
 from .api_client import ApiClient
 
-_CACHE_TTL_SECONDS = 45
+_CACHE_TTL_SECONDS = 5
 _CACHE: Dict[str, Dict[str, Any]] = {}
 
 

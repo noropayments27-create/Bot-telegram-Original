@@ -24,6 +24,22 @@ def _default_home_buttons(locale: str | None = None) -> list[dict[str, str]]:
     ]
 
 
+def _default_community_buttons(locale: str | None = None) -> list[dict[str, str]]:
+    return [
+        {"label": t(locale, "btn_back"), "action": "nav:back"},
+        {"label": t(locale, "btn_home"), "action": "home:show"},
+    ]
+
+
+def _default_support_buttons(locale: str | None = None) -> list[dict[str, str]]:
+    return [
+        {"label": t(locale, "support_subject_purchase"), "action": "support:purchase"},
+        {"label": t(locale, "support_subject_bug"), "action": "support:bug"},
+        {"label": t(locale, "btn_back"), "action": "nav:back"},
+        {"label": t(locale, "btn_home"), "action": "home:show"},
+    ]
+
+
 def _pair_buttons(buttons: list[dict[str, str]]) -> list[list[dict[str, str]]]:
     rows: list[list[dict[str, str]]] = []
     for button in buttons:
@@ -54,8 +70,9 @@ def _normalize_layout_button(
 def _normalize_layout_buttons(
     raw_buttons: object,
     locale: str | None = None,
+    fallback_buttons: list[dict[str, str]] | None = None,
 ) -> list[list[dict[str, str]]]:
-    fallback = _pair_buttons(_default_home_buttons(locale))
+    fallback = _pair_buttons(fallback_buttons or _default_home_buttons(locale))
     if not isinstance(raw_buttons, list):
         return fallback
 
@@ -100,8 +117,89 @@ def build_home_text(
     return t(locale, "home_welcome")
 
 
-def build_community_text(locale: str | None = None) -> str:
-    return t(locale, "community_text")
+def _build_section_text_from_layout(
+    locale: str | None,
+    section_layout: dict | None,
+    fallback_text: str,
+) -> str:
+    locale_value = _locale_key(locale)
+    if isinstance(section_layout, dict):
+        localized = section_layout.get(locale_value)
+        if isinstance(localized, dict):
+            custom_text = str(localized.get("text") or "").strip()
+            if custom_text:
+                return custom_text
+    return fallback_text
+
+
+def _build_keyboard_from_rows(
+    rows: list[list[dict[str, str]]],
+) -> InlineKeyboardMarkup:
+    inline_rows: list[list[InlineKeyboardButton]] = []
+    for row in rows:
+        keyboard_row: list[InlineKeyboardButton] = []
+        for button in row[:2]:
+            text = button.get("label") or "Button"
+            action = button.get("action")
+            url = button.get("url")
+            if url:
+                keyboard_row.append(InlineKeyboardButton(text=text, url=url))
+            elif action:
+                keyboard_row.append(InlineKeyboardButton(text=text, callback_data=action))
+        if keyboard_row:
+            inline_rows.append(keyboard_row)
+    return InlineKeyboardMarkup(inline_keyboard=inline_rows)
+
+
+def build_community_text(
+    locale: str | None = None,
+    section_layout: dict | None = None,
+) -> str:
+    return _build_section_text_from_layout(locale, section_layout, t(locale, "community_text"))
+
+
+def build_community_keyboard(
+    locale: str | None = None,
+    section_layout: dict | None = None,
+) -> InlineKeyboardMarkup:
+    locale_value = _locale_key(locale)
+    raw_buttons = None
+    if isinstance(section_layout, dict):
+        localized = section_layout.get(locale_value)
+        if isinstance(localized, dict):
+            raw_buttons = localized.get("buttons")
+    rows = _normalize_layout_buttons(
+        raw_buttons,
+        locale,
+        fallback_buttons=_default_community_buttons(locale),
+    )
+    return _build_keyboard_from_rows(rows)
+
+
+def build_support_menu_text(
+    locale: str | None = None,
+    section_layout: dict | None = None,
+) -> str:
+    fallback_text = f"{t(locale, 'support_menu_title')}\n\n{t(locale, 'support_menu_body')}"
+    return _build_section_text_from_layout(locale, section_layout, fallback_text)
+
+
+def build_support_menu_keyboard(
+    locale: str | None = None,
+    section_layout: dict | None = None,
+) -> InlineKeyboardMarkup:
+    locale_value = _locale_key(locale)
+    raw_buttons = None
+    if isinstance(section_layout, dict):
+        localized = section_layout.get(locale_value)
+        if isinstance(localized, dict):
+            raw_buttons = localized.get("buttons")
+    rows = _normalize_layout_buttons(
+        raw_buttons,
+        locale,
+        fallback_buttons=_default_support_buttons(locale),
+    )
+    return _build_keyboard_from_rows(rows)
 
 
 def build_main_keyboard(
@@ -116,21 +214,7 @@ def build_main_keyboard(
             raw_buttons = localized.get("buttons")
     button_rows = _normalize_layout_buttons(raw_buttons, locale)
 
-    inline_rows: list[list[InlineKeyboardButton]] = []
-    for row in button_rows:
-        keyboard_row: list[InlineKeyboardButton] = []
-        for button in row[:2]:
-            text = button.get("label") or "Button"
-            action = button.get("action")
-            url = button.get("url")
-            if url:
-                keyboard_row.append(InlineKeyboardButton(text=text, url=url))
-            elif action:
-                keyboard_row.append(InlineKeyboardButton(text=text, callback_data=action))
-        if keyboard_row:
-            inline_rows.append(keyboard_row)
-
-    return InlineKeyboardMarkup(inline_keyboard=inline_rows)
+    return _build_keyboard_from_rows(button_rows)
 
 
 def build_language_keyboard(locale: str | None = None) -> InlineKeyboardMarkup:

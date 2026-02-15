@@ -17,9 +17,13 @@ from ..config import (
 )
 from ..services.api_client import ApiClient
 from ..services.bot_assets import get_bot_asset_image
+from ..services.home_layout import get_home_layout
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
-from .menu import build_main_keyboard
+from .menu import (
+    build_support_menu_keyboard as build_support_section_keyboard,
+    build_support_menu_text as build_support_section_text,
+)
 from ..utils.home_view import render_home_view
 from ..utils.main_view import render_main_view, render_main_view_with_photo, set_main_message_id
 from ..utils.rate_limit import check_global_rate_limit
@@ -29,6 +33,7 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _IMAGE_DUPLICATE_TTL_SECONDS = 24 * 60 * 60
 _SUPPORT_IMAGE_CACHE: Dict[int, Dict[str, float]] = {}
 _PAYMENT_WAITING_PHOTO_STATE = "PaymentStates:waiting_photo"
+_SUPPORT_LAYOUT_KEY = "support_menu_v1"
 
 
 class SupportStates(StatesGroup):
@@ -53,33 +58,11 @@ def _is_duplicate_user_image(
     return False
 
 
-def _build_support_menu_keyboard(locale: str | None) -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup(
-        inline_keyboard=[
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "support_subject_purchase"),
-                    callback_data="support:purchase",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "support_subject_bug"),
-                    callback_data="support:bug",
-                )
-            ],
-            [
-                InlineKeyboardButton(
-                    text=t(locale, "btn_back"),
-                    callback_data="nav:back",
-                ),
-                InlineKeyboardButton(
-                    text=t(locale, "btn_home"),
-                    callback_data="home:show",
-                ),
-            ],
-        ]
-    )
+def _build_support_menu_keyboard(
+    locale: str | None,
+    section_layout: dict | None = None,
+) -> InlineKeyboardMarkup:
+    return build_support_section_keyboard(locale, section_layout)
 
 
 def _build_support_prompt_keyboard(locale: str | None) -> InlineKeyboardMarkup:
@@ -99,8 +82,11 @@ def _build_support_prompt_keyboard(locale: str | None) -> InlineKeyboardMarkup:
     )
 
 
-def _build_support_menu_text(locale: str | None) -> str:
-    return f"{t(locale, 'support_menu_title')}\n\n{t(locale, 'support_menu_body')}"
+def _build_support_menu_text(
+    locale: str | None,
+    section_layout: dict | None = None,
+) -> str:
+    return build_support_section_text(locale, section_layout)
 
 
 async def _render_support_view(
@@ -129,6 +115,10 @@ async def _render_support_view(
         reply_markup=reply_markup,
         parse_mode=parse_mode,
     )
+
+
+async def _get_support_layout() -> dict:
+    return await get_home_layout(api_client, _SUPPORT_LAYOUT_KEY)
 
 
 @router.message(Command("cancel"))
@@ -240,11 +230,13 @@ async def handle_support(message: Message, state: FSMContext) -> None:
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
+    support_layout = await _get_support_layout()
     await _render_support_view(
         message,
         message.from_user.id,
-        _build_support_menu_text(locale),
-        reply_markup=_build_support_menu_keyboard(locale),
+        _build_support_menu_text(locale, support_layout),
+        reply_markup=_build_support_menu_keyboard(locale, support_layout),
+        parse_mode="HTML",
     )
 
 
@@ -257,12 +249,14 @@ async def handle_support_callback(callback: CallbackQuery, state: FSMContext) ->
     locale = await get_user_locale(
         api_client, callback.from_user.id, callback.from_user.language_code
     )
+    support_layout = await _get_support_layout()
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await _render_support_view(
         callback.message,
         callback.from_user.id,
-        _build_support_menu_text(locale),
-        reply_markup=_build_support_menu_keyboard(locale),
+        _build_support_menu_text(locale, support_layout),
+        reply_markup=_build_support_menu_keyboard(locale, support_layout),
+        parse_mode="HTML",
     )
     await callback.answer()
 

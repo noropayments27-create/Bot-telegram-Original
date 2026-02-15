@@ -2,10 +2,197 @@ import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { useRouter } from "next/router";
 
 import { apiFetch, getAuthToken } from "../lib/api";
+import Toast from "../components/Toast";
 
-const LAYOUT_KEY = "home_menu_v1";
+const SECTION_OPTIONS = [
+  { id: "home", label: "Home", layoutKey: "home_menu_v1" },
+  { id: "community", label: "Comunidad", layoutKey: "community_menu_v1" },
+  { id: "support", label: "Soporte", layoutKey: "support_menu_v1" },
+];
 const LOCALES = ["es", "en"];
 const MAX_BUTTONS = 24;
+const SECTION_DEFAULT_LAYOUTS = {
+  home: null,
+  community: {
+    es: {
+      text: "🌐 <b>Información y enlaces oficiales</b>\n\n🖥 Mi Página Web:  <a href=\"https://noropayments.shop/\">CLICK AQUI</a> ⬅️\n⭐️ Canal de promos:  <a href=\"https://t.me/promos_noro\">CLICK AQUI</a> ⬅️\n🔎 Referencias de ventas: <a href=\"https://t.me/Nororeferencias\">CLICK AQUI</a> ⬅️\n🛡 Grupo Privado: <a href=\"https://t.me/+3qNiiq16iXM2YjEx\">CLICK AQUI</a> ⬅️\n🆓 Grupo Ventas Free: <a href=\"https://t.me/VentasNoropayments\">CLICK AQUI</a> ⬅️\n⚙️ Bins Gratis: <a href=\"https://t.me/BinsGratis_NoroPayments\">CLICK AQUI</a> ⬅️\n\n✅ Ofertas exclusivas\n✅ Información actualizada\n✅ Contenido directo y sin vueltas\n\n💬 Si tienes preguntas, escríbenos por soporte y te ayudamos con gusto. 🤝\n\nYouTube:   <a href=\"https://www.youtube.com/@Noropayments\">CLICK AQUI</a>\nTikTok:    <a href=\"https://www.tiktok.com/@noro_payments1\">CLICK AQUI</a>\nWhatsApp:  <a href=\"https://api.whatsapp.com/send/?phone=573009545964&text=Hola+vengo+de+Telegram&type=phone_number&app_absent=0\">CLICK AQUI</a>\nTelegram:  <a href=\"https://t.me/NoroPayments\">CLICK AQUI</a>\nInstagram: <a href=\"https://www.instagram.com/noropayments\">CLICK AQUI</a>\n(Twitter) X: <a href=\"https://x.com/NoroPayments\">CLICK AQUI</a>\n\n🔥 ¡Síguenos y no te pierdas nada! 🔥",
+      buttons: [
+        [{ label: "⬅️ Volver", action: "nav:back" }, { label: "🏠 Inicio", action: "home:show" }],
+      ],
+    },
+    en: {
+      text: "🌐 <b>Official information and links</b>\n\n🖥 My Website:  <a href=\"https://noropayments.shop/\">CLICK HERE</a> ⬅️\n⭐️ Promo channel:  <a href=\"https://t.me/promos_noro\">CLICK HERE</a> ⬅️\n🔎 Sales references: <a href=\"https://t.me/Nororeferencias\">CLICK HERE</a> ⬅️\n🛡 Private group: <a href=\"https://t.me/+3qNiiq16iXM2YjEx\">CLICK HERE</a> ⬅️\n🆓 Free sales group: <a href=\"https://t.me/VentasNoropayments\">CLICK HERE</a> ⬅️\n⚙️ Free bins: <a href=\"https://t.me/BinsGratis_NoroPayments\">CLICK HERE</a> ⬅️\n\n✅ Exclusive offers\n✅ Up-to-date information\n✅ Straight to the point content\n\n💬 If you have questions, contact support and we'll gladly help. 🤝\n\nYouTube:   <a href=\"https://www.youtube.com/@Noropayments\">CLICK HERE</a>\nTikTok:    <a href=\"https://www.tiktok.com/@noro_payments1\">CLICK HERE</a>\nWhatsApp:  <a href=\"https://api.whatsapp.com/send/?phone=573009545964&text=Hello+coming+from+Telegram&type=phone_number&app_absent=0\">CLICK HERE</a>\nTelegram:  <a href=\"https://t.me/NoroPayments\">CLICK HERE</a>\nInstagram: <a href=\"https://www.instagram.com/noropayments\">CLICK HERE</a>\n(X) Twitter: <a href=\"https://x.com/NoroPayments\">CLICK HERE</a>\n\n🔥 Follow us and don't miss anything! 🔥",
+      buttons: [
+        [{ label: "⬅️ Back", action: "nav:back" }, { label: "🏠 Home", action: "home:show" }],
+      ],
+    },
+  },
+  support: {
+    es: {
+      text: "🛠️ Soporte Noropayments.shop\n\n¿Necesitas ayuda? Estamos aquí para apoyarte 🤝\n\nEn los botones de abajo selecciona el boton con el que esta relacionado tu problema y danos una breve descripción del problema.\n\n⏳ El tiempo de respuesta puede variar según la demanda.\n🚫 El spam no esta permitido, ya que solo podras enviar 1 mensaje y tendras que esperar que soporte te responda para poder enviar otro.\n\nGracias por tu paciencia 💙",
+      buttons: [
+        [{ label: "🛒 Problema con una compra", action: "support:purchase" }],
+        [{ label: "🐞 Reportar Error", action: "support:bug" }],
+        [{ label: "⬅️ Volver", action: "nav:back" }, { label: "🏠 Inicio", action: "home:show" }],
+      ],
+    },
+    en: {
+      text: "🛠️ Noropayments.shop Support\n\nDo you need help? We're here to support you 🤝\n\nSelect the button below that matches your issue and send a brief description of the problem.\n\n⏳ Response time may vary depending on demand.\n🚫 Spam is not allowed: you can only send 1 message and must wait for support to reply before sending another.\n\nThanks for your patience 💙",
+      buttons: [
+        [{ label: "🛒 Problem with a purchase", action: "support:purchase" }],
+        [{ label: "🐞 Report Error", action: "support:bug" }],
+        [{ label: "⬅️ Back", action: "nav:back" }, { label: "🏠 Home", action: "home:show" }],
+      ],
+    },
+  },
+};
+
+function getSectionConfig(sectionId) {
+  return SECTION_OPTIONS.find((item) => item.id === sectionId) || SECTION_OPTIONS[0];
+}
+const LABEL_TRANSLATIONS = {
+  es: {
+    shop: "Tienda",
+    store: "Tienda",
+    methods: "Métodos",
+    method: "Método",
+    vip: "VIP",
+    groups: "Grupos",
+    group: "Grupo",
+    programs: "Programas",
+    program: "Programa",
+    web: "Web",
+    cart: "Carrito",
+    affiliates: "Afiliados",
+    affiliate: "Afiliado",
+    community: "Comunidad",
+    support: "Soporte",
+    language: "Idioma",
+    home: "Inicio",
+    back: "Volver",
+    buy: "Comprar",
+    status: "Estado",
+    help: "Ayuda",
+    pending: "Pendientes",
+    approve: "Aprobar",
+    reject: "Rechazar",
+    refund: "Reembolso",
+    ban: "Banear",
+    unban: "Desbanear",
+    logs: "Logs",
+    maintenance: "Mantenimiento",
+    broadcast: "Broadcast",
+    add: "Agregar",
+    delete: "Eliminar",
+    product: "Producto",
+    products: "Productos",
+    menu: "Menú",
+    order: "Orden",
+    orders: "Órdenes",
+  },
+  en: {
+    tienda: "Shop",
+    metodos: "Methods",
+    método: "Method",
+    metodo: "Method",
+    vip: "VIP",
+    grupos: "Groups",
+    grupo: "Group",
+    programas: "Programs",
+    programa: "Program",
+    web: "Web",
+    carrito: "Cart",
+    afiliados: "Affiliates",
+    afiliado: "Affiliate",
+    comunidad: "Community",
+    soporte: "Support",
+    idioma: "Language",
+    inicio: "Home",
+    volver: "Back",
+    comprar: "Buy",
+    estado: "Status",
+    ayuda: "Help",
+    pendientes: "Pending",
+    aprobar: "Approve",
+    rechazar: "Reject",
+    reembolso: "Refund",
+    banear: "Ban",
+    desbanear: "Unban",
+    logs: "Logs",
+    mantenimiento: "Maintenance",
+    difusion: "Broadcast",
+    difusión: "Broadcast",
+    agregar: "Add",
+    eliminar: "Delete",
+    producto: "Product",
+    productos: "Products",
+    menu: "Menu",
+    menú: "Menu",
+    orden: "Order",
+    órdenes: "Orders",
+    ordenes: "Orders",
+  },
+};
+const PHRASE_TRANSLATIONS = {
+  es: {
+    "programs and web": "Programas y Web",
+    "groups vip": "Grupos VIP",
+  },
+  en: {
+    "programas y web": "Programs and Web",
+    "grupos vip": "Groups VIP",
+  },
+};
+
+function stripDiacritics(value) {
+  return String(value || "")
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "");
+}
+
+function withWordCase(source, target) {
+  const src = String(source || "");
+  const next = String(target || "");
+  if (!src) {
+    return next;
+  }
+  if (src === src.toUpperCase()) {
+    return next.toUpperCase();
+  }
+  if (src[0] === src[0].toUpperCase()) {
+    return next.charAt(0).toUpperCase() + next.slice(1);
+  }
+  return next;
+}
+
+function translateButtonLabel(label, fromLocale, toLocale) {
+  const text = String(label || "");
+  if (!text || fromLocale === toLocale) {
+    return text;
+  }
+
+  const normalizedWhole = stripDiacritics(text).toLowerCase().trim();
+  const phrase = PHRASE_TRANSLATIONS[toLocale]?.[normalizedWhole];
+  if (phrase) {
+    return phrase;
+  }
+
+  const dict = LABEL_TRANSLATIONS[toLocale] || {};
+  return text
+    .split(/([A-Za-zÀ-ÿ0-9]+)/g)
+    .map((part) => {
+      if (!part || !/[A-Za-zÀ-ÿ]/.test(part)) {
+        return part;
+      }
+      const key = stripDiacritics(part).toLowerCase();
+      const translated = dict[key];
+      if (!translated) {
+        return part;
+      }
+      return withWordCase(part, translated);
+    })
+    .join("");
+}
 
 function normalizeButton(raw) {
   if (!raw || typeof raw !== "object") {
@@ -14,16 +201,26 @@ function normalizeButton(raw) {
   const label = String(raw.label || raw.text || "").trim().slice(0, 64);
   const action = String(raw.action || raw.callback_data || "").trim().slice(0, 64);
   const url = String(raw.url || "").trim();
+  const hasUrl = Object.prototype.hasOwnProperty.call(raw, "url");
+  const hasAction = Object.prototype.hasOwnProperty.call(raw, "action")
+    || Object.prototype.hasOwnProperty.call(raw, "callback_data");
+
+  if (hasUrl) {
+    return { label, url };
+  }
+  if (hasAction) {
+    return { label, action };
+  }
   if (!label) {
     return null;
   }
   if (url) {
     return { label, url };
   }
-  if (!action) {
-    return null;
+  if (action) {
+    return { label, action };
   }
-  return { label, action };
+  return { label, action: "" };
 }
 
 function normalizeRows(rawButtons) {
@@ -70,6 +267,27 @@ function normalizeLayout(raw) {
   return layout;
 }
 
+function applySectionLayoutDefaults(sectionId, parsedLayout) {
+  const sectionDefaults = SECTION_DEFAULT_LAYOUTS[sectionId];
+  if (!sectionDefaults) {
+    return parsedLayout;
+  }
+  const next = cloneLayout(parsedLayout);
+  for (const locale of LOCALES) {
+    const defaults = sectionDefaults?.[locale];
+    if (!defaults) {
+      continue;
+    }
+    if (!String(next[locale].text || "").trim()) {
+      next[locale].text = String(defaults.text || "");
+    }
+    if (!Array.isArray(next[locale].buttons) || next[locale].buttons.length === 0) {
+      next[locale].buttons = normalizeRows(defaults.buttons);
+    }
+  }
+  return next;
+}
+
 function cloneLayout(layout) {
   return normalizeLayout(JSON.parse(JSON.stringify(layout || {})));
 }
@@ -79,11 +297,16 @@ function countButtons(rows) {
 }
 
 function getButtonType(button) {
-  return button?.url ? "url" : "callback";
+  return button && Object.prototype.hasOwnProperty.call(button, "url")
+    ? "url"
+    : "callback";
 }
 
 function buttonTarget(button) {
-  return button?.url || button?.action || "";
+  if (getButtonType(button) === "url") {
+    return String(button?.url || "");
+  }
+  return String(button?.action || "");
 }
 
 function escapeHtml(value) {
@@ -157,13 +380,32 @@ function normalizeMessageForSave(html) {
       return `<s>${inner}</s>`;
     }
     if (tag === "code") {
+      const className = String(node.getAttribute("class") || "").trim();
+      const safeClass = /^language-[a-z0-9_-]+$/i.test(className) ? className : "";
+      if (safeClass) {
+        return `<code class="${escapeHtml(safeClass)}">${inner}</code>`;
+      }
       return `<code>${inner}</code>`;
     }
     if (tag === "pre") {
-      return `<pre><code>${inner}</code></pre>`;
+      const codeChild = Array.from(node.childNodes).find(
+        (child) => child?.nodeType === Node.ELEMENT_NODE && String(child.tagName || "").toLowerCase() === "code"
+      );
+      const codeInner = codeChild
+        ? Array.from(codeChild.childNodes).map(serialize).join("")
+        : inner;
+      const codeClass = codeChild ? String(codeChild.getAttribute("class") || "").trim() : "";
+      const safeClass = /^language-[a-z0-9_-]+$/i.test(codeClass) ? codeClass : "";
+      if (safeClass) {
+        return `<pre><code class="${escapeHtml(safeClass)}">${codeInner}</code></pre>`;
+      }
+      return `<pre><code>${codeInner}</code></pre>`;
     }
     if (tag === "blockquote") {
-      return `<blockquote>${inner}</blockquote>`;
+      const isExpandable = node.hasAttribute("expandable");
+      return isExpandable
+        ? `<blockquote expandable>${inner}</blockquote>`
+        : `<blockquote>${inner}</blockquote>`;
     }
     if (tag === "a") {
       const href = String(node.getAttribute("href") || "").trim();
@@ -196,6 +438,23 @@ function findClosestTag(node, tagName) {
       return current;
     }
     current = current.parentNode;
+  }
+  return null;
+}
+
+function findSelectedContainer(snapshot, tagName) {
+  if (!snapshot || !snapshot.range) {
+    return null;
+  }
+  const startMatch = findClosestTag(snapshot.range.startContainer, tagName);
+  const endMatch = findClosestTag(snapshot.range.endContainer, tagName);
+  if (startMatch && startMatch === endMatch) {
+    return startMatch;
+  }
+  const anchorMatch = findClosestTag(snapshot.selection?.anchorNode, tagName);
+  const focusMatch = findClosestTag(snapshot.selection?.focusNode, tagName);
+  if (anchorMatch && anchorMatch === focusMatch) {
+    return anchorMatch;
   }
   return null;
 }
@@ -251,6 +510,7 @@ export default function HomeMenuPage() {
   const router = useRouter();
   const homeTextEditorRef = useRef(null);
   const homeLinkSelectionRef = useRef(null);
+  const [activeSection, setActiveSection] = useState("home");
   const [editorSyncNonce, setEditorSyncNonce] = useState(0);
   const [isLinkModalOpen, setIsLinkModalOpen] = useState(false);
   const [linkModalText, setLinkModalText] = useState("");
@@ -261,9 +521,13 @@ export default function HomeMenuPage() {
   const [activeLocale, setActiveLocale] = useState("es");
   const [loading, setLoading] = useState(true);
   const [saving, setSaving] = useState(false);
-  const [saveMessage, setSaveMessage] = useState("");
+  const [toast, setToast] = useState("");
   const [error, setError] = useState("");
   const [lastSyncAt, setLastSyncAt] = useState(0);
+  const sectionConfig = useMemo(
+    () => getSectionConfig(activeSection),
+    [activeSection]
+  );
   const hasChanges = useMemo(
     () => JSON.stringify(layout) !== JSON.stringify(draft),
     [layout, draft]
@@ -275,40 +539,50 @@ export default function HomeMenuPage() {
     }
   }, [router]);
 
-  const loadLayout = useCallback(async ({ silent = false } = {}) => {
+  useEffect(() => {
+    if (!toast) {
+      return undefined;
+    }
+    const timer = setTimeout(() => setToast(""), 2800);
+    return () => clearTimeout(timer);
+  }, [toast]);
+
+  const loadLayout = useCallback(async ({ silent = false, sectionId = activeSection } = {}) => {
+    const targetSection = getSectionConfig(sectionId);
     if (!silent) {
       setLoading(true);
     }
     try {
-      const data = await apiFetch(`/admin/layouts/${LAYOUT_KEY}`);
-      const normalized = normalizeLayout(data?.layout);
+      const data = await apiFetch(`/admin/layouts/${targetSection.layoutKey}`);
+      const rawLayout = data?.layout && typeof data.layout === "object" ? data.layout : {};
+      const normalized = applySectionLayoutDefaults(sectionId, normalizeLayout(rawLayout));
       setLayout(normalized);
       setDraft(cloneLayout(normalized));
       setEditorSyncNonce((prev) => prev + 1);
       setError("");
-      setSaveMessage("");
+      setToast("");
       setLastSyncAt(Date.now());
     } catch (err) {
-      setError("No se pudo cargar el menu Home del bot.");
+      setError(`No se pudo cargar la sección ${targetSection.label}.`);
     } finally {
       if (!silent) {
         setLoading(false);
       }
     }
-  }, []);
+  }, [activeSection]);
 
   useEffect(() => {
-    loadLayout();
-  }, [loadLayout]);
+    loadLayout({ sectionId: activeSection });
+  }, [activeSection, loadLayout]);
 
   useEffect(() => {
     const interval = setInterval(() => {
       if (!hasChanges && !saving) {
-        loadLayout({ silent: true });
+        loadLayout({ silent: true, sectionId: activeSection });
       }
     }, 10000);
     return () => clearInterval(interval);
-  }, [hasChanges, loadLayout, saving]);
+  }, [activeSection, hasChanges, loadLayout, saving]);
 
   const totalButtons = useMemo(() => {
     return LOCALES.reduce((sum, locale) => {
@@ -457,6 +731,35 @@ export default function HomeMenuPage() {
     event.preventDefault();
   }, []);
 
+  const mirrorButtonsFromLocale = useCallback((nextLayout, sourceLocale) => {
+    const sourceRows = nextLayout?.[sourceLocale]?.buttons || [];
+    for (const targetLocale of LOCALES) {
+      if (targetLocale === sourceLocale) {
+        continue;
+      }
+      nextLayout[targetLocale].buttons = sourceRows.map((sourceRow) =>
+        sourceRow.map((sourceButton) => {
+          const translatedLabel = translateButtonLabel(
+            sourceButton?.label || "",
+            sourceLocale,
+            targetLocale
+          );
+          if (getButtonType(sourceButton) === "url") {
+            return {
+              label: translatedLabel,
+              url: String(sourceButton?.url || ""),
+            };
+          }
+          return {
+            label: translatedLabel,
+            action: String(sourceButton?.action || ""),
+          };
+        })
+      );
+    }
+    return nextLayout;
+  }, []);
+
   const toggleMonespaced = useCallback(() => {
     const snapshot = requireEditorSelection();
     if (!snapshot) {
@@ -484,6 +787,44 @@ export default function HomeMenuPage() {
     } else {
       runEditorCommand("insertHTML", `<code>${escapeHtml(selected)}</code>`);
     }
+  }, [requireEditorSelection, runEditorCommand, syncLocaleTextFromEditor]);
+
+  const insertQuoteStyle = useCallback(() => {
+    const snapshot = requireEditorSelection("Selecciona el texto para citar.");
+    if (!snapshot) {
+      return;
+    }
+    const quoteNode = findSelectedContainer(snapshot, "blockquote");
+    if (quoteNode) {
+      unwrapElement(quoteNode);
+      syncLocaleTextFromEditor();
+      return;
+    }
+    const selected = escapeHtml(snapshot.text || "");
+    const html = `<blockquote>${selected}</blockquote>`;
+    runEditorCommand("insertHTML", html, { requiresSelection: false });
+  }, [requireEditorSelection, runEditorCommand, syncLocaleTextFromEditor]);
+
+  const insertShellCodeStyle = useCallback(() => {
+    const snapshot = requireEditorSelection("Selecciona el texto para formatear como código.");
+    if (!snapshot) {
+      return;
+    }
+    const preNode = findSelectedContainer(snapshot, "pre");
+    if (preNode) {
+      unwrapElement(preNode);
+      syncLocaleTextFromEditor();
+      return;
+    }
+    const codeNode = findSelectedContainer(snapshot, "code");
+    if (codeNode && !findClosestTag(codeNode.parentNode, "pre")) {
+      unwrapElement(codeNode);
+      syncLocaleTextFromEditor();
+      return;
+    }
+    const selected = escapeHtml(snapshot.text || "");
+    const html = `<pre>${selected}</pre>`;
+    runEditorCommand("insertHTML", html, { requiresSelection: false });
   }, [requireEditorSelection, runEditorCommand, syncLocaleTextFromEditor]);
 
   const handleEditorKeyDown = useCallback((event) => {
@@ -521,14 +862,19 @@ export default function HomeMenuPage() {
     }
     if (key === "." && withShift) {
       event.preventDefault();
-      runEditorCommand("formatBlock", "blockquote");
+      insertQuoteStyle();
+      return;
+    }
+    if (key === "c" && withShift) {
+      event.preventDefault();
+      insertShellCodeStyle();
       return;
     }
     if (key === "m" && withShift) {
       event.preventDefault();
       toggleMonespaced();
     }
-  }, [openLinkModal, runEditorCommand, toggleMonespaced]);
+  }, [insertQuoteStyle, insertShellCodeStyle, openLinkModal, runEditorCommand, toggleMonespaced]);
 
   const handleEditorPaste = useCallback((event) => {
     event.preventDefault();
@@ -549,11 +895,11 @@ export default function HomeMenuPage() {
         row[colIndex] = value === "url"
           ? { label: previous.label || "", url: previous.url || "" }
           : { label: previous.label || "", action: previous.action || "" };
-        return next;
+        return mirrorButtonsFromLocale(next, locale);
       }
       if (field === "label") {
         row[colIndex].label = String(value || "").slice(0, 64);
-        return next;
+        return mirrorButtonsFromLocale(next, locale);
       }
       if (field === "target") {
         if (getButtonType(row[colIndex]) === "url") {
@@ -567,7 +913,7 @@ export default function HomeMenuPage() {
             action: String(value || "").slice(0, 64),
           };
         }
-        return next;
+        return mirrorButtonsFromLocale(next, locale);
       }
       return prev;
     });
@@ -583,7 +929,7 @@ export default function HomeMenuPage() {
       }
       currentRows.push([{ label: "Nuevo botón", action: "home:soon:nuevo" }]);
       next[locale].buttons = currentRows;
-      return next;
+      return mirrorButtonsFromLocale(next, locale);
     });
   };
 
@@ -604,7 +950,7 @@ export default function HomeMenuPage() {
         return prev;
       }
       row.push({ label: "Nuevo botón", action: "home:soon:nuevo" });
-      return next;
+      return mirrorButtonsFromLocale(next, locale);
     });
   };
 
@@ -617,7 +963,7 @@ export default function HomeMenuPage() {
       }
       row.splice(colIndex, 1);
       next[locale].buttons = (next[locale].buttons || []).filter((entry) => entry.length > 0);
-      return next;
+      return mirrorButtonsFromLocale(next, locale);
     });
   };
 
@@ -633,7 +979,7 @@ export default function HomeMenuPage() {
       rows[target] = rows[rowIndex];
       rows[rowIndex] = temp;
       next[locale].buttons = rows;
-      return next;
+      return mirrorButtonsFromLocale(next, locale);
     });
   };
 
@@ -641,7 +987,7 @@ export default function HomeMenuPage() {
     setDraft((prev) => {
       const next = cloneLayout(prev);
       next[locale].buttons.splice(rowIndex, 1);
-      return next;
+      return mirrorButtonsFromLocale(next, locale);
     });
   };
 
@@ -651,19 +997,20 @@ export default function HomeMenuPage() {
     if (editor) {
       nextLayout[activeLocale].text = normalizeMessageForSave(editor.innerHTML || "");
     }
+    mirrorButtonsFromLocale(nextLayout, activeLocale);
     setDraft(cloneLayout(nextLayout));
     const normalizedPayload = normalizeLayout(nextLayout);
     const validationError = validateLayout(normalizedPayload);
     if (validationError) {
       setError(validationError);
-      setSaveMessage("");
+      setToast("");
       return;
     }
     setSaving(true);
     setError("");
-    setSaveMessage("");
+    setToast("");
     try {
-      const data = await apiFetch(`/admin/layouts/${LAYOUT_KEY}`, {
+      const data = await apiFetch(`/admin/layouts/${sectionConfig.layoutKey}`, {
         method: "POST",
         body: JSON.stringify(normalizedPayload),
       });
@@ -671,9 +1018,9 @@ export default function HomeMenuPage() {
       setLayout(normalized);
       setDraft(cloneLayout(normalized));
       setLastSyncAt(Date.now());
-      setSaveMessage("Cambios guardados correctamente.");
+      setToast("Cambios guardados correctamente.");
     } catch (err) {
-      setError("No se pudo guardar el Home del bot.");
+      setError(`No se pudo guardar la sección ${sectionConfig.label}.`);
     } finally {
       setSaving(false);
     }
@@ -683,13 +1030,22 @@ export default function HomeMenuPage() {
     setDraft(cloneLayout(layout));
     setEditorSyncNonce((prev) => prev + 1);
     setError("");
-    setSaveMessage("");
+    setToast("");
   };
 
   const handleLocaleChange = (locale) => {
     syncLocaleTextFromEditor();
     setActiveLocale(locale);
     setEditorSyncNonce((prev) => prev + 1);
+  };
+
+  const handleSectionChange = (sectionId) => {
+    if (sectionId === activeSection) {
+      return;
+    }
+    syncLocaleTextFromEditor();
+    setActiveLocale("es");
+    setActiveSection(sectionId);
   };
 
   const activeLocalized = draft?.[activeLocale] || { text: "", buttons: [] };
@@ -701,68 +1057,55 @@ export default function HomeMenuPage() {
         <div className="inventory-header home-menu-header">
           <div>
             <h1>Home Bot (Editor)</h1>
-            <p className="muted">
-              Edita texto y botones del Home en web usando el mismo layout: <code>{LAYOUT_KEY}</code>.
-            </p>
-            <p className="muted">
-              Lo que guardes aqui se refleja en el bot y en el panel admin de Telegram.
-            </p>
-          </div>
-          <div className="actions home-menu-header-actions">
-            <button type="button" onClick={() => loadLayout()} disabled={loading || saving}>
-              {loading ? "Cargando..." : "Actualizar"}
-            </button>
-            <button type="button" className="ghost" onClick={resetDraft} disabled={!hasChanges || saving}>
-              Restaurar
-            </button>
-            <button type="button" onClick={saveLayout} disabled={!hasChanges || saving}>
-              {saving ? "Guardando..." : "Guardar cambios"}
-            </button>
           </div>
         </div>
 
         {error && <p className="error">{error}</p>}
-        {saveMessage && <p className="muted">{saveMessage}</p>}
         <>
-          <p className="muted">
-            Ultima sincronizacion:{" "}
-            {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "-"} · Botones detectados: {totalButtons}/{MAX_BUTTONS}
-            {hasChanges ? " · Cambios pendientes" : ""}
-          </p>
-          <div className="category-grid home-menu-locale-grid">
-            {LOCALES.map((locale) => (
+          <div className="category-grid home-menu-section-grid">
+            {SECTION_OPTIONS.map((section) => (
               <button
-                key={locale}
+                key={section.id}
                 type="button"
-                className={`category-button ${activeLocale === locale ? "active" : ""}`}
-                onClick={() => handleLocaleChange(locale)}
+                className={`category-button ${activeSection === section.id ? "active" : ""}`}
+                onClick={() => handleSectionChange(section.id)}
               >
-                <span>{localeTitle(locale)}</span>
-                <span className="category-count">{draft?.[locale]?.buttons?.length || 0}</span>
+                <span>{section.label}</span>
               </button>
             ))}
+          </div>
+          <div className="home-menu-locale-row">
+            <div className="category-grid home-menu-locale-grid">
+              {LOCALES.map((locale) => (
+                <button
+                  key={locale}
+                  type="button"
+                  className={`category-button ${activeLocale === locale ? "active" : ""}`}
+                  onClick={() => handleLocaleChange(locale)}
+                >
+                  <span>{localeTitle(locale)}</span>
+                  <span className="category-count">{draft?.[locale]?.buttons?.length || 0}</span>
+                </button>
+              ))}
+            </div>
           </div>
           <section className="card home-menu-locale-card">
               <div className="inventory-header home-menu-locale-header">
                 <div>
-                  <h3>{localeTitle(activeLocale)} ({activeLocale.toUpperCase()})</h3>
+                  <h3>{sectionConfig.label}: {localeTitle(activeLocale)} ({activeLocale.toUpperCase()})</h3>
                   <p className="muted">Edita texto y botones de este idioma.</p>
                 </div>
-                <div className="actions home-menu-row-actions">
-                  <button type="button" onClick={() => addRow(activeLocale)}>
-                    Agregar fila
-                  </button>
-                </div>
               </div>
-              <label className="home-menu-text-label">
-                Texto Home
+              <div className="home-menu-text-label">
+                <p className="home-menu-text-title">Texto Home</p>
                 <div className="home-message-toolbar">
                   <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runEditorCommand("bold")}>Negrita</button>
                   <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runEditorCommand("italic")}>Cursiva</button>
                   <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runEditorCommand("underline")}>Subrayado</button>
                   <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={openLinkModal}>Enlace</button>
                   <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runEditorCommand("strikeThrough")}>Tachado</button>
-                  <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={() => runEditorCommand("formatBlock", "blockquote")}>Citar</button>
+                  <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={insertQuoteStyle}>Citar</button>
+                  <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={insertShellCodeStyle}>Codigo</button>
                   <button type="button" className="ghost" onMouseDown={preventToolbarBlur} onClick={toggleMonespaced}>Monoespaciado</button>
                 </div>
                 <div
@@ -776,11 +1119,13 @@ export default function HomeMenuPage() {
                   onKeyDown={handleEditorKeyDown}
                   onPaste={handleEditorPaste}
                 />
+                <p className="muted home-menu-sync-inline">
+                  Ultima actualizacion:{" "}
+                  {lastSyncAt ? new Date(lastSyncAt).toLocaleString() : "-"} · Botones detectados: {totalButtons}/{MAX_BUTTONS}
+                  {hasChanges ? " · Cambios pendientes" : ""}
+                </p>
                 <div
                   className="editor-shortcuts-help"
-                  role="button"
-                  tabIndex={0}
-                  aria-label="Ver atajos de formato"
                 >
                   <span className="editor-shortcuts-help__icon" aria-hidden="true">i</span>
                   <span className="editor-shortcuts-help__label">
@@ -793,10 +1138,27 @@ export default function HomeMenuPage() {
                     <span>⌘/Ctrl+K: Enlace</span>
                     <span>⌘/Ctrl+Shift+X: Tachado</span>
                     <span>⌘/Ctrl+Shift+.: Citar</span>
+                    <span>⌘/Ctrl+Shift+C: Codigo</span>
                     <span>⌘/Ctrl+Shift+M: Monoespaciado</span>
                   </div>
                 </div>
-              </label>
+                <div className="actions home-menu-header-actions home-menu-editor-actions">
+                  <button type="button" onClick={() => loadLayout()} disabled={loading || saving}>
+                    {loading ? "Cargando..." : "Actualizar"}
+                  </button>
+                  <button type="button" className="ghost" onClick={resetDraft} disabled={!hasChanges || saving}>
+                    Restaurar
+                  </button>
+                  <button type="button" onClick={saveLayout} disabled={!hasChanges || saving}>
+                    {saving ? "Guardando..." : "Guardar cambios"}
+                  </button>
+                </div>
+                <div className="actions home-menu-add-row-actions">
+                  <button type="button" onClick={() => addRow(activeLocale)}>
+                    Agregar fila
+                  </button>
+                </div>
+              </div>
               {rows.length === 0 ? (
                 <p className="muted">Sin botones. Agrega una fila para empezar.</p>
               ) : (
@@ -934,6 +1296,7 @@ export default function HomeMenuPage() {
           </div>
         </div>
       )}
+      <Toast message={toast} />
     </main>
   );
 }
