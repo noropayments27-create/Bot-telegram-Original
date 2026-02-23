@@ -5,6 +5,7 @@ from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
 
 from .config import TELEGRAM_BOT_TOKEN
+from .services.api_client import ApiClient
 from .handlers import (
     admin_actions,
     admin_auth,
@@ -52,7 +53,10 @@ async def main() -> None:
     dp.include_router(support.router)
     dp.include_router(affiliates.router)
 
-    await dp.start_polling(bot)
+    try:
+        await dp.start_polling(bot)
+    finally:
+        await ApiClient.aclose_all()
 
 
 if __name__ == "__main__":

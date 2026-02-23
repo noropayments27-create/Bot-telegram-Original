@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import logging
+import time
 from typing import Any, Awaitable, Callable, Dict
 
 from aiogram import BaseMiddleware
@@ -18,10 +19,24 @@ from ..states.access import AccessStates
 
 
 class AccessCodeMiddleware(BaseMiddleware):
-    def __init__(self) -> None:
+    def __init__(self, access_cache_ttl: float = 30.0) -> None:
         super().__init__()
         self._api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
         self._logger = logging.getLogger(__name__)
+        self._access_cache_ttl = max(float(access_cache_ttl), 0.0)
+        self._access_cache: Dict[int, float] = {}
+
+    def _has_cached_access(self, user_id: int) -> bool:
+        expires_at = self._access_cache.get(user_id)
+        if not expires_at:
+            return False
+        if time.monotonic() >= expires_at:
+            self._access_cache.pop(user_id, None)
+            return False
+        return True
+
+    def _cache_access(self, user_id: int) -> None:
+        self._access_cache[user_id] = time.monotonic() + self._access_cache_ttl
 
     async def __call__(
         self,
@@ -46,10 +61,14 @@ class AccessCodeMiddleware(BaseMiddleware):
             if event.text and event.text.strip().startswith("/start"):
                 return await handler(event, data)
 
+        if self._has_cached_access(user.id):
+            return await handler(event, data)
+
         try:
             result = await self._api_client.get_user(user.id)
             referred = (result.get("user") or {}).get("referred_by_affiliate_id")
             if referred:
+                self._cache_access(user.id)
                 return await handler(event, data)
         except Exception:
             return await handler(event, data)

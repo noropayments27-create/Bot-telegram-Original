@@ -28,6 +28,7 @@ from ..services.deeplinks import build_bot_start_link, build_product_start_paylo
 from ..config import (
     API_BASE_URL,
     API_TOKEN,
+    BOT_EARLY_CALLBACK_ANSWER_ENABLED,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
@@ -56,6 +57,8 @@ api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 _SCREENSHOTS_RECEIVED: Set[str] = set()
 _IMAGE_DUPLICATE_TTL_SECONDS = 24 * 60 * 60
 _PAYMENT_IMAGE_CACHE: Dict[int, Dict[str, float]] = {}
+_AFFILIATE_CODE_CACHE_TTL_SECONDS = 120
+_AFFILIATE_CODE_CACHE: Dict[int, Dict[str, Any]] = {}
 _ANALYSIS_PROGRESS_STEPS = [7, 15, 24, 33, 42, 51, 60, 69, 77, 84, 90, 95, 97]
 _DEFAULT_PRODUCT_PRICE_USD = 20.0
 _PAGE_SIZE = 9
@@ -1194,6 +1197,10 @@ def _format_description(raw: Optional[str], locale: str | None = None) -> str:
 
 
 async def _resolve_share_affiliate_code(telegram_id: int) -> str | None:
+    now = time.time()
+    cache_slot = _AFFILIATE_CODE_CACHE.get(telegram_id)
+    if cache_slot and float(cache_slot.get("expires_at", 0.0)) > now:
+        return cache_slot.get("code")
     try:
         data = await api_client.get_affiliate_status(telegram_id)
     except Exception:
@@ -1208,9 +1215,25 @@ async def _resolve_share_affiliate_code(telegram_id: int) -> str | None:
     user_data = data.get("user") if isinstance(data.get("user"), dict) else {}
     user_telegram_id = str(user_data.get("telegram_id") or "").strip()
     if user_telegram_id.isdigit():
-        return user_telegram_id
-    affiliate_id = str(affiliate.get("id") or "").strip()
-    return affiliate_id or None
+        code = user_telegram_id
+    else:
+        affiliate_id = str(affiliate.get("id") or "").strip()
+        code = affiliate_id or None
+    _AFFILIATE_CODE_CACHE[telegram_id] = {
+        "code": code,
+        "expires_at": now + _AFFILIATE_CODE_CACHE_TTL_SECONDS,
+    }
+    return code
+
+
+async def _answer_callback_early(callback: CallbackQuery) -> bool:
+    if not BOT_EARLY_CALLBACK_ANSWER_ENABLED:
+        return False
+    try:
+        await callback.answer()
+        return True
+    except Exception:
+        return False
 
 
 async def _build_product_link_block(
@@ -1260,20 +1283,29 @@ async def _build_product_detail_text(
 async def _get_products_by_category(
     category_key: str, telegram_id: int | None = None
 ) -> List[Dict[str, Any]]:
-    products = await _fetch_active_products(telegram_id)
-    filtered = [
-        _normalize_product(product)
-        for product in products
-        if str(product.get("category_key") or "").upper() == category_key
-    ]
+    filtered: List[Dict[str, Any]] = []
+    page = 1
+    total_pages = 1
+    while page <= total_pages:
+        data = await api_client.list_products(
+            page=page,
+            page_size=50,
+            telegram_id=telegram_id,
+            category_key=category_key,
+        )
+        total_pages = max(int(data.get("total_pages") or 1), 1)
+        items = data.get("items", [])
+        if isinstance(items, list):
+            filtered.extend(
+                _normalize_product(item)
+                for item in items
+                if item.get("is_active") is True
+            )
+        page += 1
     filtered.sort(
         key=lambda item: item.get("sku_key") or item.get("created_at") or ""
     )
     return filtered
-def _paginate(items: List[Dict[str, Any]], page: int) -> List[Dict[str, Any]]:
-    start = (page - 1) * _PAGE_SIZE
-    end = start + _PAGE_SIZE
-    return items[start:end]
 
 
 def _parse_positive_int(value: Any, default: int = 1) -> int:
@@ -1284,15 +1316,59 @@ def _parse_positive_int(value: Any, default: int = 1) -> int:
     return parsed if parsed > 0 else default
 
 
+async def _get_products_page_by_category(
+    category_value: str,
+    page: int,
+    telegram_id: int | None = None,
+    *,
+    clamp_page: bool = True,
+) -> Dict[str, Any]:
+    requested_page = _parse_positive_int(page, 1)
+    data = await api_client.list_products(
+        page=requested_page,
+        page_size=_PAGE_SIZE,
+        telegram_id=telegram_id,
+        category_key=category_value,
+    )
+    total_pages = max(int(data.get("total_pages") or 1), 1)
+    safe_page = max(1, min(requested_page, total_pages))
+    if safe_page != requested_page:
+        if not clamp_page:
+            return {
+                "items": [],
+                "total_pages": total_pages,
+                "page": requested_page,
+            }
+        data = await api_client.list_products(
+            page=safe_page,
+            page_size=_PAGE_SIZE,
+            telegram_id=telegram_id,
+            category_key=category_value,
+        )
+    raw_items = data.get("items", [])
+    items = []
+    if isinstance(raw_items, list):
+        items = [
+            _normalize_product(item)
+            for item in raw_items
+            if item.get("is_active") is True
+        ]
+    items.sort(key=lambda item: item.get("sku_key") or item.get("created_at") or "")
+    return {
+        "items": items,
+        "total_pages": total_pages,
+        "page": safe_page,
+    }
+
+
 async def _get_shop_page_items(
     page: int, telegram_id: int | None = None
 ) -> Dict[str, Any]:
-    products = await _get_products_by_category(_CATEGORY_KEYS["tienda"], telegram_id)
-    total_pages = max((len(products) + _PAGE_SIZE - 1) // _PAGE_SIZE, 1)
-    return {
-        "items": _paginate(products, page),
-        "total_pages": total_pages,
-    }
+    return await _get_products_page_by_category(
+        _CATEGORY_KEYS["tienda"], page, telegram_id, clamp_page=False
+    )
+
+
 async def _get_category_page_items(
     category_key: str,
     page: int,
@@ -1304,14 +1380,7 @@ async def _get_category_page_items(
         category_value = _normalize_category_value(category_key)
     if not category_value:
         return {"items": [], "total_pages": 1, "page": 1}
-    products = await _get_products_by_category(category_value, telegram_id)
-    total_pages = max((len(products) + _PAGE_SIZE - 1) // _PAGE_SIZE, 1)
-    safe_page = max(1, min(_parse_positive_int(page, 1), total_pages))
-    return {
-        "items": _paginate(products, safe_page),
-        "total_pages": total_pages,
-        "page": safe_page,
-    }
+    return await _get_products_page_by_category(category_value, page, telegram_id)
 
 
 def _category_key_from_value(category_value: str) -> str:
@@ -1611,10 +1680,12 @@ async def handle_shop_page(callback: CallbackQuery) -> None:
     if not callback.from_user.username:
         await callback.answer(t(locale, "username_required_buy"), show_alert=True)
         return
+    answered_early = await _answer_callback_early(callback)
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     page = int(callback.data.split(":")[-1])
     await render_shop_page(callback.message, callback.from_user.id, page, locale)
-    await callback.answer()
+    if not answered_early:
+        await callback.answer()
 @router.callback_query(F.data.startswith("category:page:"))
 async def handle_category_page(callback: CallbackQuery) -> None:
     if not callback.message or not callback.from_user:
@@ -1637,6 +1708,7 @@ async def handle_category_page(callback: CallbackQuery) -> None:
     if not callback.from_user.username:
         await callback.answer(t(locale, "username_required_buy"), show_alert=True)
         return
+    answered_early = await _answer_callback_early(callback)
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     parts = callback.data.split(":")
     category_key = str(parts[2] if len(parts) > 2 else "").strip().lower()
@@ -1644,7 +1716,8 @@ async def handle_category_page(callback: CallbackQuery) -> None:
     await render_category_page(
         callback.message, callback.from_user.id, category_key, page, locale
     )
-    await callback.answer()
+    if not answered_early:
+        await callback.answer()
 @router.callback_query(F.data.startswith("shop:select:"))
 async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1680,6 +1753,7 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
     if product.get("out_of_stock"):
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
+    answered_early = await _answer_callback_early(callback)
     await state.update_data(selected_product_id=product["id"])
     text = await _build_product_detail_text(product, callback.from_user.id, locale)
     keyboard = build_product_detail_keyboard(
@@ -1695,7 +1769,8 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         product,
         reply_markup=keyboard,
     )
-    await callback.answer()
+    if not answered_early:
+        await callback.answer()
 @router.callback_query(F.data.startswith("category:select:"))
 async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -1737,6 +1812,7 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
     if item.get("out_of_stock"):
         await callback.answer(t(locale, "product_out_of_stock"), show_alert=True)
         return
+    answered_early = await _answer_callback_early(callback)
     await state.update_data(selected_product_id=item["id"])
     text = await _build_product_detail_text(item, callback.from_user.id, locale)
     keyboard = build_category_detail_keyboard(
@@ -1753,7 +1829,8 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         item,
         reply_markup=keyboard,
     )
-    await callback.answer()
+    if not answered_early:
+        await callback.answer()
 @router.callback_query(F.data.startswith("shop:buy:"))
 async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:

@@ -8,8 +8,18 @@ function parseBoolean(value) {
   return undefined;
 }
 
+function normalizeCategoryKey(value) {
+  const text = String(value || "").trim().toUpperCase();
+  if (!text) return "";
+  return text
+    .replace(/[\s-]+/g, "_")
+    .replace(/[^A-Z0-9_]/g, "")
+    .slice(0, 32);
+}
+
 async function listProducts(req, res, next) {
   const active = parseBoolean(req.query.active);
+  const categoryKey = normalizeCategoryKey(req.query.category_key);
   const telegramId = Number(req.query.telegram_id);
   const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
   const pageSize = Math.min(
@@ -27,6 +37,10 @@ async function listProducts(req, res, next) {
   if (active !== undefined) {
     values.push(active);
     filters.push(`is_active = $${values.length}`);
+  }
+  if (categoryKey) {
+    values.push(categoryKey);
+    filters.push(`category_key = $${values.length}`);
   }
 
   const whereClause = filters.length

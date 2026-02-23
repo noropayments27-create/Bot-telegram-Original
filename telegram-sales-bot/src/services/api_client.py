@@ -27,6 +27,8 @@ async def _request_with_retry(fn, attempts: int = 3, delay: float = 0.35) -> Any
 
 
 class ApiClient:
+    _shared_clients: Dict[str, httpx.AsyncClient] = {}
+
     def __init__(
         self,
         base_url: str,
@@ -46,6 +48,43 @@ class ApiClient:
         if self.bot_secret:
             headers["x-bot-secret"] = self.bot_secret
         return headers
+
+    def _client_key(self) -> str:
+        return self.base_url
+
+    def _client(self) -> httpx.AsyncClient:
+        key = self._client_key()
+        existing = self._shared_clients.get(key)
+        if existing and not existing.is_closed:
+            return existing
+        client = httpx.AsyncClient()
+        self._shared_clients[key] = client
+        return client
+
+    async def _request(
+        self,
+        method: str,
+        url: str,
+        *,
+        retry: bool = False,
+        **kwargs,
+    ) -> httpx.Response:
+        client = self._client()
+
+        async def _do() -> httpx.Response:
+            return await client.request(method, url, **kwargs)
+
+        if retry:
+            return await _request_with_retry(_do)
+        return await _do()
+
+    @classmethod
+    async def aclose_all(cls) -> None:
+        clients = list(cls._shared_clients.values())
+        cls._shared_clients.clear()
+        for client in clients:
+            if client and not client.is_closed:
+                await client.aclose()
 
     async def ping_health(self) -> Dict[str, Any]:
         url = f"{self.base_url}/health"
@@ -70,45 +109,52 @@ class ApiClient:
         page: int = 1,
         page_size: int = 8,
         telegram_id: int | None = None,
+        category_key: str | None = None,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/products"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url,
-                params={
-                    "active": "true",
-                    "page": page,
-                    "page_size": page_size,
-                    "telegram_id": telegram_id,
-                },
-                headers=self._headers(),
-                timeout=5,
-            )
-            response.raise_for_status()
-            return response.json()
+        params: Dict[str, Any] = {
+            "active": "true",
+            "page": page,
+            "page_size": page_size,
+            "telegram_id": telegram_id,
+        }
+        if category_key:
+            params["category_key"] = category_key
+        response = await self._request(
+            "GET",
+            url,
+            params=params,
+            headers=self._headers(),
+            timeout=5,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def create_order(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/orders"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url, json=payload, headers=self._headers(), timeout=5
-            )
-            if response.status_code == 409:
-                return {"status_code": 409, "data": response.json()}
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=5,
+        )
+        if response.status_code == 409:
+            return {"status_code": 409, "data": response.json()}
+        response.raise_for_status()
+        return response.json()
 
     async def submit_payment_proof(self, order_id: str, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/orders/{order_id}/payment-proof"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url,
-                json=payload,
-                headers=self._headers(),
-                timeout=PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS,
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def admin_get_maintenance(self) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/maintenance"
@@ -301,28 +347,32 @@ class ApiClient:
 
     async def get_order(self, order_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/orders/{order_id}"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=self._headers(), timeout=5)
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET", url, headers=self._headers(), timeout=5
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_payment_methods(self) -> Dict[str, Any]:
         url = f"{self.base_url}/orders/payment-methods"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, headers=self._headers(), timeout=5)
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET", url, headers=self._headers(), timeout=5
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_user(self, telegram_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/users/{telegram_id}"
 
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url, headers=self._headers(), timeout=15
-                )
-                response.raise_for_status()
-                return response.json()
+            response = await self._request(
+                "GET",
+                url,
+                headers=self._headers(),
+                timeout=15,
+            )
+            response.raise_for_status()
+            return response.json()
 
         return await _request_with_retry(_do)
 
@@ -359,12 +409,14 @@ class ApiClient:
         url = f"{self.base_url}/users/{telegram_id}/ban"
 
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url, headers=self._headers(), timeout=10
-                )
-                response.raise_for_status()
-                return response.json()
+            response = await self._request(
+                "GET",
+                url,
+                headers=self._headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
 
         return await _request_with_retry(_do)
 
@@ -372,12 +424,14 @@ class ApiClient:
         url = f"{self.base_url}/bot/maintenance"
 
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url, headers=self._headers(), timeout=10
-                )
-                response.raise_for_status()
-                return response.json()
+            response = await self._request(
+                "GET",
+                url,
+                headers=self._headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
 
         return await _request_with_retry(_do)
 
@@ -385,12 +439,14 @@ class ApiClient:
         url = f"{self.base_url}/bot/assets"
 
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url, headers=self._headers(), timeout=10
-                )
-                response.raise_for_status()
-                return response.json()
+            response = await self._request(
+                "GET",
+                url,
+                headers=self._headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
 
         return await _request_with_retry(_do)
 
@@ -398,12 +454,14 @@ class ApiClient:
         url = f"{self.base_url}/bot/layouts/{key}"
 
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url, headers=self._headers(), timeout=10
-                )
-                response.raise_for_status()
-                return response.json()
+            response = await self._request(
+                "GET",
+                url,
+                headers=self._headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
 
         return await _request_with_retry(_do)
 
@@ -485,52 +543,27 @@ class ApiClient:
     async def get_cart(self, telegram_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/bot/cart"
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.get(
-                    url,
-                    params={"telegram_id": telegram_id},
-                    headers=self._headers(),
-                    timeout=15,
-                )
-                response.raise_for_status()
-                return response.json()
+            response = await self._request(
+                "GET",
+                url,
+                params={"telegram_id": telegram_id},
+                headers=self._headers(),
+                timeout=15,
+            )
+            response.raise_for_status()
+            return response.json()
 
         return await _request_with_retry(_do)
 
     async def add_to_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/bot/cart/add"
         async def _do() -> Dict[str, Any]:
-            async with httpx.AsyncClient() as client:
-                response = await client.post(
-                    url, json=payload, headers=self._headers(), timeout=15
-                )
-                if response.status_code == 409:
-                    try:
-                        data = response.json()
-                    except ValueError:
-                        data = {}
-                    return data if isinstance(data, dict) else {"ok": False}
-                if response.status_code in (200, 201):
-                    return response.json()
-                response.raise_for_status()
-                return response.json()
-
-        return await _request_with_retry(_do)
-
-    async def clear_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self.base_url}/bot/cart/clear"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url, json=payload, headers=self._headers(), timeout=15
-            )
-            response.raise_for_status()
-            return response.json()
-
-    async def checkout_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
-        url = f"{self.base_url}/bot/cart/checkout"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url, json=payload, headers=self._headers(), timeout=15
+            response = await self._request(
+                "POST",
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=15,
             )
             if response.status_code == 409:
                 try:
@@ -543,26 +576,64 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+        return await _request_with_retry(_do)
+
+    async def clear_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/cart/clear"
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def checkout_cart(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/cart/checkout"
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=15,
+        )
+        if response.status_code == 409:
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            return data if isinstance(data, dict) else {"ok": False}
+        if response.status_code in (200, 201):
+            return response.json()
+        response.raise_for_status()
+        return response.json()
+
     async def open_or_create_ticket(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/tickets/open-or-create"
-        async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=5)
-            if response.status_code in (400, 403, 409):
-                return {"status_code": response.status_code, "data": response.json()}
-            response.raise_for_status()
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            timeout=5,
+        )
+        if response.status_code in (400, 403, 409):
             return {"status_code": response.status_code, "data": response.json()}
+        response.raise_for_status()
+        return {"status_code": response.status_code, "data": response.json()}
 
     async def get_affiliate_status(self, telegram_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/users/affiliates/status"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(
-                url,
-                params={"telegram_id": telegram_id},
-                headers=self._headers(),
-                timeout=10,
-            )
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET",
+            url,
+            params={"telegram_id": telegram_id},
+            headers=self._headers(),
+            timeout=10,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def apply_affiliate(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/users/affiliates/apply"
@@ -609,10 +680,14 @@ class ApiClient:
 
     async def get_active_ticket(self, telegram_id: int) -> Dict[str, Any]:
         url = f"{self.base_url}/tickets/active"
-        async with httpx.AsyncClient() as client:
-            response = await client.get(url, params={"telegram_id": telegram_id}, timeout=5)
-            response.raise_for_status()
-            return response.json()
+        response = await self._request(
+            "GET",
+            url,
+            params={"telegram_id": telegram_id},
+            timeout=5,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def send_admin_auth_decision(
         self, payload: Dict[str, Any], bot_secret: Optional[str]

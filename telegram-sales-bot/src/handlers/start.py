@@ -9,6 +9,7 @@ from ..config import (
     API_BASE_URL,
     API_TOKEN,
     ADMIN_TELEGRAM_IDS,
+    BOT_EARLY_CALLBACK_ANSWER_ENABLED,
     BOT_RATE_LIMIT_BYPASS_TELEGRAM_IDS,
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
@@ -243,6 +244,13 @@ async def handle_home_show(callback: CallbackQuery) -> None:
             show_alert=True,
         )
         return
+    answered_early = False
+    if BOT_EARLY_CALLBACK_ANSWER_ENABLED:
+        try:
+            await callback.answer()
+            answered_early = True
+        except Exception:
+            answered_early = False
     await stop_order_watch(callback.from_user.id, "home")
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await render_home_view(
@@ -250,7 +258,8 @@ async def handle_home_show(callback: CallbackQuery) -> None:
         callback.from_user.id,
         locale,
     )
-    await callback.answer()
+    if not answered_early:
+        await callback.answer()
 
 
 @router.message(AccessStates.awaiting_code, F.text)
