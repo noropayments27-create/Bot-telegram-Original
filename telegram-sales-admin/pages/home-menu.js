@@ -12,7 +12,52 @@ const SECTION_OPTIONS = [
 const LOCALES = ["es", "en"];
 const MAX_BUTTONS = 24;
 const SECTION_DEFAULT_LAYOUTS = {
-  home: null,
+  home: {
+    es: {
+      text: "Bienvenido a:  <code>Noropayments.shop</code> 🛍️\n\n🚀 ¡Tu compra inteligente comienza aquí! 🚀\n\nTenemos todo lo que necesitas y más\n\n✅ Productos exclusivo\n✅ Envíos rápidos\n✅ Precios increíbles\n✅ Atención personalizada\n\n🛒 ¿Qué deseas comprar hoy?\n\n¡Cuéntanos y te guiamos! 🤝",
+      buttons: [
+        [
+          { label: "🏪 Tienda", action: "shop:page:1" },
+          { label: "✅ Métodos", action: "category:page:metodos" },
+        ],
+        [
+          { label: "💬 Grupos VIP", action: "category:page:vip" },
+          { label: "💻 Programas y Web", action: "category:page:programas" },
+        ],
+        [
+          { label: "🛒 Carrito", action: "home:cart" },
+          { label: "📢 Afiliados", action: "home:affiliates" },
+        ],
+        [
+          { label: "👥 Comunidad", action: "home:community" },
+          { label: "🆘 Soporte", action: "home:support" },
+        ],
+        [{ label: "🌐 Idioma", action: "home:soon:idioma" }],
+      ],
+    },
+    en: {
+      text: "Welcome to:  <code>Noropayments.shop</code> 🛍️\n\n🚀 Your smart shopping starts here! 🚀\n\nWe have everything you need and more\n\n✅ Exclusive products\n✅ Fast shipping\n✅ Amazing prices\n✅ Personalized attention\n\n🛒 What do you want to buy today?\n\nTell us and we'll guide you! 🤝",
+      buttons: [
+        [
+          { label: "🏪 Shop", action: "shop:page:1" },
+          { label: "✅ Methods", action: "category:page:metodos" },
+        ],
+        [
+          { label: "💬 VIP Groups", action: "category:page:vip" },
+          { label: "💻 Programs & Web", action: "category:page:programas" },
+        ],
+        [
+          { label: "🛒 Cart", action: "home:cart" },
+          { label: "📢 Affiliates", action: "home:affiliates" },
+        ],
+        [
+          { label: "👥 Community", action: "home:community" },
+          { label: "🆘 Support", action: "home:support" },
+        ],
+        [{ label: "🌐 Language", action: "home:soon:idioma" }],
+      ],
+    },
+  },
   community: {
     es: {
       text: "🌐 <b>Información y enlaces oficiales</b>\n\n🖥 Mi Página Web:  <a href=\"https://noropayments.shop/\">CLICK AQUI</a> ⬅️\n⭐️ Canal de promos:  <a href=\"https://t.me/promos_noro\">CLICK AQUI</a> ⬅️\n🔎 Referencias de ventas: <a href=\"https://t.me/Nororeferencias\">CLICK AQUI</a> ⬅️\n🛡 Grupo Privado: <a href=\"https://t.me/+3qNiiq16iXM2YjEx\">CLICK AQUI</a> ⬅️\n🆓 Grupo Ventas Free: <a href=\"https://t.me/VentasNoropayments\">CLICK AQUI</a> ⬅️\n⚙️ Bins Gratis: <a href=\"https://t.me/BinsGratis_NoroPayments\">CLICK AQUI</a> ⬅️\n\n✅ Ofertas exclusivas\n✅ Información actualizada\n✅ Contenido directo y sin vueltas\n\n💬 Si tienes preguntas, escríbenos por soporte y te ayudamos con gusto. 🤝\n\nYouTube:   <a href=\"https://www.youtube.com/@Noropayments\">CLICK AQUI</a>\nTikTok:    <a href=\"https://www.tiktok.com/@noro_payments1\">CLICK AQUI</a>\nWhatsApp:  <a href=\"https://api.whatsapp.com/send/?phone=573009545964&text=Hola+vengo+de+Telegram&type=phone_number&app_absent=0\">CLICK AQUI</a>\nTelegram:  <a href=\"https://t.me/NoroPayments\">CLICK AQUI</a>\nInstagram: <a href=\"https://www.instagram.com/noropayments\">CLICK AQUI</a>\n(Twitter) X: <a href=\"https://x.com/NoroPayments\">CLICK AQUI</a>\n\n🔥 ¡Síguenos y no te pierdas nada! 🔥",
