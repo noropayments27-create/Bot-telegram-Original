@@ -48,6 +48,11 @@ const { consumeStockForOrder, releaseStockForOrder } = require("../services/stoc
 const { deliverOrderToTelegram } = require("../services/delivery");
 const { getAffiliateLevel } = require("../services/affiliateLevels");
 const { getAdminLayout, setAdminLayout } = require("../services/adminLayouts");
+const {
+  ensureFreeOrderSchema,
+  isFreeOrderRow,
+  formatFreeOrderLabel,
+} = require("../services/freeOrders");
 const bcrypt = require("bcryptjs");
 
 let payoutReceiptSchemaReady = false;
@@ -606,6 +611,19 @@ function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const pageSize = Math.min(Math.max(parseInt(query.page_size, 10) || 20, 1), 100);
   return { page, pageSize, offset: (page - 1) * pageSize };
+}
+
+function formatOrderNumberForAdmin(order) {
+  if (!order || typeof order !== "object") {
+    return "-";
+  }
+  if (order.free_order_number) {
+    return formatFreeOrderLabel(order.free_order_number) || "-";
+  }
+  if (!order.order_number) {
+    return "-";
+  }
+  return String(order.order_number).padStart(5, "0");
 }
 
 function parseOrderLookupRef(rawValue) {
@@ -2188,6 +2206,7 @@ router.post("/stock/holds/:id/release", async (req, res, next) => {
   }
 
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -2763,19 +2782,28 @@ router.get("/orders", async (req, res, next) => {
   const status = req.query.status;
   const { page, pageSize, offset } = parsePagination(req.query);
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
 
   const filters = [];
   const values = [];
 
-  if (status) {
+  if (status === "FREE") {
+    filters.push(
+      "(o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
+    );
+  } else if (status) {
     values.push(status);
     filters.push(`o.status = $${values.length}`);
     if (status !== "EXPIRED") {
-      filters.push("op.id IS NOT NULL");
+      filters.push(
+        "(op.id IS NOT NULL OR o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
+      );
     }
   } else {
     filters.push(`o.status != 'EXPIRED'`);
-    filters.push("op.id IS NOT NULL");
+    filters.push(
+      "(op.id IS NOT NULL OR o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
+    );
   }
 
   const whereClause = filters.length ? `WHERE ${filters.join(" AND ")}` : "";
@@ -2783,6 +2811,16 @@ router.get("/orders", async (req, res, next) => {
     status === "EXPIRED" ? "ORDER BY o.created_at ASC" : "ORDER BY o.created_at DESC";
 
   try {
+    await pool.query(
+      `UPDATE orders
+       SET free_order_number = COALESCE(
+         free_order_number,
+         nextval('orders_free_order_number_seq')
+       )
+       WHERE free_order_number IS NULL
+         AND COALESCE(unit_price_at_purchase, 0) <= 0`
+    );
+
     const countRes = await pool.query(
       `SELECT COUNT(*)::int AS total
        FROM orders o
@@ -2795,9 +2833,15 @@ router.get("/orders", async (req, res, next) => {
     const listRes = await pool.query(
       `SELECT o.id, o.status, o.created_at,
               o.order_number,
+              o.free_order_number,
+              o.unit_price_at_purchase,
               u.telegram_id, u.telegram_username,
               p.id AS product_id, p.code AS product_code, p.name AS product_name,
-              (op.id IS NOT NULL) AS has_payment_proof
+              (op.id IS NOT NULL) AS has_payment_proof,
+              (
+                o.free_order_number IS NOT NULL
+                OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+              ) AS is_free_order
        FROM orders o
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
@@ -2822,19 +2866,34 @@ router.get("/orders", async (req, res, next) => {
 
 router.get("/orders/status-counts", async (req, res, next) => {
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
   try {
     const countsRes = await pool.query(
       `SELECT o.status, COUNT(*)::int AS count
        FROM orders o
        LEFT JOIN order_payments op ON op.order_id = o.id
        WHERE o.status = 'EXPIRED'
-          OR (o.status != 'EXPIRED' AND op.id IS NOT NULL)
+          OR (
+            o.status != 'EXPIRED'
+            AND (
+              op.id IS NOT NULL
+              OR o.free_order_number IS NOT NULL
+              OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+            )
+          )
        GROUP BY o.status`
+    );
+    const freeCountRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM orders o
+       WHERE o.free_order_number IS NOT NULL
+          OR COALESCE(o.unit_price_at_purchase, 0) <= 0`
     );
     const counts = {};
     for (const row of countsRes.rows) {
       counts[row.status] = row.count || 0;
     }
+    counts.FREE = Number(freeCountRes.rows[0]?.count || 0);
     return res.json({ counts });
   } catch (error) {
     return next(error);
@@ -2955,6 +3014,7 @@ router.get("/orders/:id", async (req, res, next) => {
     return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
   }
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
 
   try {
     const orderRes = await pool.query(
@@ -2987,7 +3047,28 @@ router.get("/orders/:id", async (req, res, next) => {
     if (orderRes.rowCount === 0) {
       return sendOrderNotFound(res, pool, orderLookupNumber);
     }
-    const order = orderRes.rows[0];
+    let order = orderRes.rows[0];
+    if (
+      !order.free_order_number
+      && Number(order.unit_price_at_purchase || 0) <= 0
+    ) {
+      const assignFreeNumberRes = await pool.query(
+        `UPDATE orders
+         SET free_order_number = COALESCE(
+           free_order_number,
+           nextval('orders_free_order_number_seq')
+         )
+         WHERE id = $1
+         RETURNING *`,
+        [order.id]
+      );
+      if (assignFreeNumberRes.rowCount > 0) {
+        order = {
+          ...order,
+          ...assignFreeNumberRes.rows[0],
+        };
+      }
+    }
     const orderId = order.id;
 
     const paymentRes = await pool.query(
@@ -3090,10 +3171,14 @@ router.get("/orders/:id", async (req, res, next) => {
       localTotal
     );
 
+    const orderIsFree = isFreeOrderRow(order);
     return res.json({
       order: {
         id: order.id,
         order_number: order.order_number,
+        free_order_number: order.free_order_number || null,
+        free_order_label: formatFreeOrderLabel(order.free_order_number),
+        is_free_order: orderIsFree,
         status: order.status,
         unit_price_at_purchase: order.unit_price_at_purchase,
         created_at: order.created_at,
@@ -3536,14 +3621,24 @@ router.get("/orders/:id/receipt/download", async (req, res, next) => {
 
 router.get("/summary", async (req, res, next) => {
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
 
   try {
     const newOrdersRes = await pool.query(
       `SELECT COUNT(*)::int AS count
        FROM orders o
-       JOIN order_payments op ON op.order_id = o.id
+       LEFT JOIN order_payments op ON op.order_id = o.id
        WHERE o.status = 'WAITING_PAYMENT'
-         AND op.review_status = 'PENDING'`
+         AND (
+           (op.id IS NOT NULL AND op.review_status = 'PENDING')
+           OR (
+             op.id IS NULL
+             AND (
+               o.free_order_number IS NOT NULL
+               OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+             )
+           )
+         )`
     );
 
     const customersRes = await pool.query(
@@ -3632,7 +3727,8 @@ router.post("/stats/reset", async (req, res, next) => {
        SET status = 'CANCELLED',
            paid_at = NULL,
            delivered_at = NULL,
-           order_number = NULL`
+           order_number = NULL,
+           free_order_number = NULL`
     );
 
     await client.query(
@@ -3665,6 +3761,7 @@ router.post("/stats/reset", async (req, res, next) => {
     await client.query("DELETE FROM tickets");
     await client.query("DELETE FROM broadcasts");
     await client.query("SELECT setval('orders_order_number_seq', 1, false)");
+    await client.query("SELECT setval('orders_free_order_number_seq', 1, false)");
 
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, meta)
@@ -3689,6 +3786,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
   }
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
   let affiliateLevelBefore = null;
   let commissionInserted = false;
@@ -3734,6 +3832,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
 
     const order = orderRes.rows[0];
     const orderId = order.id;
+    const isFreeOrder = isFreeOrderRow(order);
 
     if (order.status !== "WAITING_PAYMENT") {
       await client.query("ROLLBACK");
@@ -3770,7 +3869,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       [orderId]
     );
 
-    if (paymentRes.rowCount === 0) {
+    if (paymentRes.rowCount === 0 && !isFreeOrder) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_PAYMENT_PROOF" });
     }
@@ -3795,18 +3894,23 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       `UPDATE orders
        SET status = 'PAID',
            paid_at = now(),
-           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
+           order_number = CASE
+             WHEN $2::boolean THEN order_number
+             ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
+           END
        WHERE id = $1
        RETURNING *`,
-      [orderId]
+      [orderId, isFreeOrder]
     );
 
-    await client.query(
-      `UPDATE order_payments
-       SET review_status = 'APPROVED', reviewed_by_admin_at = now()
-       WHERE order_id = $1`,
-      [orderId]
-    );
+    if (paymentRes.rowCount > 0) {
+      await client.query(
+        `UPDATE order_payments
+         SET review_status = 'APPROVED', reviewed_by_admin_at = now()
+         WHERE order_id = $1`,
+        [orderId]
+      );
+    }
 
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
@@ -3930,9 +4034,30 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     }
 
     try {
+      const freeApprovedMessage =
+        userLocale === "en"
+          ? (
+            "🎁 <b>Thank you for trusting us</b>\n\n" +
+            "✅ Your free order was approved.\n" +
+            "📦 You will receive your content shortly.\n\n" +
+            "💬 If you liked the experience,\n" +
+            "please recommend us to your friends.\n\n" +
+            "🙏 Your support helps us keep growing."
+          )
+          : (
+            "🎁 <b>¡Gracias por confiar en nosotros!</b>\n\n" +
+            "✅ Tu orden gratis fue aprobada.\n" +
+            "📦 En breve recibirás tu contenido.\n\n" +
+            "💬 Si te gustó la experiencia,\n" +
+            "recomiéndanos con tus amigos.\n\n" +
+            "🙏 Tu apoyo nos ayuda a seguir creciendo."
+          );
       await sendMessage(
         telegramId,
-        MESSAGES[userLocale]?.payment_received || MESSAGES.es.payment_received
+        isFreeOrder
+          ? freeApprovedMessage
+          : (MESSAGES[userLocale]?.payment_received || MESSAGES.es.payment_received),
+        { parse_mode: "HTML" }
       );
     } catch (err) {
       console.error("Telegram congratulations failed", err);
@@ -3960,9 +4085,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
             if (commissionRes.rowCount > 0) {
               const commissionAmount = Number(commissionRes.rows[0].amount || 0);
               if (commissionAmount > 0) {
-                const orderNumberText = updatedOrderRes.rows[0]?.order_number
-                  ? String(updatedOrderRes.rows[0].order_number).padStart(5, "0")
-                  : "-";
+                const orderNumberText = formatOrderNumberForAdmin(updatedOrderRes.rows[0]);
                 const commissionMessage =
                   "🎉 ¡Nueva comisión generada!\n\n" +
                   "Un cliente realizó una compra usando tu enlace de afiliado y ha sido aprobada ✅\n\n" +
@@ -4021,161 +4144,164 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       }
     }
 
-    try {
-      let items = [];
-      let subtotal = Number(order.unit_price_at_purchase || 0);
-      let commissionAmount = 0;
-      let referredBy = "N/A";
+    if (!isFreeOrder) {
       try {
-        const itemsRes = await pool.query(
-          `SELECT
-             p.name,
-             oi.qty,
-             oi.unit_price_usd,
-             oi.line_total_usd
-           FROM order_items oi
-           JOIN products p ON p.id = oi.product_id
-           WHERE oi.order_id = $1
-           ORDER BY oi.created_at ASC`,
-          [orderId]
-        );
-        if (itemsRes.rowCount > 0) {
-          subtotal = 0;
-          items = itemsRes.rows.map((row) => {
-            const itemName = row.qty > 1 ? `${row.name} x${row.qty}` : row.name;
-            const lineTotal =
-              row.line_total_usd != null
-                ? Number(row.line_total_usd)
-                : Number(row.unit_price_usd || 0) * Number(row.qty || 0);
-            subtotal += Number.isFinite(lineTotal) ? lineTotal : 0;
-            return {
-              name: itemName,
-              price: row.line_total_usd,
-            };
-          });
-          subtotal = Number(subtotal.toFixed(2));
-        }
-      } catch (err) {
-        console.error("Receipt items query failed", err);
-      }
-
-      if (items.length === 0) {
-        items = [{ name: order.product_name, price: order.product_price }];
-        subtotal = Number(order.unit_price_at_purchase || order.product_price || 0);
-      }
-
-      try {
-        const commissionRes = await pool.query(
-          `SELECT c.amount, u.telegram_username, u.telegram_id
-           FROM commissions c
-           JOIN affiliates a ON a.id = c.affiliate_id
-           JOIN users u ON u.id = a.user_id
-           WHERE c.order_id = $1`,
-          [orderId]
-        );
-        if (commissionRes.rowCount > 0) {
-          const row = commissionRes.rows[0];
-          commissionAmount = Number(row.amount || 0);
-          const adminIds = parseAdminTelegramIds();
-          const adminId = adminIds.length > 0 ? adminIds[0] : null;
-          const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
-          const isPlaceholderAffiliate =
-            row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
-          if (isPlaceholderAffiliate) {
-            referredBy = adminUsername ? `@${adminUsername}` : adminId ? String(adminId) : "N/A";
-          } else {
-            referredBy = row.telegram_username
-              ? `@${row.telegram_username}`
-              : row.telegram_id
-              ? String(row.telegram_id)
-              : "N/A";
-          }
-        }
-      } catch (err) {
-        console.error("Receipt commission query failed", err);
-      }
-
-      const orderNumberText = order.order_number
-        ? String(order.order_number).padStart(5, "0")
-        : "-";
-
-      // Calculate local amount for receipt
-      let localTotal = null;
-      try {
-        const localData = await calculateLocalAmount(subtotal, order.payment_method);
-        if (localData) {
-          localTotal = {
-            currency: localData.currency,
-            amount: localData.amount,
-          };
-        }
-      } catch (err) {
-        console.error("Failed to calculate local total", err);
-      }
-      const totalsWithMarkup = await resolveTotalsWithMarkup(
-        pool,
-        subtotal,
-        order.payment_method,
-        localTotal
-      );
-
-      receipt = buildReceiptMessage(
-        order,
-        paymentRes.rows[0],
-        userLocale,
-        totalsWithMarkup.subtotalUsd,
-        totalsWithMarkup.totalUsd,
-        totalsWithMarkup.localTotal,
-        totalsWithMarkup.markupPercent,
-        commissionAmount,
-        referredBy
-      );
-
-      const receiptPng = await renderReceiptPng({
-        orderId: order.id,
-        orderNumber: orderNumberText,
-        telegramId,
-        username: order.telegram_username,
-        dateTime: formatBogotaDate(order.paid_at || new Date()),
-        items,
-        subtotal: totalsWithMarkup.subtotalUsd,
-        commission: commissionAmount,
-        total: totalsWithMarkup.totalUsd,
-        referredBy,
-        localTotal: totalsWithMarkup.localTotal,
-        locale: userLocale,
-      });
-
-      try {
+        let receipt = "";
+        let items = [];
+        let subtotal = Number(order.unit_price_at_purchase || 0);
+        let commissionAmount = 0;
+        let referredBy = "N/A";
         try {
-          await sendPhoto(telegramId, { path: receiptPng.pngPath });
-        } catch (photoError) {
-          console.error("Telegram receipt photo failed", photoError);
-          await sendDocument(telegramId, { path: receiptPng.pngPath });
+          const itemsRes = await pool.query(
+            `SELECT
+               p.name,
+               oi.qty,
+               oi.unit_price_usd,
+               oi.line_total_usd
+             FROM order_items oi
+             JOIN products p ON p.id = oi.product_id
+             WHERE oi.order_id = $1
+             ORDER BY oi.created_at ASC`,
+            [orderId]
+          );
+          if (itemsRes.rowCount > 0) {
+            subtotal = 0;
+            items = itemsRes.rows.map((row) => {
+              const itemName = row.qty > 1 ? `${row.name} x${row.qty}` : row.name;
+              const lineTotal =
+                row.line_total_usd != null
+                  ? Number(row.line_total_usd)
+                  : Number(row.unit_price_usd || 0) * Number(row.qty || 0);
+              subtotal += Number.isFinite(lineTotal) ? lineTotal : 0;
+              return {
+                name: itemName,
+                price: row.line_total_usd,
+              };
+            });
+            subtotal = Number(subtotal.toFixed(2));
+          }
+        } catch (err) {
+          console.error("Receipt items query failed", err);
         }
-      } finally {
-        await receiptPng.cleanup();
-      }
-    } catch (err) {
-      console.error("Telegram receipt failed", err);
-      if (err && err.message === "playwright_not_installed") {
-        console.error("Playwright browsers missing. Run: npx playwright install");
-      }
-      try {
-        await sendMessage(telegramId, receipt);
-      } catch (fallbackError) {
-        console.error("Telegram receipt fallback failed", fallbackError);
-      }
-    }
 
-    try {
-      const notice =
-        userLocale === "en"
-          ? "⌚️ You will receive your content shortly."
-          : "⌚️ En breve momento estarás recibiendo tu contenido.";
-      await sendMessage(telegramId, notice);
-    } catch (err) {
-      console.error("Telegram content notice failed", err);
+        if (items.length === 0) {
+          items = [{ name: order.product_name, price: order.product_price }];
+          subtotal = Number(order.unit_price_at_purchase || order.product_price || 0);
+        }
+
+        try {
+          const commissionRes = await pool.query(
+            `SELECT c.amount, u.telegram_username, u.telegram_id
+             FROM commissions c
+             JOIN affiliates a ON a.id = c.affiliate_id
+             JOIN users u ON u.id = a.user_id
+             WHERE c.order_id = $1`,
+            [orderId]
+          );
+          if (commissionRes.rowCount > 0) {
+            const row = commissionRes.rows[0];
+            commissionAmount = Number(row.amount || 0);
+            const adminIds = parseAdminTelegramIds();
+            const adminId = adminIds.length > 0 ? adminIds[0] : null;
+            const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || null;
+            const isPlaceholderAffiliate =
+              row.telegram_id === 90000000000 || row.telegram_username === "admin_affiliate";
+            if (isPlaceholderAffiliate) {
+              referredBy = adminUsername ? `@${adminUsername}` : adminId ? String(adminId) : "N/A";
+            } else {
+              referredBy = row.telegram_username
+                ? `@${row.telegram_username}`
+                : row.telegram_id
+                ? String(row.telegram_id)
+                : "N/A";
+            }
+          }
+        } catch (err) {
+          console.error("Receipt commission query failed", err);
+        }
+
+        const orderNumberText = order.order_number
+          ? String(order.order_number).padStart(5, "0")
+          : "-";
+
+        // Calculate local amount for receipt
+        let localTotal = null;
+        try {
+          const localData = await calculateLocalAmount(subtotal, order.payment_method);
+          if (localData) {
+            localTotal = {
+              currency: localData.currency,
+              amount: localData.amount,
+            };
+          }
+        } catch (err) {
+          console.error("Failed to calculate local total", err);
+        }
+        const totalsWithMarkup = await resolveTotalsWithMarkup(
+          pool,
+          subtotal,
+          order.payment_method,
+          localTotal
+        );
+
+        receipt = buildReceiptMessage(
+          order,
+          paymentRes.rows[0],
+          userLocale,
+          totalsWithMarkup.subtotalUsd,
+          totalsWithMarkup.totalUsd,
+          totalsWithMarkup.localTotal,
+          totalsWithMarkup.markupPercent,
+          commissionAmount,
+          referredBy
+        );
+
+        const receiptPng = await renderReceiptPng({
+          orderId: order.id,
+          orderNumber: orderNumberText,
+          telegramId,
+          username: order.telegram_username,
+          dateTime: formatBogotaDate(order.paid_at || new Date()),
+          items,
+          subtotal: totalsWithMarkup.subtotalUsd,
+          commission: commissionAmount,
+          total: totalsWithMarkup.totalUsd,
+          referredBy,
+          localTotal: totalsWithMarkup.localTotal,
+          locale: userLocale,
+        });
+
+        try {
+          try {
+            await sendPhoto(telegramId, { path: receiptPng.pngPath });
+          } catch (photoError) {
+            console.error("Telegram receipt photo failed", photoError);
+            await sendDocument(telegramId, { path: receiptPng.pngPath });
+          }
+        } finally {
+          await receiptPng.cleanup();
+        }
+      } catch (err) {
+        console.error("Telegram receipt failed", err);
+        if (err && err.message === "playwright_not_installed") {
+          console.error("Playwright browsers missing. Run: npx playwright install");
+        }
+        try {
+          await sendMessage(telegramId, receipt);
+        } catch (fallbackError) {
+          console.error("Telegram receipt fallback failed", fallbackError);
+        }
+      }
+
+      try {
+        const notice =
+          userLocale === "en"
+            ? "⌚️ You will receive your content shortly."
+            : "⌚️ En breve momento estarás recibiendo tu contenido.";
+        await sendMessage(telegramId, notice);
+      } catch (err) {
+        console.error("Telegram content notice failed", err);
+      }
     }
 
     console.log("[order-delivery] scheduled", {
@@ -4456,6 +4582,7 @@ router.post("/orders/:id/reject", async (req, res, next) => {
   }
   const { mode, reason } = req.body || {};
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
 
   if (!mode || (mode !== "retry" && mode !== "cancel")) {
@@ -4493,13 +4620,15 @@ router.post("/orders/:id/reject", async (req, res, next) => {
       return sendOrderNotFound(res, pool, orderLookupNumber);
     }
 
-    const orderId = orderRes.rows[0].id;
+    const orderRow = orderRes.rows[0];
+    const isFreeOrder = isFreeOrderRow(orderRow);
+    const orderId = orderRow.id;
     const paymentRes = await client.query(
       "SELECT * FROM order_payments WHERE order_id = $1",
       [orderId]
     );
 
-    if (paymentRes.rowCount === 0) {
+    if (paymentRes.rowCount === 0 && !isFreeOrder) {
       await client.query("ROLLBACK");
       return res.status(400).json({ error: "NO_PAYMENT_PROOF" });
     }
@@ -4513,22 +4642,27 @@ router.post("/orders/:id/reject", async (req, res, next) => {
            cancel_source = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN 'ADMIN' ELSE cancel_source END,
            order_number = CASE
              WHEN $2::order_status = 'CANCELLED'::order_status
-             THEN COALESCE(order_number, nextval('orders_order_number_seq'))
+             THEN CASE
+               WHEN $3::boolean THEN order_number
+               ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
+             END
              ELSE order_number
            END
        WHERE id = $1
        RETURNING *`,
-      [orderId, nextStatus]
+      [orderId, nextStatus, isFreeOrder]
     );
 
     await releaseStockForOrder(client, orderId);
 
-    await client.query(
-      `UPDATE order_payments
-       SET review_status = 'REJECTED', reviewed_by_admin_at = now()
-       WHERE order_id = $1`,
-      [orderId]
-    );
+    if (paymentRes.rowCount > 0) {
+      await client.query(
+        `UPDATE order_payments
+         SET review_status = 'REJECTED', reviewed_by_admin_at = now()
+         WHERE order_id = $1`,
+        [orderId]
+      );
+    }
 
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
@@ -4545,12 +4679,19 @@ router.post("/orders/:id/reject", async (req, res, next) => {
 
     await updateAdminOrderNotifications(pool, orderId);
 
-    const telegramId = orderRes.rows[0].telegram_id;
+    const telegramId = orderRow.telegram_id;
     const reasonText = reason ? `\nMotivo: ${reason}` : "";
-    const message =
-      mode === "retry"
-        ? `Tu pago fue rechazado. Envia una nueva Captura.${reasonText}`
-        : `Tu orden fue cancelada. Contacta soporte.${reasonText}`;
+    const message = isFreeOrder
+      ? (
+        mode === "retry"
+          ? `Tu orden gratis fue enviada nuevamente a revisión.${reasonText}`
+          : `Tu orden gratis fue rechazada. Contacta soporte.${reasonText}`
+      )
+      : (
+        mode === "retry"
+          ? `Tu pago fue rechazado. Envia una nueva Captura.${reasonText}`
+          : `Tu orden fue cancelada. Contacta soporte.${reasonText}`
+      );
 
     try {
       await sendMessage(telegramId, message);

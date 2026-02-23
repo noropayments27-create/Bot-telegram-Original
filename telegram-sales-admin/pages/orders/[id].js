@@ -22,6 +22,76 @@ function cleanProductName(name) {
   return String(name).replace(/^shop\s*\d+\s*-\s*/i, "").trim();
 }
 
+const STATUS_LABELS = {
+  CREATED: "CREADA",
+  WAITING_PAYMENT: "PENDIENTE",
+  PAID: "PAGADA",
+  DELIVERED: "ENTREGADA",
+  REFUNDED: "REEMBOLSADA",
+  CANCELLED: "CANCELADA",
+  EXPIRED: "EXPIRADA",
+  APPROVED: "APROBADO",
+  REJECTED: "RECHAZADO",
+  PENDING: "PENDIENTE",
+  SUBMITTED: "ENVIADO",
+  EARNED: "GANADA",
+  PAID_OUT: "PAGADA",
+};
+
+function formatOrderStatus(status) {
+  if (!status) {
+    return "-";
+  }
+  return STATUS_LABELS[status] || status;
+}
+
+function formatOrderNumberLabel(order) {
+  if (!order) {
+    return "-";
+  }
+  const freeOrderNumber = Number(order.free_order_number || 0);
+  if (Number.isFinite(freeOrderNumber) && freeOrderNumber > 0) {
+    return `Orden Gratis: ${String(freeOrderNumber).padStart(5, "0")}`;
+  }
+  const subtotal = Number(order.unit_price_at_purchase || null);
+  if (Number.isFinite(subtotal) && subtotal <= 0) {
+    return "Orden Gratis";
+  }
+  if (order.order_number) {
+    return String(order.order_number).padStart(5, "0");
+  }
+  return "-";
+}
+
+function isFreeOrderData(order, detail = null) {
+  if (!order) {
+    return false;
+  }
+  const freeOrderNumber = Number(order.free_order_number || 0);
+  if (Number.isFinite(freeOrderNumber) && freeOrderNumber > 0) {
+    return true;
+  }
+  if (order.is_free_order === true) {
+    return true;
+  }
+  const subtotal = Number(
+    detail?.totals?.subtotal_usd
+    ?? order.unit_price_at_purchase
+    ?? null
+  );
+  return Number.isFinite(subtotal) && subtotal <= 0;
+}
+
+function formatOrderStatusForOrder(order, detail = null) {
+  if (!order) {
+    return "-";
+  }
+  if (isFreeOrderData(order, detail)) {
+    return "GRATIS";
+  }
+  return formatOrderStatus(order.status);
+}
+
 export default function OrderDetail() {
   const router = useRouter();
   const { id } = router.query;
@@ -111,7 +181,8 @@ export default function OrderDetail() {
       } catch (err) {
         payload = null;
       }
-      let nextMessage = "Pago aprobado.";
+      const isFreeOrder = isFreeOrderData(detail?.order, detail);
+      let nextMessage = isFreeOrder ? "Orden gratis aprobada." : "Pago aprobado.";
       if (payload?.status === "delivery_retry") {
         nextMessage = payload.delivered
           ? "Entrega reenviada."
@@ -132,7 +203,8 @@ export default function OrderDetail() {
         method: "POST",
         body: JSON.stringify({ mode, reason: reason || undefined }),
       });
-      setMessage("Pago rechazado.");
+      const isFreeOrder = isFreeOrderData(detail?.order, detail);
+      setMessage(isFreeOrder ? "Orden gratis rechazada." : "Pago rechazado.");
       await loadDetail();
     } catch (err) {
       setError("No se pudo rechazar el pago.");
@@ -224,10 +296,10 @@ export default function OrderDetail() {
     return map[key] || key;
   };
   const hasProof = Boolean(payment && payment.screenshot_file_id);
+  const isFreeOrder = isFreeOrderData(order, detail);
+  const canModerate = hasProof || isFreeOrder;
   const isAlreadyProcessed = order.status === "PAID" || order.status === "DELIVERED";
-  const orderNumberText = order.order_number
-    ? String(order.order_number).padStart(5, "0")
-    : "-";
+  const orderNumberText = formatOrderNumberLabel(order);
   const items = detail.items || [];
 
   return (
@@ -239,7 +311,7 @@ export default function OrderDetail() {
 
         <div className="detail-section">
           <h3 className="icon-inline"><IconOrders className="panel-icon" /> Detalle</h3>
-          <p>Estado: {order.status}</p>
+          <p>Estado: {formatOrderStatusForOrder(order, detail)}</p>
           <p>Subtotal (USD): {formatUsdValue(subtotalUsd)}</p>
           {markupPercent !== undefined && markupPercent !== null && (
             <p>Markup aplicado: {markupPercent}%</p>
@@ -293,7 +365,7 @@ export default function OrderDetail() {
             <p>Enviado: {new Date(payment.submitted_at).toLocaleString()}</p>
           </>
         ) : (
-          <p>No hay pago registrado.</p>
+          <p>{isFreeOrder ? "No aplica. Orden gratis." : "No hay pago registrado."}</p>
         )}
         </div>
 
@@ -312,7 +384,9 @@ export default function OrderDetail() {
 
         <div className="detail-section">
         <h3 className="icon-inline"><IconOrders className="panel-icon" /> Captura</h3>
-        {hasProof && proofUrl ? (
+        {isFreeOrder ? (
+          <p>Orden gratis sin captura de pago.</p>
+        ) : hasProof && proofUrl ? (
           <>
             <img
               src={proofUrl}
@@ -337,34 +411,56 @@ export default function OrderDetail() {
             <p>Entrega realizada</p>
           </div>
         )}
-        <div className="form">
-          <label>
-            Motivo (opcional)
-            <input
-              type="text"
-              value={reason}
-              onChange={(event) => setReason(event.target.value)}
-              placeholder="Motivo"
-            />
-          </label>
-        </div>
+        {!isFreeOrder && (
+          <div className="form">
+            <label>
+              Motivo (opcional)
+              <input
+                type="text"
+                value={reason}
+                onChange={(event) => setReason(event.target.value)}
+                placeholder="Motivo"
+              />
+            </label>
+          </div>
+        )}
         <div className="actions">
           <button
             type="button"
             onClick={handleApprove}
-            disabled={!hasProof || isAlreadyProcessed || isSubmittingApprove}
+            disabled={!canModerate || isAlreadyProcessed || isSubmittingApprove}
           >
             {isSubmittingApprove && (
               <span className="button-spinner" aria-hidden="true" />
             )}
-            {isSubmittingApprove ? "Aprobando..." : "Aprobar pago"}
+            {isSubmittingApprove ? "Aprobando..." : "Aprobar"}
           </button>
-          <button type="button" onClick={() => handleReject("retry")} disabled={!hasProof}>
-            Rechazar (reintentar)
-          </button>
-          <button type="button" onClick={() => handleReject("cancel")} disabled={!hasProof}>
-            Rechazar (cancelar)
-          </button>
+          {isFreeOrder ? (
+            <button
+              type="button"
+              onClick={() => handleReject("cancel")}
+              disabled={!canModerate || isAlreadyProcessed}
+            >
+              Rechazar
+            </button>
+          ) : (
+            <>
+              <button
+                type="button"
+                onClick={() => handleReject("retry")}
+                disabled={!canModerate || isAlreadyProcessed}
+              >
+                Rechazar (reintentar)
+              </button>
+              <button
+                type="button"
+                onClick={() => handleReject("cancel")}
+                disabled={!canModerate || isAlreadyProcessed}
+              >
+                Rechazar (cancelar)
+              </button>
+            </>
+          )}
         </div>
         </div>
       </section>

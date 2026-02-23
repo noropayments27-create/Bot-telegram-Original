@@ -1,5 +1,9 @@
 const { getPool } = require("../../db");
 const { ensureProductCategorySchema } = require("../../services/productSchema");
+const {
+  ensureFreeOrderSchema,
+  formatFreeOrderLabel,
+} = require("../../services/freeOrders");
 
 function normalizeTelegramId(value) {
   if (value === undefined || value === null) {
@@ -23,6 +27,23 @@ function isAdminTelegramId(telegramId) {
   }
   const admins = parseAdminTelegramIds();
   return admins.includes(Number(telegramId));
+}
+
+function isUniquePurchaseActive(item) {
+  if (!item || String(item.stock_mode || "").toUpperCase() !== "SIMPLE") {
+    return false;
+  }
+  if (!item.unique_purchase) {
+    return false;
+  }
+  if (item.stock_qty === null || item.stock_qty === undefined) {
+    return true;
+  }
+  const stockQty = Number(item.stock_qty);
+  if (!Number.isFinite(stockQty)) {
+    return true;
+  }
+  return stockQty <= 1;
 }
 
 async function ensureUser(client, telegramId, username) {
@@ -182,6 +203,7 @@ async function addToCart(req, res, next) {
 
   const pool = getPool();
   await ensureProductCategorySchema(pool);
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -244,9 +266,7 @@ async function addToCart(req, res, next) {
       : 0;
     const nextQty = currentQty + qty;
 
-    const isFreeProduct = Number(product.price || 0) <= 0;
-    const enforceUnique =
-      product.stock_mode === "SIMPLE" && (product.unique_purchase || isFreeProduct);
+    const enforceUnique = isUniquePurchaseActive(product);
     if (enforceUnique && !isAdminTelegramId(telegramId)) {
       if (qty > 1) {
         await client.query("ROLLBACK");
@@ -287,7 +307,7 @@ async function addToCart(req, res, next) {
     let isUnlimited = false;
     if (product.stock_mode === "SIMPLE") {
       if (
-        product.unique_purchase
+        enforceUnique
         || product.stock_qty === null
         || product.stock_qty === undefined
       ) {
@@ -474,10 +494,7 @@ async function checkoutCart(req, res, next) {
     const isAdmin = isAdminTelegramId(telegramId);
 
     if (!isAdmin) {
-      const uniqueItems = itemsRes.rows.filter((item) => {
-      const isFreeItem = Number(item.price || 0) <= 0;
-      return item.stock_mode === "SIMPLE" && (item.unique_purchase || isFreeItem);
-      });
+      const uniqueItems = itemsRes.rows.filter((item) => isUniquePurchaseActive(item));
       for (const item of uniqueItems) {
         if (Number(item.qty) > 1) {
           await client.query("ROLLBACK");
@@ -550,7 +567,7 @@ async function checkoutCart(req, res, next) {
         });
       }
       if (item.stock_mode === "SIMPLE") {
-        if (item.unique_purchase) {
+        if (isUniquePurchaseActive(item)) {
           continue;
         }
         if (item.stock_qty !== null && item.stock_qty !== undefined) {
@@ -597,6 +614,7 @@ async function checkoutCart(req, res, next) {
       return sum + unitPrice * Number(item.qty);
     }, 0);
     const totalRounded = Number(total.toFixed(2));
+    const isFreeOrder = totalRounded <= 0;
 
     const firstItem = itemsRes.rows[0];
 
@@ -606,6 +624,9 @@ async function checkoutCart(req, res, next) {
         || 900,
       1
     );
+    const holdExpirySeconds = isFreeOrder
+      ? Math.max(expirySeconds, 365 * 24 * 60 * 60)
+      : expirySeconds;
 
     await client.query(
       `SELECT setval(
@@ -642,6 +663,22 @@ async function checkoutCart(req, res, next) {
         totalRounded,
       ]
     );
+    let orderRow = orderRes.rows[0];
+    if (isFreeOrder) {
+      const freeOrderRes = await client.query(
+        `UPDATE orders
+         SET free_order_number = COALESCE(
+           free_order_number,
+           nextval('orders_free_order_number_seq')
+         )
+         WHERE id = $1
+         RETURNING *`,
+        [orderRow.id]
+      );
+      if (freeOrderRes.rowCount > 0) {
+        orderRow = freeOrderRes.rows[0];
+      }
+    }
 
     for (const item of itemsRes.rows) {
       const qty = Number(item.qty);
@@ -653,18 +690,18 @@ async function checkoutCart(req, res, next) {
              VALUES ($1, $2, $3, $4, $5, 'HELD', now() + ($6 * interval '1 second'))`,
             [
               item.product_id,
-              orderRes.rows[0].id,
+              orderRow.id,
               cart.id,
               Number(telegramId),
               qty,
-              expirySeconds,
+              holdExpirySeconds,
             ]
           );
           console.log("[stock/hold] created", {
-            order_id: orderRes.rows[0].id,
+            order_id: orderRow.id,
             product_id: item.product_id,
             qty,
-            expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+            expires_at: new Date(Date.now() + holdExpirySeconds * 1000).toISOString(),
           });
         }
       } else if (item.stock_mode === "UNITS") {
@@ -687,7 +724,7 @@ async function checkoutCart(req, res, next) {
           [
             item.product_id,
             qty,
-            orderRes.rows[0].id,
+            orderRow.id,
             Number(telegramId),
             username,
           ]
@@ -709,10 +746,10 @@ async function checkoutCart(req, res, next) {
           });
         }
         console.log("[stock/hold] created", {
-          order_id: orderRes.rows[0].id,
+          order_id: orderRow.id,
           product_id: item.product_id,
           qty: holdRes.rowCount,
-          expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+          expires_at: new Date(Date.now() + holdExpirySeconds * 1000).toISOString(),
         });
       }
     }
@@ -726,7 +763,7 @@ async function checkoutCart(req, res, next) {
           (order_id, product_id, qty, unit_price_usd, total_price_usd, line_total_usd, price_usd)
          VALUES ($1, $2, $3, $4, $5, $6, $7)`,
         [
-          orderRes.rows[0].id,
+          orderRow.id,
           item.product_id,
           qty,
           unitPrice,
@@ -752,8 +789,11 @@ async function checkoutCart(req, res, next) {
 
     await client.query("COMMIT");
     return res.json({
-      order_id: orderRes.rows[0].id,
+      order_id: orderRow.id,
       total_usd: totalRounded,
+      free_order: isFreeOrder,
+      free_order_number: orderRow.free_order_number || null,
+      free_order_label: formatFreeOrderLabel(orderRow.free_order_number),
     });
   } catch (error) {
     await client.query("ROLLBACK");

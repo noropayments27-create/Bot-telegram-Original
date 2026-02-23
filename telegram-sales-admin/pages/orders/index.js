@@ -42,6 +42,56 @@ function formatOrderStatus(status) {
   return STATUS_LABELS[status] || status;
 }
 
+function isFreeOrderData(order, detail = null) {
+  if (!order) {
+    return false;
+  }
+  const freeOrderNumber = Number(order.free_order_number || 0);
+  if (Number.isFinite(freeOrderNumber) && freeOrderNumber > 0) {
+    return true;
+  }
+  if (order.is_free_order === true) {
+    return true;
+  }
+  const subtotal = Number(
+    detail?.totals?.subtotal_usd
+    ?? order.unit_price_at_purchase
+    ?? order.total_usd
+    ?? null
+  );
+  return Number.isFinite(subtotal) && subtotal <= 0;
+}
+
+function formatOrderStatusForOrder(order, detail = null) {
+  if (!order) {
+    return "-";
+  }
+  if (isFreeOrderData(order, detail)) {
+    return "GRATIS";
+  }
+  return formatOrderStatus(order.status);
+}
+
+function formatOrderNumberLabel(order) {
+  if (!order) {
+    return "-";
+  }
+  const freeOrderNumber = Number(order.free_order_number || 0);
+  if (Number.isFinite(freeOrderNumber) && freeOrderNumber > 0) {
+    return `Orden Gratis: ${String(freeOrderNumber).padStart(5, "0")}`;
+  }
+  if (isFreeOrderData(order)) {
+    return "Orden Gratis";
+  }
+  if (order.status === "EXPIRED") {
+    return "-";
+  }
+  if (order.order_number) {
+    return String(order.order_number).padStart(5, "0");
+  }
+  return "-";
+}
+
 function formatLocalTotal(value, currency) {
   if (value === undefined || value === null) {
     return "";
@@ -134,6 +184,7 @@ function getOrderTone(order, payment) {
 const STATUS_OPTIONS = [
   { value: "RECENT", label: "Nuevas" },
   { value: "", label: "Todos" },
+  { value: "FREE", label: "Gratis" },
   { value: "CANCELLED", label: "Cancelado" },
   { value: "EXPIRED", label: "Expiradas" },
   { value: "DELIVERED", label: "Entregado" },
@@ -499,7 +550,8 @@ export default function OrdersPage() {
       } catch (err) {
         payload = null;
       }
-      let message = "Pago aprobado.";
+      const isFreeOrder = isFreeOrderData(detail.order, detail);
+      let message = isFreeOrder ? "Orden gratis aprobada." : "Pago aprobado.";
       if (payload?.status === "delivery_retry") {
         message = payload.delivered
           ? "Entrega reenviada."
@@ -534,9 +586,10 @@ export default function OrdersPage() {
           reason: reasons[orderId] || undefined,
         }),
       });
+      const isFreeOrder = isFreeOrderData(detail.order, detail);
       setDetailMessages((prev) => ({
         ...prev,
-        [orderId]: "Pago rechazado.",
+        [orderId]: isFreeOrder ? "Orden gratis rechazada." : "Pago rechazado.",
       }));
       await loadDetail(detail.order.id);
       await loadOrders();
@@ -705,6 +758,8 @@ export default function OrdersPage() {
               <span className="orders-count-value">
                 {status === ""
                   ? totalNonExpired
+                  : status === "FREE"
+                  ? getOrderCount("FREE")
                   : status === "CANCELLED"
                   ? getOrderCount("CANCELLED")
                   : status === "EXPIRED"
@@ -777,11 +832,7 @@ export default function OrdersPage() {
                     className={selectedOrderIds.includes(order.id) ? "orders-row-active" : ""}
                   >
                     <td>
-                      {order.status === "EXPIRED"
-                        ? "-"
-                        : order.order_number
-                        ? String(order.order_number).padStart(5, "0")
-                        : "-"}
+                      {formatOrderNumberLabel(order)}
                     </td>
                     <td>
                       <button
@@ -814,7 +865,7 @@ export default function OrdersPage() {
                             order.product_name || order.product_id
                           )}
                     </td>
-                <td>{formatOrderStatus(order.status)}</td>
+                <td>{formatOrderStatusForOrder(order)}</td>
                 <td>{new Date(order.created_at).toLocaleString()}</td>
                     <td>
                       <button
@@ -843,6 +894,9 @@ export default function OrdersPage() {
             const receiptUrl = receiptUrls[orderId];
             const reason = reasons[orderId] || "";
             const isApproving = isSubmittingApprove[orderId];
+            const isFreeOrder = isFreeOrderData(detail?.order, detail);
+            const hasPaymentProof = Boolean(detail?.payment?.screenshot_file_id);
+            const canModerate = hasPaymentProof || isFreeOrder;
             const isApproved =
               detail?.order?.status === "PAID"
               || detail?.order?.status === "DELIVERED"
@@ -856,10 +910,7 @@ export default function OrdersPage() {
                   <>
                     <div className="orders-detail-header">
                       <h2>
-                        Orden:{" "}
-                        {detail.order.order_number
-                          ? String(detail.order.order_number).padStart(5, "0")
-                          : "-"}
+                        {formatOrderNumberLabel(detail.order)}
                       </h2>
                       <div
                         className={`orders-detail-header-actions${
@@ -881,7 +932,7 @@ export default function OrdersPage() {
                         >
                           {isHeaderActionsOpen ? <ArrowRight size={16} /> : <ArrowLeft size={16} />}
                         </button>
-                        {isHeaderActionsOpen && (
+                        {isHeaderActionsOpen && !isFreeOrder && (
                           <>
                             <button
                               type="button"
@@ -915,7 +966,7 @@ export default function OrdersPage() {
                     <div className="orders-detail-grid orders-detail-grid--summary">
                       <div className="orders-detail-section orders-detail-section--summary">
                         <h3>Detalle</h3>
-                        <p>Estado: {formatOrderStatus(detail.order.status)}</p>
+                        <p>Estado: {formatOrderStatusForOrder(detail.order, detail)}</p>
                         <p>
                           Subtotal USD: $
                           {formatUsdValue(
@@ -1039,12 +1090,14 @@ export default function OrdersPage() {
                             </p>
                           </>
                         ) : (
-                          <p>No hay pago registrado.</p>
+                          <p>{isFreeOrder ? "No aplica. Orden gratis." : "No hay pago registrado."}</p>
                         )}
                       </div>
                       <div className="orders-detail-section">
                         <h3>Captura</h3>
-                        {detail.payment?.screenshot_file_id && proofUrl ? (
+                        {isFreeOrder ? (
+                          <p>Orden gratis sin captura de pago.</p>
+                        ) : detail.payment?.screenshot_file_id && proofUrl ? (
                           <div
                             className={`orders-proof${receiptUrl ? " orders-proof--side orders-proof--pair" : ""}`}
                           >
@@ -1148,27 +1201,29 @@ export default function OrdersPage() {
                       <div></div>
                     </div>
                     <div className="orders-detail-actions">
-                      <div className="form">
-                        <label>
-                          <input
-                            type="text"
-                            value={reason}
-                            onChange={(event) =>
-                              setReasons((prev) => ({
-                                ...prev,
-                                [orderId]: event.target.value,
-                              }))
-                            }
-                            placeholder="Motivo"
-                          />
-                        </label>
-                      </div>
+                      {!isFreeOrder && (
+                        <div className="form">
+                          <label>
+                            <input
+                              type="text"
+                              value={reason}
+                              onChange={(event) =>
+                                setReasons((prev) => ({
+                                  ...prev,
+                                  [orderId]: event.target.value,
+                                }))
+                              }
+                              placeholder="Motivo"
+                            />
+                          </label>
+                        </div>
+                      )}
                       <div className="actions">
                         <button
                           type="button"
                           onClick={() => handleApprove(orderId)}
                           disabled={
-                            !detail.payment?.screenshot_file_id ||
+                            !canModerate ||
                             detail.order.status === "PAID" ||
                             detail.order.status === "DELIVERED" ||
                             isApproving
@@ -1179,20 +1234,32 @@ export default function OrdersPage() {
                           )}
                           {isApproving ? "Aprobando..." : "Aprobar"}
                         </button>
-                        <button
-                          type="button"
-                          onClick={() => handleReject(orderId, "retry")}
-                          disabled={!detail.payment?.screenshot_file_id || isApproved}
-                        >
-                          Reintentar
-                        </button>
-                        <button
-                          type="button"
-                          onClick={() => handleReject(orderId, "cancel")}
-                          disabled={!detail.payment?.screenshot_file_id || isApproved}
-                        >
-                          Cancelar
-                        </button>
+                        {isFreeOrder ? (
+                          <button
+                            type="button"
+                            onClick={() => handleReject(orderId, "cancel")}
+                            disabled={!canModerate || isApproved}
+                          >
+                            Rechazar
+                          </button>
+                        ) : (
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleReject(orderId, "retry")}
+                              disabled={!canModerate || isApproved}
+                            >
+                              Reintentar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleReject(orderId, "cancel")}
+                              disabled={!canModerate || isApproved}
+                            >
+                              Cancelar
+                            </button>
+                          </>
+                        )}
                       </div>
                       {(() => {
                         const tone = getOrderTone(detail.order, detail.payment);

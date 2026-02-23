@@ -1,5 +1,6 @@
 const { getPool } = require("../db");
 const { sendMessage } = require("./telegram");
+const { ensureFreeOrderSchema } = require("./freeOrders");
 
 let timer = null;
 let running = false;
@@ -21,6 +22,7 @@ async function expireWaitingPaymentOrders() {
   const expiredOrders = [];
 
   try {
+    await ensureFreeOrderSchema(pool);
     client = await pool.connect();
     await client.query("BEGIN");
 
@@ -29,6 +31,7 @@ async function expireWaitingPaymentOrders() {
        FROM orders o
        JOIN users u ON u.id = o.user_id
        WHERE o.status = 'WAITING_PAYMENT'
+         AND o.free_order_number IS NULL
          AND o.created_at <= now() - ($1 * interval '1 second')
          AND NOT EXISTS (
            SELECT 1 FROM order_payments op WHERE op.order_id = o.id

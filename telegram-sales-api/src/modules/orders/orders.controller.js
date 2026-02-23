@@ -8,6 +8,11 @@ const { sendPhoto } = require("../../services/telegram");
 const { ensureProductCategorySchema } = require("../../services/productSchema");
 const { validatePaymentProofScreenshot } = require("../../services/paymentProofValidation");
 const {
+  ensureFreeOrderSchema,
+  isFreeOrderRow,
+  formatFreeOrderLabel,
+} = require("../../services/freeOrders");
+const {
   recordAdminOrderNotification,
   buildOrderNotificationCaption,
   buildOrderNotificationKeyboard,
@@ -110,6 +115,23 @@ async function ensureUser(client, telegramId, username) {
   return insertRes.rows[0];
 }
 
+function isUniquePurchaseActive(product) {
+  if (!product || String(product.stock_mode || "").toUpperCase() !== "SIMPLE") {
+    return false;
+  }
+  if (!product.unique_purchase) {
+    return false;
+  }
+  if (product.stock_qty === null || product.stock_qty === undefined) {
+    return true;
+  }
+  const stockQty = Number(product.stock_qty);
+  if (!Number.isFinite(stockQty)) {
+    return true;
+  }
+  return stockQty <= 1;
+}
+
 async function createOrder(req, res, next) {
   const telegramId = Number(req.body.telegram_id);
   const productId = req.body.product_id;
@@ -125,6 +147,7 @@ async function createOrder(req, res, next) {
 
   const pool = getPool();
   await ensureProductCategorySchema(pool);
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -155,8 +178,8 @@ async function createOrder(req, res, next) {
       });
     }
 
-    const isFreeProduct = Number(product.price || 0) <= 0;
-    if (product.stock_mode === "SIMPLE" && (product.unique_purchase || isFreeProduct)) {
+    const enforceUniquePurchase = isUniquePurchaseActive(product);
+    if (enforceUniquePurchase) {
       if (qty > 1) {
         await client.query("ROLLBACK");
         return res.status(409).json({
@@ -185,7 +208,7 @@ async function createOrder(req, res, next) {
     }
 
     if (product.stock_mode === "SIMPLE") {
-      if (!product.unique_purchase && product.stock_qty !== null && product.stock_qty !== undefined) {
+      if (!enforceUniquePurchase && product.stock_qty !== null && product.stock_qty !== undefined) {
         const holdsRes = await client.query(
           `SELECT COALESCE(SUM(qty), 0)::int AS held_qty
            FROM product_stock_holds
@@ -228,6 +251,7 @@ async function createOrder(req, res, next) {
 
     const unitPrice = Number(product.price);
     const total = Number((unitPrice * qty).toFixed(2));
+    const isFreeOrder = total <= 0;
 
     const expirySeconds = Math.max(
       parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
@@ -235,6 +259,9 @@ async function createOrder(req, res, next) {
         || 900,
       1
     );
+    const holdExpirySeconds = isFreeOrder
+      ? Math.max(expirySeconds, 365 * 24 * 60 * 60)
+      : expirySeconds;
 
     let affiliateId = user.referred_by_affiliate_id;
     if (affiliateId) {
@@ -263,6 +290,22 @@ async function createOrder(req, res, next) {
         unitPrice,
       ]
     );
+    let orderRow = orderRes.rows[0];
+    if (isFreeOrder) {
+      const freeOrderRes = await client.query(
+        `UPDATE orders
+         SET free_order_number = COALESCE(
+           free_order_number,
+           nextval('orders_free_order_number_seq')
+         )
+         WHERE id = $1
+         RETURNING *`,
+        [orderRow.id]
+      );
+      if (freeOrderRes.rowCount > 0) {
+        orderRow = freeOrderRes.rows[0];
+      }
+    }
 
     if (product.stock_mode === "SIMPLE") {
       if (product.stock_qty !== null && product.stock_qty !== undefined) {
@@ -277,16 +320,16 @@ async function createOrder(req, res, next) {
            ORDER BY created_at DESC
            LIMIT 1
            FOR UPDATE`,
-          [orderRes.rows[0].id, product.id]
+          [orderRow.id, product.id]
         );
         if (existingHoldRes.rowCount === 0) {
           try {
             const holdInsertRes = await client.query(
               `INSERT INTO product_stock_holds
-                (product_id, order_id, telegram_id, qty, status, expires_at)
+               (product_id, order_id, telegram_id, qty, status, expires_at)
                VALUES ($1, $2, $3, $4, 'HELD', now() + ($5 * interval '1 second'))
                RETURNING id`,
-              [product.id, orderRes.rows[0].id, telegramId, qty, expirySeconds]
+              [product.id, orderRow.id, telegramId, qty, holdExpirySeconds]
             );
             if (holdInsertRes.rowCount === 0) {
               const error = new Error("HOLD_CREATE_FAILED");
@@ -295,14 +338,14 @@ async function createOrder(req, res, next) {
             }
             console.log("[stock/hold] inserted", {
               hold_id: holdInsertRes.rows[0].id,
-              order_id: orderRes.rows[0].id,
+              order_id: orderRow.id,
               product_id: product.id,
               qty,
-              expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+              expires_at: new Date(Date.now() + holdExpirySeconds * 1000).toISOString(),
             });
           } catch (error) {
             console.error("[stock/hold] insert_failed", {
-              order_id: orderRes.rows[0].id,
+              order_id: orderRow.id,
               product_id: product.id,
               qty,
               pg_code: error.code,
@@ -321,7 +364,7 @@ async function createOrder(req, res, next) {
                AND expires_at > now()
                AND status NOT IN ('CONSUMED','EXPIRED')
                AND order_id <> $2`,
-            [product.id, orderRes.rows[0].id]
+            [product.id, orderRow.id]
           );
           const heldQtyOther = Number(holdsRes.rows[0]?.held_qty || 0);
           const available = Math.max(Number(product.stock_qty) - heldQtyOther, 0);
@@ -342,7 +385,7 @@ async function createOrder(req, res, next) {
                  updated_at = now()
              WHERE id = $3
              RETURNING id`,
-            [qty, expirySeconds, existingHoldRes.rows[0].id]
+            [qty, holdExpirySeconds, existingHoldRes.rows[0].id]
           );
           if (updateRes.rowCount === 0) {
             const error = new Error("HOLD_CREATE_FAILED");
@@ -351,10 +394,10 @@ async function createOrder(req, res, next) {
           }
           console.log("[stock/hold] inserted", {
             hold_id: updateRes.rows[0].id,
-            order_id: orderRes.rows[0].id,
+            order_id: orderRow.id,
             product_id: product.id,
             qty,
-            expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+            expires_at: new Date(Date.now() + holdExpirySeconds * 1000).toISOString(),
           });
         }
       }
@@ -365,7 +408,7 @@ async function createOrder(req, res, next) {
          WHERE held_by_order_id = $1
            AND product_id = $2
            AND status = 'HELD'`,
-        [orderRes.rows[0].id, product.id]
+        [orderRow.id, product.id]
       );
       const alreadyHeld = Number(heldRes.rows[0]?.held_qty || 0);
       if (alreadyHeld < qty) {
@@ -386,7 +429,7 @@ async function createOrder(req, res, next) {
                held_at = now()
            WHERE id IN (SELECT id FROM picked)
            RETURNING id`,
-          [product.id, needed, orderRes.rows[0].id, telegramId, username]
+          [product.id, needed, orderRow.id, telegramId, username]
         );
         if (holdRes.rowCount < needed) {
           await client.query("ROLLBACK");
@@ -399,10 +442,10 @@ async function createOrder(req, res, next) {
           });
         }
         console.log("[orders/create] hold_created", {
-          order_id: orderRes.rows[0].id,
+          order_id: orderRow.id,
           product_id: product.id,
           qty: alreadyHeld + holdRes.rowCount,
-          expires_at: new Date(Date.now() + expirySeconds * 1000).toISOString(),
+          expires_at: new Date(Date.now() + holdExpirySeconds * 1000).toISOString(),
         });
       }
     }
@@ -412,7 +455,7 @@ async function createOrder(req, res, next) {
         (order_id, product_id, qty, unit_price_usd, total_price_usd, line_total_usd, price_usd)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [
-        orderRes.rows[0].id,
+        orderRow.id,
         product.id,
         qty,
         unitPrice,
@@ -426,16 +469,22 @@ async function createOrder(req, res, next) {
 
     return res.status(201).json({
       order: {
-        ...orderRes.rows[0],
+        ...orderRow,
         qty,
         total,
       },
-      payment_instructions: {
-        network: "BSC",
-        asset: "USDT",
-        wallet: process.env.PAYMENT_WALLET || "WALLET_NOT_CONFIGURED",
-        note: "Envía screenshot aquí",
-      },
+      free_order: isFreeOrder,
+      free_order_label: formatFreeOrderLabel(orderRow.free_order_number),
+      ...(isFreeOrder
+        ? {}
+        : {
+            payment_instructions: {
+              network: "BSC",
+              asset: "USDT",
+              wallet: process.env.PAYMENT_WALLET || "WALLET_NOT_CONFIGURED",
+              note: "Envía screenshot aquí",
+            },
+          }),
     });
   } catch (error) {
     await client.query("ROLLBACK");
@@ -730,6 +779,7 @@ async function submitPaymentProof(req, res, next) {
 async function markOrderPaid(req, res, next) {
   const orderId = req.params.id;
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -750,6 +800,7 @@ async function markOrderPaid(req, res, next) {
     }
 
     const order = orderRes.rows[0];
+    const isFreeOrder = isFreeOrderRow(order);
 
     if (order.status === ORDER_STATUS_PAID) {
       await client.query("COMMIT");
@@ -775,10 +826,13 @@ async function markOrderPaid(req, res, next) {
       `UPDATE orders
        SET status = $2,
            paid_at = now(),
-           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
+           order_number = CASE
+             WHEN $3::boolean THEN order_number
+             ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
+           END
        WHERE id = $1
        RETURNING *`,
-      [orderId, ORDER_STATUS_PAID]
+      [orderId, ORDER_STATUS_PAID, isFreeOrder]
     );
 
     await client.query(
@@ -884,6 +938,7 @@ async function markOrderPaid(req, res, next) {
 async function rejectPayment(req, res, next) {
   const orderId = req.params.id;
   const pool = getPool();
+  await ensureFreeOrderSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -898,16 +953,20 @@ async function rejectPayment(req, res, next) {
       await client.query("ROLLBACK");
       return res.status(404).json({ error: "Order not found" });
     }
+    const isFreeOrder = isFreeOrderRow(orderRes.rows[0]);
 
     const updatedOrderRes = await client.query(
       `UPDATE orders
        SET status = $2,
            cancelled_at = now(),
            cancel_source = 'ADMIN',
-           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
+           order_number = CASE
+             WHEN $3::boolean THEN order_number
+             ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
+           END
        WHERE id = $1
        RETURNING *`,
-      [orderId, ORDER_STATUS_REJECTED]
+      [orderId, ORDER_STATUS_REJECTED, isFreeOrder]
     );
 
     await releaseStockForOrder(client, orderId);

@@ -148,8 +148,8 @@ export default function InventoryPage() {
     filename: "",
   });
   const [createDeliveryMessages, setCreateDeliveryMessages] = useState([""]);
+  const [createDeliveryMessagesEn, setCreateDeliveryMessagesEn] = useState([""]);
   const [createDeliveryCaption, setCreateDeliveryCaption] = useState("");
-  const [createDeliveryTextEn, setCreateDeliveryTextEn] = useState("");
   const [createDescription, setCreateDescription] = useState(
     Array.from({ length: 8 }, () => "⌾ ").join("\n")
   );
@@ -179,8 +179,8 @@ export default function InventoryPage() {
     filename: "",
   });
   const [editDeliveryMessages, setEditDeliveryMessages] = useState([""]);
+  const [editDeliveryMessagesEn, setEditDeliveryMessagesEn] = useState([""]);
   const [editDeliveryCaption, setEditDeliveryCaption] = useState("");
-  const [editDeliveryTextEn, setEditDeliveryTextEn] = useState("");
   const [toast, setToast] = useState("");
   const createDescRefs = useRef([]);
   const createDescEnRefs = useRef([]);
@@ -218,7 +218,7 @@ export default function InventoryPage() {
   const normalizeStockInput = (value) =>
     String(value ?? "")
       .replace(/[^\d]/g, "")
-      .slice(0, 3);
+      .slice(0, 4);
 
   const notifyMessage = (text) => {
     setMessage(text);
@@ -281,13 +281,32 @@ export default function InventoryPage() {
     });
   };
 
-  const addMessage = (setter) => {
-    setter((prev) => [...prev, ""]);
+  const alignMessageArrays = (primaryMessages, translatedMessages) => {
+    const primary = primaryMessages.length > 0 ? primaryMessages : [""];
+    const translated = [...translatedMessages];
+    while (translated.length < primary.length) {
+      translated.push("");
+    }
+    return translated.slice(0, primary.length);
   };
 
-  const removeMessage = (setter, index) => {
-    setter((prev) => {
-      if (prev.length <= 1 || index <= 0) {
+  const addMessagePair = (primarySetter, translatedSetter) => {
+    primarySetter((prev) => [...prev, ""]);
+    translatedSetter((prev) => [...prev, ""]);
+  };
+
+  const removeMessagePair = (primarySetter, translatedSetter, index) => {
+    if (index <= 0) {
+      return;
+    }
+    primarySetter((prev) => {
+      if (prev.length <= 1) {
+        return prev;
+      }
+      return prev.filter((_, idx) => idx !== index);
+    });
+    translatedSetter((prev) => {
+      if (prev.length <= 1) {
         return prev;
       }
       return prev.filter((_, idx) => idx !== index);
@@ -581,16 +600,15 @@ export default function InventoryPage() {
         || "",
       filename: data?.product?.delivery_payload?.filename || "",
     });
-    setEditDeliveryMessages(
-      ensureDeliveryMessages(data?.product?.delivery_payload)
+    const editMessages = ensureDeliveryMessages(data?.product?.delivery_payload);
+    const editMessagesEn = alignMessageArrays(
+      editMessages,
+      ensureDeliveryMessages(data?.product?.delivery_payload_en)
     );
+    setEditDeliveryMessages(editMessages);
+    setEditDeliveryMessagesEn(editMessagesEn);
     setEditDeliveryCaption(
       String(data?.product?.delivery_payload?.caption || "")
-    );
-    setEditDeliveryTextEn(
-      data?.product?.delivery_payload_en?.text
-        || data?.product?.delivery_payload_en?.message
-        || ""
     );
     if (data?.product?.delivery_payload_en?.caption) {
       setEditDeliveryCaption(String(data.product.delivery_payload_en.caption));
@@ -800,8 +818,11 @@ export default function InventoryPage() {
       if (caption) {
         deliveryPayload.caption = caption;
       }
-      const deliveryPayloadEn = createDeliveryTextEn.trim()
-        ? { text: createDeliveryTextEn.trim() }
+      const messagesEn = sanitizeMessages(createDeliveryMessagesEn);
+      const deliveryPayloadEn = messagesEn.length > 0
+        ? (messagesEn.length > 1
+          ? { messages: messagesEn }
+          : { text: messagesEn[0] })
         : null;
       if (deliveryPayloadEn && caption) {
         deliveryPayloadEn.caption = caption;
@@ -843,16 +864,16 @@ export default function InventoryPage() {
       setCreateDescription(Array.from({ length: 8 }, () => "⌾ ").join("\n"));
       setCreateDescriptionEn("");
       setCreateDeliveryType("TEXT");
-    setCreateDeliveryPayload({
-      text: "",
-      url: "",
-      expires_at: "",
-      telegram_file_id: "",
-      filename: "",
-    });
-    setCreateDeliveryMessages([""]);
-    setCreateDeliveryCaption("");
-    setCreateDeliveryTextEn("");
+      setCreateDeliveryPayload({
+        text: "",
+        url: "",
+        expires_at: "",
+        telegram_file_id: "",
+        filename: "",
+      });
+      setCreateDeliveryMessages([""]);
+      setCreateDeliveryMessagesEn([""]);
+      setCreateDeliveryCaption("");
       setCreateStep("details");
       setCreateOpen(false);
       notifyMessage("Producto creado");
@@ -1126,8 +1147,11 @@ export default function InventoryPage() {
     if (caption) {
       deliveryPayload.caption = caption;
     }
-    const deliveryPayloadEn = editDeliveryTextEn.trim()
-      ? { text: editDeliveryTextEn.trim() }
+    const messagesEn = sanitizeMessages(editDeliveryMessagesEn);
+    const deliveryPayloadEn = messagesEn.length > 0
+      ? (messagesEn.length > 1
+        ? { messages: messagesEn }
+        : { text: messagesEn[0] })
       : null;
     if (deliveryPayloadEn && caption) {
       deliveryPayloadEn.caption = caption;
@@ -1329,6 +1353,7 @@ export default function InventoryPage() {
                 <label>
                   Nombre del producto
                   <input
+                    className="name-input-compact"
                     type="text"
                     value={createName}
                     onChange={(event) => setCreateName(event.target.value)}
@@ -1338,6 +1363,7 @@ export default function InventoryPage() {
                 <label>
                   Nombre (Ingles)
                   <input
+                    className="name-input-compact"
                     type="text"
                     value={createNameEn}
                     onChange={(event) => setCreateNameEn(event.target.value)}
@@ -1347,6 +1373,7 @@ export default function InventoryPage() {
                 <label>
                   Imagen (URL)
                   <input
+                    className="image-url-input"
                     type="text"
                     value={createImageUrl}
                     onChange={(event) => setCreateImageUrl(event.target.value)}
@@ -1356,6 +1383,7 @@ export default function InventoryPage() {
                 <label>
                   Categoría
                   <select
+                    className="select-fit-text"
                     value={createCategory}
                     onChange={(event) => setCreateCategory(event.target.value)}
                   >
@@ -1373,6 +1401,7 @@ export default function InventoryPage() {
                       type="number"
                       min="0"
                       step="1"
+                      className="compact-number-input"
                       value={createPrice}
                       onChange={(event) => {
                         const nextValue = normalizePriceInput(event.target.value);
@@ -1407,6 +1436,7 @@ export default function InventoryPage() {
                 <label>
                   Modo de stock
                   <select
+                    className="select-fit-text"
                     value={createMode}
                     onChange={(event) => setCreateMode(event.target.value)}
                   >
@@ -1415,12 +1445,13 @@ export default function InventoryPage() {
                   </select>
                 </label>
                 {createStep === "delivery" ? (
-                  <div className="create-product__description">
+                  <div className="create-product__description create-product__delivery">
                     <span>Entrega del producto</span>
                     <div className="delivery-panel">
                       <label>
                         Tipo de entrega
                         <select
+                          className="delivery-type-select"
                           value={createDeliveryType}
                           onChange={(event) => setCreateDeliveryType(event.target.value)}
                         >
@@ -1433,52 +1464,82 @@ export default function InventoryPage() {
                         </select>
                       </label>
                       {createDeliveryType === "TEXT" && (
-                        <div className="delivery-messages">
-                          <span>Mensajes de entrega</span>
-                          {createDeliveryMessages.map((message, index) => (
-                            <div key={`create-delivery-${index}`} className="delivery-message-row">
-                              <textarea
-                                rows={4}
-                                value={message}
-                                onChange={(event) =>
-                                  updateMessageAt(
-                                    setCreateDeliveryMessages,
-                                    index,
-                                    event.target.value
-                                  )
-                                }
-                                placeholder={`Mensaje ${index + 1}`}
-                              />
-                              {index > 0 && (
+                        <div className="delivery-text-grid">
+                          <div className="delivery-messages">
+                            {createDeliveryMessages.map((message, index) => (
+                              <div key={`create-delivery-${index}`} className="delivery-message-row">
+                                <span className="delivery-message-row-title">
+                                  Mensaje de entrega {index + 1}
+                                </span>
+                                <textarea
+                                  rows={4}
+                                  value={message}
+                                  onChange={(event) =>
+                                    updateMessageAt(
+                                      setCreateDeliveryMessages,
+                                      index,
+                                      event.target.value
+                                    )
+                                  }
+                                  placeholder={`Mensaje ${index + 1}`}
+                                />
+                              </div>
+                            ))}
+                            <div className="delivery-message-actions">
+                              {createDeliveryMessages.length > 1 && (
                                 <button
                                   type="button"
-                                  className="ghost"
-                                  onClick={() => removeMessage(setCreateDeliveryMessages, index)}
+                                  className="ghost delivery-remove-button"
+                                  onClick={() =>
+                                    removeMessagePair(
+                                      setCreateDeliveryMessages,
+                                      setCreateDeliveryMessagesEn,
+                                      createDeliveryMessages.length - 1
+                                    )
+                                  }
                                 >
                                   Eliminar
                                 </button>
                               )}
+                              <button
+                                type="button"
+                                className="ghost"
+                                onClick={() =>
+                                  addMessagePair(
+                                    setCreateDeliveryMessages,
+                                    setCreateDeliveryMessagesEn
+                                  )
+                                }
+                              >
+                                Agregar mensaje
+                              </button>
                             </div>
-                          ))}
-                          <button
-                            type="button"
-                            className="ghost"
-                            onClick={() => addMessage(setCreateDeliveryMessages)}
-                          >
-                            Agregar mensaje
-                          </button>
+                          </div>
+                          <div className="delivery-translation-field">
+                            {createDeliveryMessagesEn.map((message, index) => (
+                              <label
+                                key={`create-delivery-en-${index}`}
+                                className="delivery-message-row"
+                              >
+                                <span className="delivery-message-row-title">
+                                  Mensaje de entrega {index + 1} (Ingles)
+                                </span>
+                                <textarea
+                                  rows={4}
+                                  value={message}
+                                  onChange={(event) =>
+                                    updateMessageAt(
+                                      setCreateDeliveryMessagesEn,
+                                      index,
+                                      event.target.value
+                                    )
+                                  }
+                                  placeholder={`Mensaje de entrega ${index + 1} (Ingles)`}
+                                />
+                              </label>
+                            ))}
+                          </div>
                         </div>
-                      )}
-                      {createDeliveryType === "TEXT" && (
-                        <label>
-                          Texto de entrega (Ingles)
-                          <textarea
-                            rows={6}
-                            value={createDeliveryTextEn}
-                            onChange={(event) => setCreateDeliveryTextEn(event.target.value)}
-                            placeholder="Texto en ingles (opcional)"
-                          />
-                        </label>
                       )}
                       {createDeliveryType === "LINK" && (
                         <label>
@@ -1649,8 +1710,9 @@ export default function InventoryPage() {
                         <input
                           type="number"
                           min="0"
-                          max="999"
+                          max="9999"
                           inputMode="numeric"
+                          className="compact-number-input"
                           value={createSimpleStock}
                           disabled={createUnique || createSimpleUnlimited}
                           onChange={(event) =>
@@ -1859,7 +1921,9 @@ export default function InventoryPage() {
 
       {detail?.product && (
         <>
-          <div className="inventory-detail-grid">
+          <div
+            className={`inventory-detail-grid ${modeFilter === "SIMPLE" ? "inventory-detail-grid--simple" : ""}`}
+          >
             <div className="inventory-column">
               <section className="card inventory-summary inventory-card">
                 <h2 className="icon-inline"><IconDashboard className="panel-icon" /> Resumen rápido</h2>
@@ -2013,7 +2077,11 @@ export default function InventoryPage() {
                   <div className="form" style={{ marginTop: "16px" }}>
                     <label>
                       Estado
-                      <select value={unitsStatus} onChange={handleUnitsStatusChange}>
+                      <select
+                        className="units-status-select"
+                        value={unitsStatus}
+                        onChange={handleUnitsStatusChange}
+                      >
                         <option value="">Todos</option>
                         <option value="AVAILABLE">DISPONIBLE</option>
                         <option value="HELD">RETENIDO</option>
@@ -2095,19 +2163,6 @@ export default function InventoryPage() {
                     <button type="button" onClick={() => copyText(detail.product.id, "ID")}>
                       Copiar ID
                     </button>
-                    {detail.product.sku_key && (
-                      <button
-                        type="button"
-                        onClick={() => copyText(detail.product.sku_key, "SKU")}
-                      >
-                        Copiar SKU
-                      </button>
-                    )}
-                  </div>
-                </div>
-                <div className="product-grid">
-                  <div>
-                    <p><strong>SKU:</strong> {detail.product.sku_key || "-"}</p>
                   </div>
                 </div>
                 <div className="product-edit">
@@ -2116,6 +2171,7 @@ export default function InventoryPage() {
                     <label>
                       Nombre
                       <input
+                        className="name-input-compact"
                         type="text"
                         value={editProductName}
                         onChange={(event) => setEditProductName(event.target.value)}
@@ -2124,6 +2180,7 @@ export default function InventoryPage() {
                     <label>
                       Nombre (Ingles)
                       <input
+                        className="name-input-compact"
                         type="text"
                         value={editNameEn}
                         onChange={(event) => setEditNameEn(event.target.value)}
@@ -2132,25 +2189,40 @@ export default function InventoryPage() {
                     <label>
                       Imagen (URL)
                       <input
+                        className="image-url-input"
                         type="text"
                         value={editImageUrl}
                         onChange={(event) => setEditImageUrl(event.target.value)}
                         placeholder="https://..."
                       />
                     </label>
-                    <label>
-                      Categoría
-                      <select
-                        value={editCategory}
-                        onChange={(event) => setEditCategory(event.target.value)}
-                      >
-                        {categoryOptions.map((option) => (
-                          <option key={option.key} value={option.key}>
-                            {option.label}
-                          </option>
-                        ))}
-                      </select>
-                    </label>
+                    <div className="stock-meta-pair">
+                      <label>
+                        Categoría
+                        <select
+                          className="select-fit-text"
+                          value={editCategory}
+                          onChange={(event) => setEditCategory(event.target.value)}
+                        >
+                          {categoryOptions.map((option) => (
+                            <option key={option.key} value={option.key}>
+                              {option.label}
+                            </option>
+                          ))}
+                        </select>
+                      </label>
+                      <label>
+                        Modo de stock
+                        <select
+                          className="select-fit-text"
+                          value={editStockMode}
+                          onChange={(event) => setEditStockMode(event.target.value)}
+                        >
+                          <option value="SIMPLE">SIMPLE</option>
+                          <option value="UNITS">UNITS</option>
+                        </select>
+                      </label>
+                    </div>
                   <label>
                     Precio USD
                     <div className="price-input-row">
@@ -2158,6 +2230,7 @@ export default function InventoryPage() {
                         type="number"
                         min="0"
                         step="1"
+                        className="compact-number-input"
                         value={editPrice}
                         onChange={(event) => {
                           const nextValue = normalizePriceInput(event.target.value);
@@ -2186,80 +2259,63 @@ export default function InventoryPage() {
                         >
                           Gratis
                         </button>
-                    </div>
-                    {editIsFree && <span className="price-free-label">Gratis</span>}
-                  </label>
-                  <label>
-                    Modo de stock
-                    <select
-                      value={editStockMode}
-                      onChange={(event) => setEditStockMode(event.target.value)}
-                    >
-                      <option value="SIMPLE">SIMPLE</option>
-                      <option value="UNITS">UNITS</option>
-                    </select>
-                  </label>
-                </div>
-                <div className="product-edit__options">
-                  {editStockMode === "SIMPLE" && (
-                    <>
-                      <div className="simple-stock-row">
-                        <div className="stock-input-field">
-                          <label>
-                            Stock actual
-                            <input
-                              type="number"
-                              min="0"
-                              max="999"
-                              inputMode="numeric"
-                              value={simpleStock}
-                              disabled={editUnique || simpleUnlimited}
-                              onChange={(event) =>
-                                setSimpleStock(normalizeStockInput(event.target.value))
-                              }
-                            />
-                          </label>
-                        </div>
-                        <div className="stock-toggle-group">
+                        {editStockMode !== "SIMPLE" && (
                           <button
                             type="button"
-                            className={`stock-toggle ${!editOutOfStock && !editUnique && !simpleUnlimited ? "active" : ""}`}
-                            onClick={() => setStockToggle("stock")}
-                            title="Stock limitado: descuenta el stock disponible."
-                          >
-                            Stock
-                          </button>
-                          <button
-                            type="button"
-                            className={`stock-toggle ${simpleUnlimited ? "active" : ""}`}
-                            onClick={() => setStockToggle("unlimited")}
-                            title="Stock ilimitado: no descuenta stock."
-                          >
-                            Ilimitado
-                          </button>
-                          <button
-                            type="button"
-                            className={`stock-toggle ${editUnique ? "active" : ""}`}
-                            onClick={() => setStockToggle("unique")}
-                            title="Compra unica por usuario y stock ilimitado."
-                          >
-                            Unico
-                          </button>
-                          <button
-                            type="button"
-                            className={`stock-toggle ${editOutOfStock ? "active" : ""}`}
+                            className={`stock-toggle stock-toggle--inline-out ${editOutOfStock ? "active" : ""}`}
                             onClick={toggleEditOutOfStock}
                             title="Producto sin stock temporalmente."
                           >
                             Sin Stock
                           </button>
-                        </div>
+                        )}
+                    </div>
+                    {editIsFree && <span className="price-free-label">Gratis</span>}
+                  </label>
+                  {editStockMode === "SIMPLE" && (
+                    <div className="stock-inline-block">
+                      <div className="stock-input-field">
+                        <label>
+                          Stock actual
+                          <input
+                            type="number"
+                            min="0"
+                            max="9999"
+                            inputMode="numeric"
+                            className="compact-number-input"
+                            value={simpleStock}
+                            disabled={editUnique || simpleUnlimited}
+                            onChange={(event) =>
+                              setSimpleStock(normalizeStockInput(event.target.value))
+                            }
+                          />
+                        </label>
                       </div>
-                    </>
-                  )}
-                  {editStockMode !== "SIMPLE" && (
-                    <div className="simple-stock-row">
                       <div className="stock-toggle-group">
+                        <button
+                          type="button"
+                          className={`stock-toggle ${!editOutOfStock && !editUnique && !simpleUnlimited ? "active" : ""}`}
+                          onClick={() => setStockToggle("stock")}
+                          title="Stock limitado: descuenta el stock disponible."
+                        >
+                          Stock
+                        </button>
+                        <button
+                          type="button"
+                          className={`stock-toggle ${simpleUnlimited ? "active" : ""}`}
+                          onClick={() => setStockToggle("unlimited")}
+                          title="Stock ilimitado: no descuenta stock."
+                        >
+                          Ilimitado
+                        </button>
+                        <button
+                          type="button"
+                          className={`stock-toggle ${editUnique ? "active" : ""}`}
+                          onClick={() => setStockToggle("unique")}
+                          title="Compra unica por usuario y stock ilimitado."
+                        >
+                          Unico
+                        </button>
                         <button
                           type="button"
                           className={`stock-toggle ${editOutOfStock ? "active" : ""}`}
@@ -2273,12 +2329,13 @@ export default function InventoryPage() {
                   )}
                 </div>
                   {editStep === "delivery" && editStockMode === "SIMPLE" ? (
-                    <div className="product-edit__description">
+                    <div className="product-edit__description product-edit__delivery">
                       <span>Entrega del producto</span>
                       <div className="delivery-panel">
                         <label>
                           Tipo de entrega
                           <select
+                            className="delivery-type-select"
                             value={editDeliveryType}
                             onChange={(event) => setEditDeliveryType(event.target.value)}
                           >
@@ -2291,52 +2348,82 @@ export default function InventoryPage() {
                           </select>
                         </label>
                         {editDeliveryType === "TEXT" && (
-                          <div className="delivery-messages">
-                            <span>Mensajes de entrega</span>
-                            {editDeliveryMessages.map((message, index) => (
-                              <div key={`edit-delivery-${index}`} className="delivery-message-row">
-                                <textarea
-                                  rows={4}
-                                  value={message}
-                                  onChange={(event) =>
-                                    updateMessageAt(
-                                      setEditDeliveryMessages,
-                                      index,
-                                      event.target.value
-                                    )
-                                  }
-                                  placeholder={`Mensaje ${index + 1}`}
-                                />
-                                {index > 0 && (
+                          <div className="delivery-text-grid">
+                            <div className="delivery-messages">
+                              {editDeliveryMessages.map((message, index) => (
+                                <div key={`edit-delivery-${index}`} className="delivery-message-row">
+                                  <span className="delivery-message-row-title">
+                                    Mensaje de entrega {index + 1}
+                                  </span>
+                                  <textarea
+                                    rows={4}
+                                    value={message}
+                                    onChange={(event) =>
+                                      updateMessageAt(
+                                        setEditDeliveryMessages,
+                                        index,
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder={`Mensaje ${index + 1}`}
+                                  />
+                                </div>
+                              ))}
+                              <div className="delivery-message-actions">
+                                {editDeliveryMessages.length > 1 && (
                                   <button
                                     type="button"
-                                    className="ghost"
-                                    onClick={() => removeMessage(setEditDeliveryMessages, index)}
+                                    className="ghost delivery-remove-button"
+                                    onClick={() =>
+                                      removeMessagePair(
+                                        setEditDeliveryMessages,
+                                        setEditDeliveryMessagesEn,
+                                        editDeliveryMessages.length - 1
+                                      )
+                                    }
                                   >
                                     Eliminar
                                   </button>
                                 )}
+                                <button
+                                  type="button"
+                                  className="ghost"
+                                  onClick={() =>
+                                    addMessagePair(
+                                      setEditDeliveryMessages,
+                                      setEditDeliveryMessagesEn
+                                    )
+                                  }
+                                >
+                                  Agregar mensaje
+                                </button>
                               </div>
-                            ))}
-                            <button
-                              type="button"
-                              className="ghost"
-                              onClick={() => addMessage(setEditDeliveryMessages)}
-                            >
-                              Agregar mensaje
-                            </button>
+                            </div>
+                            <div className="delivery-translation-field">
+                              {editDeliveryMessagesEn.map((message, index) => (
+                                <label
+                                  key={`edit-delivery-en-${index}`}
+                                  className="delivery-message-row"
+                                >
+                                  <span className="delivery-message-row-title">
+                                    Mensaje de entrega {index + 1} (Ingles)
+                                  </span>
+                                  <textarea
+                                    rows={4}
+                                    value={message}
+                                    onChange={(event) =>
+                                      updateMessageAt(
+                                        setEditDeliveryMessagesEn,
+                                        index,
+                                        event.target.value
+                                      )
+                                    }
+                                    placeholder={`Mensaje de entrega ${index + 1} (Ingles)`}
+                                  />
+                                </label>
+                              ))}
+                            </div>
                           </div>
-                        )}
-                        {editDeliveryType === "TEXT" && (
-                          <label>
-                            Texto de entrega (Ingles)
-                            <textarea
-                              rows={6}
-                              value={editDeliveryTextEn}
-                              onChange={(event) => setEditDeliveryTextEn(event.target.value)}
-                              placeholder="Texto en ingles (opcional)"
-                            />
-                          </label>
                         )}
                         {editDeliveryType === "LINK" && (
                           <label>
@@ -2440,7 +2527,7 @@ export default function InventoryPage() {
                       </div>
                     </div>
                   ) : editStep === "delivery" && editStockMode === "UNITS" ? (
-                    <div className="product-edit__description">
+                    <div className="product-edit__description product-edit__description--units">
                       <span>Entrega (UNITS)</span>
                       <div className="card inner-card manual-units-card">
                         <h3 className="icon-inline"><IconInventory className="panel-icon" /> Unidad manual</h3>

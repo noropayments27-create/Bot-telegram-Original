@@ -176,6 +176,118 @@ def _format_payment_amount(amount: float) -> str:
     return _format_usd(amount)
 
 
+def _is_free_product(product: Dict[str, Any] | None) -> bool:
+    if not isinstance(product, dict):
+        return False
+    try:
+        return float(product.get("price") or 0) <= 0
+    except (TypeError, ValueError):
+        return False
+
+
+def _is_free_order_payload(
+    order: Dict[str, Any] | None = None,
+    payload: Dict[str, Any] | None = None,
+) -> bool:
+    if isinstance(payload, dict) and payload.get("free_order") is True:
+        return True
+    if not isinstance(order, dict):
+        return False
+    if order.get("free_order_number"):
+        return True
+    try:
+        total = float(order.get("total"))
+    except (TypeError, ValueError):
+        total = None
+    if total is None:
+        try:
+            total = float(order.get("unit_price_at_purchase"))
+        except (TypeError, ValueError):
+            total = None
+    return total is not None and total <= 0
+
+
+def _resolve_free_order_label(
+    order: Dict[str, Any] | None = None,
+    payload: Dict[str, Any] | None = None,
+) -> str:
+    if isinstance(payload, dict):
+        direct_label = str(payload.get("free_order_label") or "").strip()
+        if direct_label:
+            return direct_label
+        direct_number = payload.get("free_order_number")
+        if direct_number:
+            return f"Orden Gratis: {str(direct_number).zfill(5)}"
+    if isinstance(order, dict):
+        direct_label = str(order.get("free_order_label") or "").strip()
+        if direct_label:
+            return direct_label
+        direct_number = order.get("free_order_number")
+        if direct_number:
+            return f"Orden Gratis: {str(direct_number).zfill(5)}"
+    return ""
+
+
+async def _render_free_order_pending_prompt(
+    target: Message,
+    user_id: int,
+    order_id: str,
+    total: float | int | None = None,
+    free_order_label: str | None = None,
+    locale: str | None = None,
+) -> None:
+    try:
+        total_value = float(total or 0)
+    except (TypeError, ValueError):
+        total_value = 0
+    lines = [
+        t(locale, "free_order_created_title"),
+        "",
+        t(locale, "order_id_label").format(order_id=order_id),
+    ]
+    if free_order_label:
+        lines.extend(
+            [
+                t(locale, "free_order_number_label").format(
+                    value=html.escape(free_order_label)
+                ),
+            ]
+        )
+    lines.extend(
+        [
+            t(locale, "order_total_label").format(total=_format_usd_value(total_value)),
+            "",
+            t(locale, "free_order_pending_review"),
+        ]
+    )
+    keyboard = InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_status"),
+                    callback_data=f"order:status:{order_id}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=t(locale, "btn_back"),
+                    callback_data="nav:back",
+                ),
+                InlineKeyboardButton(
+                    text=t(locale, "btn_home"),
+                    callback_data="home:show",
+                ),
+            ],
+        ]
+    )
+    await render_main_view(
+        target,
+        user_id,
+        "\n".join(lines),
+        reply_markup=keyboard,
+    )
+
+
 async def _render_shop_view(
     target: Message,
     user_id: int,
@@ -741,8 +853,31 @@ def build_shop_keyboard(
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 def build_product_detail_keyboard(
-    page: int, index: int, locale: str | None = None
+    page: int,
+    index: int,
+    locale: str | None = None,
+    is_free_product: bool = False,
 ) -> InlineKeyboardMarkup:
+    if is_free_product:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=t(locale, "btn_get_free"),
+                        callback_data=f"shop:buy:{page}:{index}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=t(locale, "btn_back"),
+                        callback_data="nav:back",
+                    ),
+                    InlineKeyboardButton(
+                        text=t(locale, "btn_home"), callback_data="home:show"
+                    ),
+                ],
+            ]
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -816,8 +951,32 @@ def build_category_keyboard(
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
 def build_category_detail_keyboard(
-    category_key: str, page: int, index: int, locale: str | None = None
+    category_key: str,
+    page: int,
+    index: int,
+    locale: str | None = None,
+    is_free_product: bool = False,
 ) -> InlineKeyboardMarkup:
+    if is_free_product:
+        return InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=t(locale, "btn_get_free"),
+                        callback_data=f"category:buy:{category_key}:{page}:{index}",
+                    )
+                ],
+                [
+                    InlineKeyboardButton(
+                        text=t(locale, "btn_back"),
+                        callback_data=f"category:page:{category_key}:{page}",
+                    ),
+                    InlineKeyboardButton(
+                        text=t(locale, "btn_home"), callback_data="home:show"
+                    ),
+                ],
+            ]
+        )
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -1210,10 +1369,21 @@ async def render_product_from_start(
     detail_text = await _build_product_detail_text(selected, user_id, locale)
 
     if category_value == _CATEGORY_KEYS["tienda"]:
-        keyboard = build_product_detail_keyboard(page, index, locale)
+        keyboard = build_product_detail_keyboard(
+            page,
+            index,
+            locale,
+            is_free_product=_is_free_product(selected),
+        )
     else:
         category_key = _category_key_from_value(category_value)
-        keyboard = build_category_detail_keyboard(category_key, page, index, locale)
+        keyboard = build_category_detail_keyboard(
+            category_key,
+            page,
+            index,
+            locale,
+            is_free_product=_is_free_product(selected),
+        )
 
     await _render_product_detail_view(
         target,
@@ -1512,7 +1682,12 @@ async def handle_product_select(callback: CallbackQuery, state: FSMContext) -> N
         return
     await state.update_data(selected_product_id=product["id"])
     text = await _build_product_detail_text(product, callback.from_user.id, locale)
-    keyboard = build_product_detail_keyboard(page, index, locale)
+    keyboard = build_product_detail_keyboard(
+        page,
+        index,
+        locale,
+        is_free_product=_is_free_product(product),
+    )
     await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
@@ -1564,7 +1739,13 @@ async def handle_category_select(callback: CallbackQuery, state: FSMContext) -> 
         return
     await state.update_data(selected_product_id=item["id"])
     text = await _build_product_detail_text(item, callback.from_user.id, locale)
-    keyboard = build_category_detail_keyboard(category_key, safe_page, index, locale)
+    keyboard = build_category_detail_keyboard(
+        category_key,
+        safe_page,
+        index,
+        locale,
+        is_free_product=_is_free_product(item),
+    )
     await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
@@ -1646,6 +1827,18 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         current_order_total=order.get("total"),
         current_order_summary=None,
     )
+    if _is_free_order_payload(order, result):
+        await _render_free_order_pending_prompt(
+            callback.message,
+            callback.from_user.id,
+            order["id"],
+            order.get("total"),
+            _resolve_free_order_label(order, result),
+            locale,
+        )
+        await start_order_watch(api_client, order["id"], callback.message, state, locale)
+        await callback.answer()
+        return
     await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
@@ -1698,7 +1891,13 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
             callback.message,
             callback.from_user.id,
             t(locale, "no_products_available"),
-            reply_markup=build_category_detail_keyboard(category_key, safe_page, index, locale),
+            reply_markup=build_category_detail_keyboard(
+                category_key,
+                safe_page,
+                index,
+                locale,
+                is_free_product=_is_free_product(product),
+            ),
         )
         await callback.answer()
         return
@@ -1727,7 +1926,13 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
             callback.message,
             callback.from_user.id,
             t(locale, "order_create_failed"),
-            reply_markup=build_category_detail_keyboard(category_key, safe_page, index, locale),
+            reply_markup=build_category_detail_keyboard(
+                category_key,
+                safe_page,
+                index,
+                locale,
+                is_free_product=_is_free_product(product),
+            ),
         )
         await callback.answer()
         return
@@ -1737,6 +1942,18 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         current_order_total=order.get("total"),
         current_order_summary=None,
     )
+    if _is_free_order_payload(order, result):
+        await _render_free_order_pending_prompt(
+            callback.message,
+            callback.from_user.id,
+            order["id"],
+            order.get("total"),
+            _resolve_free_order_label(order, result),
+            locale,
+        )
+        await start_order_watch(api_client, order["id"], callback.message, state, locale)
+        await callback.answer()
+        return
     await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
@@ -1833,7 +2050,12 @@ async def handle_shop_cart(callback: CallbackQuery) -> None:
     safe_add_result = html.escape(str(add_result or ""))
     safe_total_line = html.escape(str(total_line or ""))
     text = f"{base_text}\n\n{safe_add_result}\n{safe_total_line}"
-    keyboard = build_product_detail_keyboard(page, index, locale)
+    keyboard = build_product_detail_keyboard(
+        page,
+        index,
+        locale,
+        is_free_product=_is_free_product(product),
+    )
     await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
@@ -1937,7 +2159,13 @@ async def handle_category_cart(callback: CallbackQuery) -> None:
     safe_add_result = html.escape(str(add_result or ""))
     safe_total_line = html.escape(str(total_line or ""))
     text = f"{base_text}\n\n{safe_add_result}\n{safe_total_line}"
-    keyboard = build_category_detail_keyboard(category_key, safe_page, index, locale)
+    keyboard = build_category_detail_keyboard(
+        category_key,
+        safe_page,
+        index,
+        locale,
+        is_free_product=_is_free_product(item),
+    )
     await _render_product_detail_view(
         callback.message,
         callback.from_user.id,
@@ -2110,6 +2338,18 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         payment_method_order_id=None,
         payment_ready=False,
     )
+    if _is_free_order_payload(None, result):
+        await _render_free_order_pending_prompt(
+            callback.message,
+            callback.from_user.id,
+            order_id,
+            cart_total,
+            _resolve_free_order_label(None, result),
+            locale,
+        )
+        await start_order_watch(api_client, order_id, callback.message, state, locale)
+        await callback.answer()
+        return
     await _render_payment_methods_prompt(
         callback.message,
         callback.from_user.id,
@@ -2328,6 +2568,18 @@ async def handle_create_order(callback: CallbackQuery, state: FSMContext) -> Non
         payment_method_order_id=None,
         payment_ready=False,
     )
+    if _is_free_order_payload(order, result):
+        await _render_free_order_pending_prompt(
+            callback.message,
+            callback.from_user.id,
+            order["id"],
+            order.get("total"),
+            _resolve_free_order_label(order, result),
+            locale,
+        )
+        await start_order_watch(api_client, order["id"], callback.message, state, locale)
+        await callback.answer()
+        return
     text = (
         f"{t(locale, 'order_created_title')}\n\n"
         f"{t(locale, 'order_id_label').format(order_id=order['id'])}\n"
@@ -2791,7 +3043,10 @@ async def send_order_status(
     if status == "PAID":
         await render_main_view(target, user_id, format_receipt(order, locale))
     elif status == "WAITING_PAYMENT":
-        await render_main_view(target, user_id, t(locale, "status_paid_review"))
+        if _is_free_order_payload(order, result):
+            await render_main_view(target, user_id, t(locale, "status_free_order_pending"))
+        else:
+            await render_main_view(target, user_id, t(locale, "status_paid_review"))
     elif status == "CREATED":
         await render_main_view(target, user_id, t(locale, "status_pending_payment"))
     elif status == "CANCELLED":
