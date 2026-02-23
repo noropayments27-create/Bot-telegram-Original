@@ -18,6 +18,7 @@ from .handlers import (
 from .middlewares.ban_guard import BanGuardMiddleware
 from .middlewares.access_code import AccessCodeMiddleware
 from .middlewares.maintenance_guard import MaintenanceGuardMiddleware
+from .middlewares.perf_log import PerfLogMiddleware
 
 
 async def main() -> None:
@@ -32,6 +33,9 @@ async def main() -> None:
     maintenance_guard = MaintenanceGuardMiddleware()
     ban_guard = BanGuardMiddleware()
     access_guard = AccessCodeMiddleware()
+    perf_log = PerfLogMiddleware()
+    dp.message.middleware(perf_log)
+    dp.callback_query.middleware(perf_log)
     dp.message.middleware(maintenance_guard)
     dp.callback_query.middleware(maintenance_guard)
     dp.message.middleware(ban_guard)

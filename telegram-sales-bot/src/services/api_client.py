@@ -1,8 +1,13 @@
 from typing import Any, Dict, Optional
 
 import asyncio
+import inspect
+import time
+from functools import wraps
+
 import httpx
 from ..config import ADMIN_API_KEY, PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS
+from ..utils.perf import record_api_client_call
 
 
 async def _request_with_retry(fn, attempts: int = 3, delay: float = 0.35) -> Any:
@@ -652,3 +657,33 @@ class ApiClient:
                 except ValueError:
                     return {"status_code": response.status_code, "data": {}}
             return response.json()
+
+
+def _instrument_api_client_methods() -> None:
+    if getattr(ApiClient, "_perf_instrumented", False):
+        return
+
+    for method_name, method in list(ApiClient.__dict__.items()):
+        if method_name.startswith("_"):
+            continue
+        if not inspect.iscoroutinefunction(method):
+            continue
+
+        @wraps(method)
+        async def _wrapped(self, *args, __method=method, __name=method_name, **kwargs):
+            started_at = time.perf_counter()
+            ok = False
+            try:
+                result = await __method(self, *args, **kwargs)
+                ok = True
+                return result
+            finally:
+                elapsed_ms = (time.perf_counter() - started_at) * 1000
+                record_api_client_call(__name, elapsed_ms, ok)
+
+        setattr(ApiClient, method_name, _wrapped)
+
+    ApiClient._perf_instrumented = True
+
+
+_instrument_api_client_methods()
