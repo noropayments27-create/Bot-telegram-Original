@@ -2750,6 +2750,7 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
         order_id=order_id,
         current_order_id=order_id,
         payment_ready=True,
+        payment_proof_invalid_attempts=0,
     )
     await state.set_state(PaymentStates.waiting_photo)
     await render_main_view(
@@ -2873,7 +2874,14 @@ async def _process_payment_proof(
                 if isinstance(error_payload, dict)
                 else None
             )
+            try:
+                invalid_attempts = int(data.get("payment_proof_invalid_attempts") or 0) + 1
+            except Exception:
+                invalid_attempts = 1
+            await state.update_data(payment_proof_invalid_attempts=invalid_attempts)
             await message.answer(backend_message or t(locale, "payment_screenshot_invalid"))
+            if invalid_attempts == 2:
+                await message.answer(t(locale, "payment_screenshot_support_contact"))
             return
         if exc.response.status_code in (404, 409):
             print(
@@ -2897,6 +2905,7 @@ async def _process_payment_proof(
         payment_ready=False,
         payment_method=None,
         payment_method_order_id=None,
+        payment_proof_invalid_attempts=0,
     )
     await state.set_state(None)
     await stop_order_watch(message.from_user.id, "proof_submitted")
