@@ -2881,7 +2881,10 @@ async def _process_payment_proof(
             await state.update_data(payment_proof_invalid_attempts=invalid_attempts)
             await message.answer(backend_message or t(locale, "payment_screenshot_invalid"))
             if invalid_attempts == 2:
-                await message.answer(t(locale, "payment_screenshot_support_contact"))
+                await message.answer(
+                    t(locale, "payment_screenshot_support_contact"),
+                    parse_mode=ParseMode.HTML,
+                )
             return
         if exc.response.status_code in (404, 409):
             print(

@@ -1694,7 +1694,7 @@ def _build_earnings_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text=_tr(locale, "⬇️ Descargar CSV", "⬇️ Download CSV"),
+                    text=_tr(locale, "⬇️ Descargar archivo", "⬇️ Download file"),
                     callback_data=f"adminui:earncsv:pick:{current_month_offset}:{current_week_offset}",
                 ),
             ],
@@ -1723,6 +1723,16 @@ def _build_earnings_csv_picker_keyboard(
                 InlineKeyboardButton(
                     text=_tr(locale, "⬇️ CSV Semana", "⬇️ CSV Week"),
                     callback_data=f"adminui:earncsv:week:{month_offset}:{week_offset}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬇️ XLSX Mes", "⬇️ XLSX Month"),
+                    callback_data=f"adminui:earncsv:xmonth:{month_offset}:{week_offset}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬇️ XLSX Semana", "⬇️ XLSX Week"),
+                    callback_data=f"adminui:earncsv:xweek:{month_offset}:{week_offset}",
                 ),
             ],
             [
@@ -2514,8 +2524,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     callback.message,
                     _tr(
                         locale,
-                        "⬇️ <b>Descargar ganancias</b>\n\nSelecciona el período del CSV:",
-                        "⬇️ <b>Download earnings</b>\n\nSelect CSV period:",
+                        "⬇️ <b>Descargar ganancias</b>\n\nSelecciona formato y período:",
+                        "⬇️ <b>Download earnings</b>\n\nSelect format and period:",
                     ),
                     reply_markup=_build_earnings_csv_picker_keyboard(
                         month_offset,
@@ -2525,23 +2535,33 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 )
                 return
 
-            if mode in {"month", "week"}:
-                csv_result = await api_client.admin_download_sales_export_csv(
-                    period=mode,
-                    month_offset=month_offset,
-                    week_offset=week_offset,
+            if mode in {"month", "week", "xmonth", "xweek"}:
+                period = "week" if mode.endswith("week") else "month"
+                wants_xlsx = mode.startswith("x")
+                file_result = (
+                    await api_client.admin_download_sales_export_xlsx(
+                        period=period,
+                        month_offset=month_offset,
+                        week_offset=week_offset,
+                    )
+                    if wants_xlsx
+                    else await api_client.admin_download_sales_export_csv(
+                        period=period,
+                        month_offset=month_offset,
+                        week_offset=week_offset,
+                    )
                 )
-                status_code = int(csv_result.get("status_code") or 200)
+                status_code = int(file_result.get("status_code") or 200)
                 if status_code >= 400:
-                    payload = csv_result.get("data") or {}
+                    payload = file_result.get("data") or {}
                     error_code = str(payload.get("error") or "").upper()
                     if error_code == "NO_SALES_FOR_PERIOD":
                         start_text = _fmt_dt(payload.get("start_date"))
                         end_text = _fmt_dt(payload.get("end_date"))
                         period_title = _tr(
                             locale,
-                            "mes" if mode == "month" else "semana",
-                            "month" if mode == "month" else "week",
+                            "mes" if period == "month" else "semana",
+                            "month" if period == "month" else "week",
                         )
                         await _edit_panel_message(
                             callback.message,
@@ -2565,8 +2585,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         callback.message,
                         _tr(
                             locale,
-                            "❌ <b>No se pudo generar el CSV.</b>",
-                            "❌ <b>Could not generate the CSV.</b>",
+                            "❌ <b>No se pudo generar el archivo.</b>",
+                            "❌ <b>Could not generate the file.</b>",
                         ),
                         reply_markup=_build_earnings_csv_picker_keyboard(
                             month_offset,
@@ -2575,17 +2595,18 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         ),
                     )
                     return
-                content = csv_result.get("content") or b""
+                content = file_result.get("content") or b""
                 if isinstance(content, str):
                     content = content.encode("utf-8")
-                filename = str(csv_result.get("filename") or f"ganancias-{mode}.csv")
+                default_ext = "xlsx" if wants_xlsx else "csv"
+                filename = str(file_result.get("filename") or f"ganancias-{period}.{default_ext}")
                 document = BufferedInputFile(content, filename=filename)
                 await callback.message.answer_document(
                     document=document,
                     caption=_tr(
                         locale,
-                        "✅ CSV generado correctamente.",
-                        "✅ CSV generated successfully.",
+                        "✅ Archivo generado correctamente.",
+                        "✅ File generated successfully.",
                     ),
                 )
                 earnings_text, earnings_keyboard = await _build_sales_insights_view(

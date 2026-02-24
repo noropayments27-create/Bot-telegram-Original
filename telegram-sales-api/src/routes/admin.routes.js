@@ -1,6 +1,7 @@
 const express = require("express");
 const fs = require("fs/promises");
 const path = require("path");
+const XLSX = require("xlsx");
 const { getPool } = require("../db");
 const requireAdmin = require("../middlewares/requireAdmin");
 const {
@@ -3961,9 +3962,18 @@ router.get("/stats/top-products-month", async (req, res, next) => {
   }
 });
 
-router.get("/stats/sales-export.csv", async (req, res, next) => {
-  const pool = getPool();
-  const periodRaw = String(req.query?.period || "month").trim().toLowerCase();
+function formatDateDmy(value) {
+  if (!value) return "";
+  const d = new Date(value);
+  if (Number.isNaN(d.getTime())) return "";
+  const dd = String(d.getUTCDate()).padStart(2, "0");
+  const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
+  const yyyy = d.getUTCFullYear();
+  return `${dd}/${mm}/${yyyy}`;
+}
+
+async function buildSalesExportRows(pool, query = {}) {
+  const periodRaw = String(query?.period || "month").trim().toLowerCase();
   const period = periodRaw === "week" ? "week" : "month";
   const dayMs = 24 * 60 * 60 * 1000;
   const weekMs = 7 * dayMs;
@@ -3989,71 +3999,15 @@ router.get("/stats/sales-export.csv", async (req, res, next) => {
     const normalized = Number.isFinite(parsed) ? Math.max(Math.trunc(parsed), 0) : 0;
     return Math.min(normalized, Math.max(maxValue, 0));
   };
-  const formatDateDmy = (value) => {
-    if (!value) return "";
-    const d = new Date(value);
-    if (Number.isNaN(d.getTime())) return "";
-    const dd = String(d.getUTCDate()).padStart(2, "0");
-    const mm = String(d.getUTCMonth() + 1).padStart(2, "0");
-    const yyyy = d.getUTCFullYear();
-    return `${dd}/${mm}/${yyyy}`;
-  };
-  const csvCell = (value) => {
-    const text = String(value ?? "");
-    if (text.includes('"') || text.includes(",") || text.includes("\n")) {
-      return `"${text.replace(/"/g, '""')}"`;
-    }
-    return text;
-  };
 
-  try {
-    const now = new Date();
-    const currentWeekStart = startOfUtcWeek(now);
-    const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
+  const now = new Date();
+  const currentWeekStart = startOfUtcWeek(now);
+  const currentMonthStart = new Date(Date.UTC(now.getUTCFullYear(), now.getUTCMonth(), 1));
 
-    const firstSaleRes = await pool.query(
-      `SELECT MIN(COALESCE(paid_at, delivered_at, created_at)) AS first_sale_at
-       FROM orders
-       WHERE status IN ('PAID', 'DELIVERED')`
-    );
-    const firstSaleRaw = firstSaleRes.rows[0]?.first_sale_at || null;
-    const firstSaleAt = firstSaleRaw ? new Date(firstSaleRaw) : null;
-    const firstWeekStart = firstSaleAt ? startOfUtcWeek(firstSaleAt) : currentWeekStart;
-    const firstMonthStart = firstSaleAt
-      ? new Date(Date.UTC(firstSaleAt.getUTCFullYear(), firstSaleAt.getUTCMonth(), 1))
-      : currentMonthStart;
-
-    const monthMaxOffset = Math.max(monthDiff(currentMonthStart, firstMonthStart), 0);
-    const weekMaxOffset = Math.max(
-      Math.floor((currentWeekStart.getTime() - firstWeekStart.getTime()) / weekMs),
-      0
-    );
-
-    const monthOffset = clampOffset(req.query?.month_offset, monthMaxOffset);
-    const weekOffset = clampOffset(req.query?.week_offset, weekMaxOffset);
-
-    let rangeStart;
-    let rangeEnd;
-    if (period === "week") {
-      rangeStart = new Date(currentWeekStart.getTime() - weekOffset * weekMs);
-      rangeEnd = new Date(rangeStart.getTime() + weekMs);
-    } else {
-      rangeStart = addUtcMonths(currentMonthStart, -monthOffset);
-      rangeEnd = addUtcMonths(rangeStart, 1);
-    }
-
-    const rowsRes = await pool.query(
-      `SELECT o.id,
-              o.order_number,
-              CASE
-                WHEN o.status = 'DELIVERED' THEN 'ENTREGADA'
-                WHEN o.status = 'PAID' THEN 'PAGADA'
-                ELSE o.status::text
-              END AS status_label,
-              COALESCE(o.paid_at, o.delivered_at, o.created_at) AS paid_at,
-              u.telegram_id,
-              u.telegram_username,
-              COALESCE(SUM(COALESCE(oi.qty, 1)), 0)::int AS sold_units,
+  const firstSaleRes = await pool.query(
+    `SELECT MIN(first_sale_at) AS first_sale_at
+     FROM (
+       SELECT COALESCE(o.paid_at, o.delivered_at, o.created_at) AS first_sale_at,
               COALESCE(
                 SUM(
                   COALESCE(
@@ -4062,37 +4016,13 @@ router.get("/stats/sales-export.csv", async (req, res, next) => {
                   )
                 ),
                 0
-              )::numeric AS revenue_usd,
-              COALESCE(
-                string_agg(
-                  CASE
-                    WHEN COALESCE(oi.qty, 1) > 1
-                      THEN COALESCE(p.name, 'Producto') || ' x' || COALESCE(oi.qty, 1)::text
-                    ELSE COALESCE(p.name, 'Producto')
-                  END,
-                  ' | '
-                  ORDER BY COALESCE(p.name, 'Producto')
-                ),
-                ''
-              ) AS products
+              )::numeric AS revenue_usd
        FROM orders o
        JOIN order_items oi ON oi.order_id = o.id
        LEFT JOIN products p ON p.id = oi.product_id
-       LEFT JOIN users u ON u.id = o.user_id
        WHERE o.status IN ('PAID', 'DELIVERED')
          AND o.free_order_number IS NULL
-         AND COALESCE(o.paid_at, o.delivered_at, o.created_at) >= $1
-         AND COALESCE(o.paid_at, o.delivered_at, o.created_at) < $2
-       GROUP BY o.id,
-                o.order_number,
-                CASE
-                  WHEN o.status = 'DELIVERED' THEN 'ENTREGADA'
-                  WHEN o.status = 'PAID' THEN 'PAGADA'
-                  ELSE o.status::text
-                END,
-                COALESCE(o.paid_at, o.delivered_at, o.created_at),
-                u.telegram_id,
-                u.telegram_username
+       GROUP BY o.id, COALESCE(o.paid_at, o.delivered_at, o.created_at)
        HAVING COALESCE(
          SUM(
            COALESCE(
@@ -4102,19 +4032,144 @@ router.get("/stats/sales-export.csv", async (req, res, next) => {
          ),
          0
        ) > 0
-       ORDER BY paid_at ASC, o.id ASC`,
-      [rangeStart.toISOString(), rangeEnd.toISOString()]
-    );
+     ) sales`
+  );
 
-    const periodLabel = `${formatDateDmy(rangeStart)} - ${formatDateDmy(
-      new Date(rangeEnd.getTime() - dayMs)
-    )}`;
-    if (!rowsRes.rows.length) {
+  const firstSaleRaw = firstSaleRes.rows[0]?.first_sale_at || null;
+  const firstSaleAt = firstSaleRaw ? new Date(firstSaleRaw) : null;
+  const firstWeekStart = firstSaleAt ? startOfUtcWeek(firstSaleAt) : currentWeekStart;
+  const firstMonthStart = firstSaleAt
+    ? new Date(Date.UTC(firstSaleAt.getUTCFullYear(), firstSaleAt.getUTCMonth(), 1))
+    : currentMonthStart;
+
+  const monthMaxOffset = Math.max(monthDiff(currentMonthStart, firstMonthStart), 0);
+  const weekMaxOffset = Math.max(
+    Math.floor((currentWeekStart.getTime() - firstWeekStart.getTime()) / weekMs),
+    0
+  );
+
+  const monthOffset = clampOffset(query?.month_offset, monthMaxOffset);
+  const weekOffset = clampOffset(query?.week_offset, weekMaxOffset);
+
+  let rangeStart;
+  let rangeEnd;
+  if (period === "week") {
+    rangeStart = new Date(currentWeekStart.getTime() - weekOffset * weekMs);
+    rangeEnd = new Date(rangeStart.getTime() + weekMs);
+  } else {
+    rangeStart = addUtcMonths(currentMonthStart, -monthOffset);
+    rangeEnd = addUtcMonths(rangeStart, 1);
+  }
+
+  const rowsRes = await pool.query(
+    `SELECT o.id,
+            o.order_number,
+            CASE
+              WHEN o.status = 'DELIVERED' THEN 'ENTREGADA'
+              WHEN o.status = 'PAID' THEN 'PAGADA'
+              ELSE o.status::text
+            END AS status_label,
+            COALESCE(o.paid_at, o.delivered_at, o.created_at) AS paid_at,
+            u.telegram_id,
+            u.telegram_username,
+            COALESCE(SUM(COALESCE(oi.qty, 1)), 0)::int AS sold_units,
+            COALESCE(
+              SUM(
+                COALESCE(
+                  oi.line_total_usd,
+                  COALESCE(oi.unit_price_usd, p.price, 0) * COALESCE(oi.qty, 1)
+                )
+              ),
+              0
+            )::numeric AS revenue_usd,
+            COALESCE(
+              string_agg(
+                CASE
+                  WHEN COALESCE(oi.qty, 1) > 1
+                    THEN COALESCE(p.name, 'Producto') || ' x' || COALESCE(oi.qty, 1)::text
+                  ELSE COALESCE(p.name, 'Producto')
+                END,
+                ' | '
+                ORDER BY COALESCE(p.name, 'Producto')
+              ),
+              ''
+            ) AS products
+     FROM orders o
+     JOIN order_items oi ON oi.order_id = o.id
+     LEFT JOIN products p ON p.id = oi.product_id
+     LEFT JOIN users u ON u.id = o.user_id
+     WHERE o.status IN ('PAID', 'DELIVERED')
+       AND o.free_order_number IS NULL
+       AND COALESCE(o.paid_at, o.delivered_at, o.created_at) >= $1
+       AND COALESCE(o.paid_at, o.delivered_at, o.created_at) < $2
+     GROUP BY o.id,
+              o.order_number,
+              CASE
+                WHEN o.status = 'DELIVERED' THEN 'ENTREGADA'
+                WHEN o.status = 'PAID' THEN 'PAGADA'
+                ELSE o.status::text
+              END,
+              COALESCE(o.paid_at, o.delivered_at, o.created_at),
+              u.telegram_id,
+              u.telegram_username
+     HAVING COALESCE(
+       SUM(
+         COALESCE(
+           oi.line_total_usd,
+           COALESCE(oi.unit_price_usd, p.price, 0) * COALESCE(oi.qty, 1)
+         )
+       ),
+       0
+     ) > 0
+     ORDER BY paid_at ASC, o.id ASC`,
+    [rangeStart.toISOString(), rangeEnd.toISOString()]
+  );
+
+  const normalizedRows = rowsRes.rows.map((row) => {
+    const revenueUsd = Number(row.revenue_usd || 0);
+    return {
+      periodo: `${formatDateDmy(rangeStart)} - ${formatDateDmy(new Date(rangeEnd.getTime() - dayMs))}`,
+      fecha: formatDateDmy(row.paid_at),
+      referencia: row.order_number != null ? String(row.order_number).padStart(5, "0") : "",
+      order_id: row.id,
+      estado: row.status_label,
+      telegram_id: row.telegram_id || "",
+      username: row.telegram_username || "",
+      ventas: Number(row.sold_units || 0),
+      ingreso_usd: revenueUsd.toFixed(2),
+      productos: row.products || "",
+      _revenue_numeric: revenueUsd,
+    };
+  });
+
+  return {
+    period,
+    rangeStart,
+    rangeEnd,
+    rows: normalizedRows,
+    startDate: toIsoDate(rangeStart),
+    endDate: toIsoDate(new Date(rangeEnd.getTime() - dayMs)),
+  };
+}
+
+router.get("/stats/sales-export.csv", async (req, res, next) => {
+  const pool = getPool();
+  const csvCell = (value) => {
+    const text = String(value ?? "");
+    if (text.includes('"') || text.includes(",") || text.includes("\n")) {
+      return `"${text.replace(/"/g, '""')}"`;
+    }
+    return text;
+  };
+
+  try {
+    const exportData = await buildSalesExportRows(pool, req.query || {});
+    if (!exportData.rows.length) {
       return res.status(404).json({
         error: "NO_SALES_FOR_PERIOD",
-        period,
-        start_date: toIsoDate(rangeStart),
-        end_date: toIsoDate(new Date(rangeEnd.getTime() - dayMs)),
+        period: exportData.period,
+        start_date: exportData.startDate,
+        end_date: exportData.endDate,
       });
     }
 
@@ -4133,25 +4188,22 @@ router.get("/stats/sales-export.csv", async (req, res, next) => {
     const lines = [header.map(csvCell).join(",")];
     let totalRevenue = 0;
 
-    for (const row of rowsRes.rows) {
-      const reference = row.order_number != null
-        ? String(row.order_number).padStart(5, "0")
-        : "";
-      const revenueUsd = Number(row.revenue_usd || 0);
-      totalRevenue += revenueUsd;
-      const csvRow = [
-        periodLabel,
-        formatDateDmy(row.paid_at),
-        reference,
-        row.id,
-        row.status_label,
-        row.telegram_id || "",
-        row.telegram_username || "",
-        Number(row.sold_units || 0),
-        revenueUsd.toFixed(2),
-        row.products || "",
-      ];
-      lines.push(csvRow.map(csvCell).join(","));
+    for (const row of exportData.rows) {
+      totalRevenue += Number(row._revenue_numeric || 0);
+      lines.push(
+        [
+          row.periodo,
+          row.fecha,
+          row.referencia,
+          row.order_id,
+          row.estado,
+          row.telegram_id,
+          row.username,
+          row.ventas,
+          row.ingreso_usd,
+          row.productos,
+        ].map(csvCell).join(",")
+      );
     }
 
     lines.push(
@@ -4169,14 +4221,78 @@ router.get("/stats/sales-export.csv", async (req, res, next) => {
       ].map(csvCell).join(",")
     );
 
-    const filenamePeriod = period === "week" ? "semana" : "mes";
-    const filenameDate = toIsoDate(rangeStart);
-    const filename = `ganancias-${filenamePeriod}-${filenameDate}.csv`;
+    const filenamePeriod = exportData.period === "week" ? "semana" : "mes";
+    const filename = `ganancias-${filenamePeriod}-${exportData.startDate}.csv`;
     const csv = `\ufeff${lines.join("\n")}`;
 
     res.setHeader("Content-Type", "text/csv; charset=utf-8");
     res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
     return res.send(csv);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/stats/sales-export.xlsx", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const exportData = await buildSalesExportRows(pool, req.query || {});
+    if (!exportData.rows.length) {
+      return res.status(404).json({
+        error: "NO_SALES_FOR_PERIOD",
+        period: exportData.period,
+        start_date: exportData.startDate,
+        end_date: exportData.endDate,
+      });
+    }
+
+    const rows = [
+      [
+        "periodo",
+        "fecha",
+        "referencia",
+        "order_id",
+        "estado",
+        "telegram_id",
+        "username",
+        "ventas",
+        "ingreso_usd",
+        "productos",
+      ],
+    ];
+
+    let totalRevenue = 0;
+    for (const row of exportData.rows) {
+      totalRevenue += Number(row._revenue_numeric || 0);
+      rows.push([
+        row.periodo,
+        row.fecha,
+        row.referencia,
+        row.order_id,
+        row.estado,
+        row.telegram_id,
+        row.username,
+        row.ventas,
+        Number(row.ingreso_usd),
+        row.productos,
+      ]);
+    }
+
+    rows.push(["TOTAL GANANCIAS", "", "", "", "", "", "", "", Number(totalRevenue.toFixed(2)), ""]);
+
+    const workbook = XLSX.utils.book_new();
+    const worksheet = XLSX.utils.aoa_to_sheet(rows);
+    XLSX.utils.book_append_sheet(workbook, worksheet, "Ganancias");
+    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+
+    const filenamePeriod = exportData.period === "week" ? "semana" : "mes";
+    const filename = `ganancias-${filenamePeriod}-${exportData.startDate}.xlsx`;
+    res.setHeader(
+      "Content-Type",
+      "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet"
+    );
+    res.setHeader("Content-Disposition", `attachment; filename="${filename}"`);
+    return res.send(buffer);
   } catch (error) {
     return next(error);
   }
