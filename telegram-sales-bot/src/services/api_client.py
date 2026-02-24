@@ -3,6 +3,7 @@ from typing import Any, Dict, Optional
 import asyncio
 import inspect
 import time
+import re
 from functools import wraps
 
 import httpx
@@ -308,6 +309,73 @@ class ApiClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def admin_get_sales_insights(
+        self,
+        month_offset: int = 0,
+        week_offset: int = 0,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/stats/sales-insights"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"month_offset": month_offset, "week_offset": week_offset},
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_top_products_month(
+        self,
+        limit: int = 5,
+        month_offset: int = 0,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/stats/top-products-month"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"limit": limit, "month_offset": month_offset},
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_download_sales_export_csv(
+        self,
+        period: str,
+        month_offset: int = 0,
+        week_offset: int = 0,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/stats/sales-export.csv"
+        normalized_period = "week" if str(period).lower() == "week" else "month"
+        response = await self._request(
+            "GET",
+            url,
+            params={
+                "period": normalized_period,
+                "month_offset": month_offset,
+                "week_offset": week_offset,
+            },
+            headers=self._headers(),
+            timeout=30,
+        )
+        if response.status_code in (404, 409):
+            try:
+                data = response.json()
+            except ValueError:
+                data = {}
+            return {"status_code": response.status_code, "data": data}
+        response.raise_for_status()
+        disposition = response.headers.get("content-disposition") or ""
+        filename_match = re.search(r'filename="([^"]+)"', disposition)
+        filename = (
+            filename_match.group(1)
+            if filename_match
+            else f"ganancias-{normalized_period}.csv"
+        )
+        return {"status_code": response.status_code, "filename": filename, "content": response.content}
 
     async def admin_create_product(self, payload: Dict[str, Any]) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/products"

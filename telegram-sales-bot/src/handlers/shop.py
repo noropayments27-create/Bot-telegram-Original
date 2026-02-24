@@ -3097,7 +3097,20 @@ def format_receipt(order: Dict[str, Any], locale: str | None = None) -> str:
     paid_at = order.get("paid_at") or order.get("created_at")
     paid_at_text = paid_at
     if isinstance(paid_at, datetime):
-        paid_at_text = paid_at.isoformat()
+        paid_at_text = paid_at.strftime("%d/%m/%Y")
+    elif isinstance(paid_at, str):
+        raw = paid_at.strip()
+        iso_candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            parsed = datetime.fromisoformat(iso_candidate)
+            paid_at_text = parsed.strftime("%d/%m/%Y")
+        except ValueError:
+            match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", raw)
+            if match:
+                year, month, day = match.groups()
+                paid_at_text = f"{day}/{month}/{year}"
+            else:
+                paid_at_text = raw
     total_text = "0 USD"
     try:
         numeric_total = float(total or 0)

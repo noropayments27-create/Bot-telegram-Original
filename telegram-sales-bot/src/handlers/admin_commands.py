@@ -10,7 +10,13 @@ from aiogram.exceptions import TelegramBadRequest
 from aiogram.filters import Command
 from aiogram.fsm.context import FSMContext
 from aiogram.fsm.state import State, StatesGroup
-from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
+from aiogram.types import (
+    BufferedInputFile,
+    CallbackQuery,
+    InlineKeyboardButton,
+    InlineKeyboardMarkup,
+    Message,
+)
 
 from ..config import (
     ADMIN_API_KEY,
@@ -203,11 +209,72 @@ def _safe_int(value: str, default: int, minimum: int, maximum: int) -> int:
 def _fmt_dt(value: Any) -> str:
     if not value:
         return "-"
-    if isinstance(value, str):
-        return value.replace("T", " ")[:19]
+    parsed: datetime | None = None
     if isinstance(value, datetime):
-        return value.isoformat(sep=" ", timespec="seconds")
-    return str(value)
+        parsed = value
+    elif isinstance(value, str):
+        raw = value.strip()
+        if not raw:
+            return "-"
+        iso_candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+        try:
+            parsed = datetime.fromisoformat(iso_candidate)
+        except ValueError:
+            pass
+        if not parsed:
+            match = re.match(r"^(\d{4})-(\d{2})-(\d{2})", raw)
+            if match:
+                year, month, day = match.groups()
+                return f"{day}/{month}/{year}"
+            return raw
+    if not parsed:
+        return str(value)
+    return parsed.strftime("%d/%m/%Y")
+
+
+def _safe_offset(value: Any, default: int = 0, minimum: int = 0, maximum: int = 5200) -> int:
+    try:
+        parsed = int(value)
+    except (TypeError, ValueError):
+        return default
+    return max(min(parsed, maximum), minimum)
+
+
+def _format_month_year_label(date_value: Any, locale: str | None = "es") -> str:
+    raw = str(date_value or "").strip()
+    if not raw:
+        return "-"
+    iso_candidate = raw[:-1] + "+00:00" if raw.endswith("Z") else raw
+    parsed: datetime | None = None
+    try:
+        parsed = datetime.fromisoformat(iso_candidate)
+    except ValueError:
+        match = re.match(r"^(\d{4})-(\d{2})", raw)
+        if match:
+            parsed = datetime(int(match.group(1)), int(match.group(2)), 1)
+    if not parsed:
+        return _fmt_dt(raw)
+    if _is_en(locale):
+        return parsed.strftime("%B %Y")
+    month_names = [
+        "Enero",
+        "Febrero",
+        "Marzo",
+        "Abril",
+        "Mayo",
+        "Junio",
+        "Julio",
+        "Agosto",
+        "Septiembre",
+        "Octubre",
+        "Noviembre",
+        "Diciembre",
+    ]
+    return f"{month_names[parsed.month - 1]} del {parsed.year}"
+
+
+def _format_date_range(start_date: Any, end_date: Any) -> str:
+    return f"{_fmt_dt(start_date)} - {_fmt_dt(end_date)}"
 
 
 def _escape_html(value: Any) -> str:
@@ -766,6 +833,16 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                 InlineKeyboardButton(
                     text=_tr(locale, "📊 Estado", "📊 Status"),
                     callback_data="adminui:status",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💰 Ganancias", "💰 Earnings"),
+                    callback_data="adminui:earnings:0:0",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🏆 Top vendidos", "🏆 Top products"),
+                    callback_data="adminui:topsales:0",
                 ),
                 InlineKeyboardButton(
                     text=_tr(locale, "❓ Ayuda", "❓ Help"),
@@ -1560,6 +1637,256 @@ async def _build_logs_text(category: str, limit: int, locale: str | None = "es")
     return "\n".join(lines)
 
 
+def _build_earnings_keyboard(
+    month_offset: int,
+    week_offset: int,
+    payload: Dict[str, Any],
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    month_data = payload.get("month") if isinstance(payload, dict) else {}
+    week_data = payload.get("week") if isinstance(payload, dict) else {}
+    month_data = month_data if isinstance(month_data, dict) else {}
+    week_data = week_data if isinstance(week_data, dict) else {}
+
+    current_month_offset = _safe_offset(month_data.get("offset"), month_offset)
+    current_week_offset = _safe_offset(week_data.get("offset"), week_offset)
+
+    month_older_offset = current_month_offset + 1 if month_data.get("has_older") else current_month_offset
+    month_newer_offset = current_month_offset - 1 if month_data.get("has_newer") else current_month_offset
+    week_older_offset = current_week_offset + 1 if week_data.get("has_older") else current_week_offset
+    week_newer_offset = current_week_offset - 1 if week_data.get("has_newer") else current_week_offset
+
+    month_older_text = _tr(locale, "⬅️ Mes", "⬅️ Month")
+    month_newer_text = _tr(locale, "Mes ➡️", "Month ➡️")
+    week_older_text = _tr(locale, "⬅️ Semana", "⬅️ Week")
+    week_newer_text = _tr(locale, "Semana ➡️", "Week ➡️")
+
+    if not month_data.get("has_older"):
+        month_older_text = _tr(locale, "⛔ Inicio", "⛔ Start")
+    if not month_data.get("has_newer"):
+        month_newer_text = _tr(locale, "⛔ Actual", "⛔ Current")
+    if not week_data.get("has_older"):
+        week_older_text = _tr(locale, "⛔ Inicio", "⛔ Start")
+    if not week_data.get("has_newer"):
+        week_newer_text = _tr(locale, "⛔ Actual", "⛔ Current")
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=month_older_text,
+                    callback_data=f"adminui:earnings:{month_older_offset}:{current_week_offset}",
+                ),
+                InlineKeyboardButton(
+                    text=month_newer_text,
+                    callback_data=f"adminui:earnings:{month_newer_offset}:{current_week_offset}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=week_older_text,
+                    callback_data=f"adminui:earnings:{current_month_offset}:{week_older_offset}",
+                ),
+                InlineKeyboardButton(
+                    text=week_newer_text,
+                    callback_data=f"adminui:earnings:{current_month_offset}:{week_newer_offset}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬇️ Descargar CSV", "⬇️ Download CSV"),
+                    callback_data=f"adminui:earncsv:pick:{current_month_offset}:{current_week_offset}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
+
+
+def _build_earnings_csv_picker_keyboard(
+    month_offset: int,
+    week_offset: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬇️ CSV Mes", "⬇️ CSV Month"),
+                    callback_data=f"adminui:earncsv:month:{month_offset}:{week_offset}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬇️ CSV Semana", "⬇️ CSV Week"),
+                    callback_data=f"adminui:earncsv:week:{month_offset}:{week_offset}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Ganancias", "⬅️ Earnings"),
+                    callback_data=f"adminui:earnings:{month_offset}:{week_offset}",
+                ),
+            ],
+        ]
+    )
+
+
+async def _build_sales_insights_view(
+    month_offset: int,
+    week_offset: int,
+    locale: str | None = "es",
+) -> tuple[str, InlineKeyboardMarkup]:
+    data = await api_client.admin_get_sales_insights(
+        month_offset=month_offset,
+        week_offset=week_offset,
+    )
+    month = data.get("month") or {}
+    week = data.get("week") or {}
+    best_day = data.get("best_day") or {}
+
+    month_label = _format_month_year_label(month.get("start_date"), locale)
+    month_range = _format_date_range(month.get("start_date"), month.get("end_date"))
+    week_range = _format_date_range(week.get("start_date"), week.get("end_date"))
+    best_day_date = _fmt_dt(best_day.get("date"))
+    best_day_earnings = _fmt_amount(best_day.get("earnings_usd"))
+
+    text = _tr(
+        locale,
+        "💰 <b>Ganancias</b>\n\n"
+        f"• Hoy: ${_fmt_amount(data.get('today_earnings_usd'))}\n"
+        "────────────────────\n"
+        f"🗓 {_escape_html(month_label)}\n\n"
+        f"• Rango: {_escape_html(month_range)}\n"
+        f"• Ganancia: ${_fmt_amount(month.get('earnings_usd'))}\n"
+        "────────────────────\n"
+        "📆 Semana seleccionada:\n\n"
+        f"• Rango: {_escape_html(week_range)}\n"
+        f"• Ganancia: ${_fmt_amount(week.get('earnings_usd'))}\n"
+        "────────────────────\n"
+        "📈 Mejor día histórico\n\n"
+        f"• Fecha: {_escape_html(best_day_date)}\n"
+        f"• Ganancia: ${best_day_earnings}",
+        "💰 <b>Earnings</b>\n\n"
+        f"• Today: ${_fmt_amount(data.get('today_earnings_usd'))}\n"
+        "────────────────────\n"
+        f"🗓 {_escape_html(month_label)}\n\n"
+        f"• Range: {_escape_html(month_range)}\n"
+        f"• Earnings: ${_fmt_amount(month.get('earnings_usd'))}\n"
+        "────────────────────\n"
+        "📆 Selected week:\n\n"
+        f"• Range: {_escape_html(week_range)}\n"
+        f"• Earnings: ${_fmt_amount(week.get('earnings_usd'))}\n"
+        "────────────────────\n"
+        "📈 Best day ever\n\n"
+        f"• Date: {_escape_html(best_day_date)}\n"
+        f"• Earnings: ${best_day_earnings}",
+    )
+    keyboard = _build_earnings_keyboard(month_offset, week_offset, data, locale)
+    return text, keyboard
+
+
+def _build_top_sales_keyboard(
+    month_offset: int,
+    payload: Dict[str, Any],
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    current_offset = _safe_offset(payload.get("month_offset"), month_offset)
+    max_offset = _safe_offset(payload.get("month_max_offset"), 0)
+
+    has_older = current_offset < max_offset
+    has_newer = current_offset > 0
+
+    older_offset = current_offset + 1 if has_older else current_offset
+    newer_offset = current_offset - 1 if has_newer else current_offset
+
+    older_text = _tr(locale, "⬅️ Mes", "⬅️ Month") if has_older else _tr(locale, "⛔ Inicio", "⛔ Start")
+    newer_text = _tr(locale, "Mes ➡️", "Month ➡️") if has_newer else _tr(locale, "⛔ Actual", "⛔ Current")
+
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=older_text,
+                    callback_data=f"adminui:topsales:{older_offset}",
+                ),
+                InlineKeyboardButton(
+                    text=newer_text,
+                    callback_data=f"adminui:topsales:{newer_offset}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
+
+
+async def _build_top_products_month_view(
+    limit: int,
+    month_offset: int,
+    locale: str | None = "es",
+) -> tuple[str, InlineKeyboardMarkup]:
+    data = await api_client.admin_get_top_products_month(limit=limit, month_offset=month_offset)
+    items = data.get("items") or []
+    month_title = _format_month_year_label(data.get("month_start_date"), locale)
+    month_line = _tr(
+        locale,
+        f"Mes: {month_title}",
+        f"Month: {month_title}",
+    )
+    keyboard = _build_top_sales_keyboard(month_offset, data, locale)
+
+    if not items:
+        return _tr(
+            locale,
+            "🏆 <b>Top productos del mes</b>\n"
+            f"{_escape_html(month_line)}\n"
+            "────────────────────\n"
+            "No hay ventas registradas todavía en este mes.",
+            "🏆 <b>Top products this month</b>\n"
+            f"{_escape_html(month_line)}\n"
+            "────────────────────\n"
+            "No recorded sales yet this month.",
+        ), keyboard
+
+    lines = [
+        _tr(
+            locale,
+            f"🏆 <b>Top {limit} productos del mes</b>\n\n"
+            f"{_escape_html(month_line)}\n"
+            "────────────────────",
+            f"🏆 <b>Top {limit} products this month</b>\n\n"
+            f"{_escape_html(month_line)}\n"
+            "────────────────────",
+        )
+    ]
+
+    for index, item in enumerate(items, start=1):
+        name = _escape_html(item.get("name") or "-")
+        sold_count = int(item.get("sold_count") or 0)
+        revenue = _fmt_amount(item.get("revenue_usd"))
+        lines.append(
+            _tr(
+                locale,
+                f"{index}. <b>{name}</b>\n"
+                f"   • Ventas: {sold_count} · Ingreso: ${revenue}",
+                f"{index}. <b>{name}</b>\n"
+                f"   • Sales: {sold_count} · Revenue: ${revenue}",
+            )
+        )
+        if index < len(items):
+            lines.append("────────────────────")
+
+    return "\n".join(lines), keyboard
+
+
 async def _build_product_delete_view(
     category_key: str,
     header: str | None = None,
@@ -2157,6 +2484,145 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 callback.message,
                 await _fetch_status_text(locale),
                 reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
+        if action == "earnings":
+            await state.clear()
+            requested_month_offset = _safe_offset(parts[2] if len(parts) > 2 else 0)
+            requested_week_offset = _safe_offset(parts[3] if len(parts) > 3 else 0)
+            earnings_text, earnings_keyboard = await _build_sales_insights_view(
+                month_offset=requested_month_offset,
+                week_offset=requested_week_offset,
+                locale=locale,
+            )
+            await _edit_panel_message(
+                callback.message,
+                earnings_text,
+                reply_markup=earnings_keyboard,
+            )
+            return
+
+        if action == "earncsv":
+            await state.clear()
+            mode = str(parts[2] if len(parts) > 2 else "pick").lower()
+            month_offset = _safe_offset(parts[3] if len(parts) > 3 else 0)
+            week_offset = _safe_offset(parts[4] if len(parts) > 4 else 0)
+
+            if mode == "pick":
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "⬇️ <b>Descargar ganancias</b>\n\nSelecciona el período del CSV:",
+                        "⬇️ <b>Download earnings</b>\n\nSelect CSV period:",
+                    ),
+                    reply_markup=_build_earnings_csv_picker_keyboard(
+                        month_offset,
+                        week_offset,
+                        locale,
+                    ),
+                )
+                return
+
+            if mode in {"month", "week"}:
+                csv_result = await api_client.admin_download_sales_export_csv(
+                    period=mode,
+                    month_offset=month_offset,
+                    week_offset=week_offset,
+                )
+                status_code = int(csv_result.get("status_code") or 200)
+                if status_code >= 400:
+                    payload = csv_result.get("data") or {}
+                    error_code = str(payload.get("error") or "").upper()
+                    if error_code == "NO_SALES_FOR_PERIOD":
+                        start_text = _fmt_dt(payload.get("start_date"))
+                        end_text = _fmt_dt(payload.get("end_date"))
+                        period_title = _tr(
+                            locale,
+                            "mes" if mode == "month" else "semana",
+                            "month" if mode == "month" else "week",
+                        )
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "ℹ️ <b>Aún no hay ventas</b> para descargar en el "
+                                f"<b>{period_title}</b> seleccionado.\n\n"
+                                f"Rango: <b>{_escape_html(start_text)} - {_escape_html(end_text)}</b>",
+                                "ℹ️ <b>There are no sales yet</b> to download for the selected "
+                                f"<b>{period_title}</b>.\n\n"
+                                f"Range: <b>{_escape_html(start_text)} - {_escape_html(end_text)}</b>",
+                            ),
+                            reply_markup=_build_earnings_csv_picker_keyboard(
+                                month_offset,
+                                week_offset,
+                                locale,
+                            ),
+                        )
+                        return
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(
+                            locale,
+                            "❌ <b>No se pudo generar el CSV.</b>",
+                            "❌ <b>Could not generate the CSV.</b>",
+                        ),
+                        reply_markup=_build_earnings_csv_picker_keyboard(
+                            month_offset,
+                            week_offset,
+                            locale,
+                        ),
+                    )
+                    return
+                content = csv_result.get("content") or b""
+                if isinstance(content, str):
+                    content = content.encode("utf-8")
+                filename = str(csv_result.get("filename") or f"ganancias-{mode}.csv")
+                document = BufferedInputFile(content, filename=filename)
+                await callback.message.answer_document(
+                    document=document,
+                    caption=_tr(
+                        locale,
+                        "✅ CSV generado correctamente.",
+                        "✅ CSV generated successfully.",
+                    ),
+                )
+                earnings_text, earnings_keyboard = await _build_sales_insights_view(
+                    month_offset=month_offset,
+                    week_offset=week_offset,
+                    locale=locale,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    earnings_text,
+                    reply_markup=earnings_keyboard,
+                )
+                return
+
+            await _edit_panel_message(
+                callback.message,
+                _tr(
+                    locale,
+                    "⚠️ Acción de CSV inválida.",
+                    "⚠️ Invalid CSV action.",
+                ),
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
+        if action == "topsales":
+            await state.clear()
+            requested_month_offset = _safe_offset(parts[2] if len(parts) > 2 else 0)
+            top_text, top_keyboard = await _build_top_products_month_view(
+                limit=5,
+                month_offset=requested_month_offset,
+                locale=locale,
+            )
+            await _edit_panel_message(
+                callback.message,
+                top_text,
+                reply_markup=top_keyboard,
             )
             return
 
