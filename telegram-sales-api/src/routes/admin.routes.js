@@ -4136,7 +4136,7 @@ async function buildSalesExportRows(pool, query = {}) {
       telegram_id: row.telegram_id || "",
       username: row.telegram_username || "",
       ventas: Number(row.sold_units || 0),
-      ingreso_usd: revenueUsd.toFixed(2),
+      ingreso_usd: `$${revenueUsd.toFixed(2)}`,
       productos: row.products || "",
       _revenue_numeric: revenueUsd,
     };
@@ -4216,7 +4216,7 @@ router.get("/stats/sales-export.csv", async (req, res, next) => {
         "",
         "",
         "",
-        totalRevenue.toFixed(2),
+        `$${totalRevenue.toFixed(2)}`,
         "",
       ].map(csvCell).join(",")
     );
@@ -4273,12 +4273,12 @@ router.get("/stats/sales-export.xlsx", async (req, res, next) => {
         row.telegram_id,
         row.username,
         row.ventas,
-        Number(row.ingreso_usd),
+        row.ingreso_usd,
         row.productos,
       ]);
     }
 
-    rows.push(["TOTAL GANANCIAS", "", "", "", "", "", "", "", Number(totalRevenue.toFixed(2)), ""]);
+    rows.push(["TOTAL GANANCIAS", "", "", "", "", "", "", "", `$${totalRevenue.toFixed(2)}`, ""]);
 
     const workbook = XLSX.utils.book_new();
     const worksheet = XLSX.utils.aoa_to_sheet(rows);
