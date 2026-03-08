@@ -52,6 +52,18 @@ async function verifyAgainstEnv(providedUsername, providedPassword) {
   };
 }
 
+async function resolveEnvPasswordHash() {
+  const expectedPasswordHash = String(process.env.ADMIN_PASSWORD_HASH || "").trim();
+  if (expectedPasswordHash) {
+    return expectedPasswordHash;
+  }
+  const expectedPasswordPlain = String(process.env.ADMIN_PASSWORD || "").trim();
+  if (!expectedPasswordPlain) {
+    return "";
+  }
+  return bcrypt.hash(expectedPasswordPlain, 10);
+}
+
 async function ensureAdminCredentialsSchema(pool) {
   if (adminCredentialsSchemaReady) {
     return;
@@ -213,11 +225,49 @@ async function validateAdminStartCredentials(pool, username, password) {
   const account = await getAdminAccountByUsername(pool, username);
   if (account) {
     const ok = await verifyPasswordHash(password, account.password_hash);
+    if (ok) {
+      return {
+        configured: true,
+        ok,
+        source: "db",
+        admin: account,
+      };
+    }
+
+    const envResult = await verifyAgainstEnv(username, password);
+    if (envResult.configured && envResult.ok) {
+      const envHash = await resolveEnvPasswordHash();
+      if (envHash && envHash !== String(account.password_hash || "").trim()) {
+        const syncRes = await pool.query(
+          `UPDATE admin_accounts
+           SET password_hash = $2,
+               auth_version = COALESCE(auth_version, 1) + 1,
+               updated_at = now()
+           WHERE id = $1
+           RETURNING id, username, password_hash, auth_version, telegram_id, recovery_email, is_active`,
+          [account.id, envHash]
+        );
+        const syncedAccount = syncRes.rows[0] || account;
+        return {
+          configured: true,
+          ok: true,
+          source: "env_db_sync",
+          admin: syncedAccount,
+        };
+      }
+      return {
+        configured: true,
+        ok: true,
+        source: "env",
+        admin: account,
+      };
+    }
+
     return {
       configured: true,
-      ok,
+      ok: false,
       source: "db",
-      admin: ok ? account : null,
+      admin: null,
     };
   }
 
