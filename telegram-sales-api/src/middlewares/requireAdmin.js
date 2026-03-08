@@ -1,6 +1,7 @@
 const { verifyAdminToken } = require("../services/adminAuth");
+const { getPool } = require("../db");
 
-function requireAdmin(req, res, next) {
+async function requireAdmin(req, res, next) {
   if (req.method === "OPTIONS") {
     return next();
   }
@@ -29,6 +30,37 @@ function requireAdmin(req, res, next) {
 
   const payload = token ? verifyAdminToken(token) : null;
   if (payload) {
+    if (payload.sub !== "admin") {
+      return res.status(401).json({ error: "UNAUTHORIZED" });
+    }
+    if (payload.purpose && payload.purpose !== "SESSION") {
+      return res.status(401).json({ error: "UNAUTHORIZED" });
+    }
+
+    const adminId = String(payload.admin_id || "").trim();
+    const tokenAuthVersion = Number(payload.auth_version);
+    if (adminId && Number.isFinite(tokenAuthVersion)) {
+      try {
+        const pool = getPool();
+        const result = await pool.query(
+          `SELECT auth_version, is_active
+           FROM admin_accounts
+           WHERE id = $1
+           LIMIT 1`,
+          [adminId]
+        );
+        const row = result.rows[0];
+        if (!row || !row.is_active) {
+          return res.status(401).json({ error: "UNAUTHORIZED" });
+        }
+        if (Number(row.auth_version || 1) !== tokenAuthVersion) {
+          return res.status(401).json({ error: "SESSION_EXPIRED" });
+        }
+      } catch (error) {
+        return res.status(401).json({ error: "UNAUTHORIZED" });
+      }
+    }
+
     req.admin = { ...payload, mode: "jwt" };
     return next();
   }

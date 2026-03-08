@@ -10,6 +10,8 @@ import "../styles/responsive.css";
 
 export default function App({ Component, pageProps }) {
   const router = useRouter();
+  const faviconVersion = String(process.env.NEXT_PUBLIC_FAVICON_VERSION || "1");
+  const faviconPngHref = `/favicon-noropayments.png?v=${encodeURIComponent(faviconVersion)}`;
   const useLayout = (
     router.pathname !== "/login"
     && router.pathname !== "/telegram-access"
@@ -88,9 +90,9 @@ export default function App({ Component, pageProps }) {
 
   const faviconHead = (
     <Head>
-      <link rel="icon" type="image/png" href="/favicon-noropayments.png" />
-      <link rel="shortcut icon" href="/favicon-noropayments.png" />
-      <link rel="apple-touch-icon" href="/favicon-noropayments.png" />
+      <link rel="icon" type="image/png" href={faviconPngHref} />
+      <link rel="shortcut icon" type="image/png" href={faviconPngHref} />
+      <link rel="apple-touch-icon" href={faviconPngHref} />
     </Head>
   );
 

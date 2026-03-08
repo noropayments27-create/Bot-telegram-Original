@@ -4,6 +4,27 @@ const path = require("path");
 
 const TELEGRAM_API_BASE = "https://api.telegram.org";
 
+async function throwTelegramApiError(response, fallbackCode) {
+  let description = "";
+  try {
+    const data = await response.json();
+    description = String(data?.description || "").trim();
+  } catch (_error) {
+    try {
+      const raw = await response.text();
+      description = String(raw || "").trim();
+    } catch (_ignored) {
+      description = "";
+    }
+  }
+  const safeDescription = description || `HTTP_${response.status}`;
+  const error = new Error(`${fallbackCode}: ${safeDescription}`);
+  error.code = fallbackCode;
+  error.status = Number(response?.status || 0) || 0;
+  error.description = safeDescription;
+  throw error;
+}
+
 function getToken() {
   const token = process.env.TELEGRAM_BOT_TOKEN;
   if (!token) {
@@ -133,12 +154,17 @@ async function sendMultipart(
   }
 
   if (!response.ok) {
-    throw new Error("TELEGRAM_SEND_FAILED");
+    await throwTelegramApiError(response, "TELEGRAM_SEND_FAILED");
   }
 
   const data = await response.json();
   if (!data.ok) {
-    throw new Error("TELEGRAM_SEND_FAILED");
+    const error = new Error(
+      `TELEGRAM_SEND_FAILED: ${String(data?.description || "UNKNOWN").trim()}`
+    );
+    error.code = "TELEGRAM_SEND_FAILED";
+    error.description = String(data?.description || "").trim();
+    throw error;
   }
 
   return data.result;
@@ -171,11 +197,16 @@ async function sendMedia(telegramId, endpoint, fieldName, payload) {
     });
 
     if (!response.ok) {
-      throw new Error("TELEGRAM_SEND_FAILED");
+      await throwTelegramApiError(response, "TELEGRAM_SEND_FAILED");
     }
     const data = await response.json();
     if (!data.ok) {
-      throw new Error("TELEGRAM_SEND_FAILED");
+      const error = new Error(
+        `TELEGRAM_SEND_FAILED: ${String(data?.description || "UNKNOWN").trim()}`
+      );
+      error.code = "TELEGRAM_SEND_FAILED";
+      error.description = String(data?.description || "").trim();
+      throw error;
     }
     return data.result;
   }

@@ -1,7 +1,11 @@
 const express = require("express");
 const fs = require("fs/promises");
 const path = require("path");
+const net = require("net");
+const { execFile } = require("child_process");
+const { promisify } = require("util");
 const XLSX = require("xlsx");
+const bcrypt = require("bcryptjs");
 const { getPool } = require("../db");
 const requireAdmin = require("../middlewares/requireAdmin");
 const {
@@ -10,6 +14,7 @@ const {
   setLoginDecision,
   REQUEST_TTL_SECONDS,
   createAdminToken,
+  verifyAdminToken,
 } = require("../services/adminAuth");
 const {
   getFilePath,
@@ -54,7 +59,32 @@ const {
   isFreeOrderRow,
   formatFreeOrderLabel,
 } = require("../services/freeOrders");
-const bcrypt = require("bcryptjs");
+const {
+  validateAdminStartCredentials,
+  validateAdminDirectCredentials,
+  ensureAdminCredentialsSchema,
+} = require("../services/adminCredentials");
+const { sendMail, isMailConfigured } = require("../services/mailer");
+const { buildPasswordRecoveryEmailTemplate } = require("../services/emailTemplates");
+const {
+  isDriveUploadEnabled,
+  uploadBackupFileToDrive,
+} = require("../services/backupDrive");
+const {
+  isTelegramBackupEnabled,
+  uploadBackupFileToTelegram,
+} = require("../services/backupTelegram");
+const execFileAsync = promisify(execFile);
+
+const ADMIN_PASSWORD_RESET_PURPOSE = "RESET_PASSWORD";
+const ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM = "TELEGRAM";
+const ADMIN_PASSWORD_RESET_CHANNEL_EMAIL = "EMAIL";
+const ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS = 5 * 60;
+const ADMIN_PASSWORD_RESET_TOKEN_TTL_SECONDS = 10 * 60;
+const ADMIN_PASSWORD_RESET_MAX_ATTEMPTS = 5;
+const ADMIN_PASSWORD_RESET_START_COOLDOWN_SECONDS = 60;
+const ADMIN_PASSWORD_RESET_START_WINDOW_SECONDS = 60 * 60;
+const ADMIN_PASSWORD_RESET_START_MAX_PER_WINDOW = 6;
 
 let payoutReceiptSchemaReady = false;
 async function ensurePayoutReceiptSchema(pool) {
@@ -68,6 +98,311 @@ async function ensurePayoutReceiptSchema(pool) {
      ADD COLUMN IF NOT EXISTS receipt_mime text`
   );
   payoutReceiptSchemaReady = true;
+}
+
+const API_ROOT_DIR = path.resolve(__dirname, "../..");
+const BACKUP_SCRIPT_PATH = path.join(API_ROOT_DIR, "scripts", "backup_db.sh");
+const BACKUP_RESTORE_SCRIPT_PATH = path.join(API_ROOT_DIR, "scripts", "restore_db.sh");
+const rawBackupRestoreBody = express.raw({
+  type: "application/octet-stream",
+  limit: `${Math.max(
+    Number.parseInt(process.env.BACKUP_RESTORE_MAX_MB || "", 10) || 200,
+    10
+  )}mb`,
+});
+let backupExecutionPromise = null;
+let backupRestorePromise = null;
+let backupLastRunAt = 0;
+
+function getBackupCooldownSeconds() {
+  return Math.max(
+    Number.parseInt(process.env.BACKUP_TRIGGER_COOLDOWN_SECONDS || "", 10) || 120,
+    10
+  );
+}
+
+function getBackupRunTimeoutMs() {
+  return Math.max(
+    Number.parseInt(process.env.BACKUP_RUN_TIMEOUT_MS || "", 10) || 120000,
+    30000
+  );
+}
+
+function getBackupRestoreTimeoutMs() {
+  return Math.max(
+    Number.parseInt(process.env.BACKUP_RESTORE_TIMEOUT_MS || "", 10) || 600000,
+    120000
+  );
+}
+
+function getBackupRestoreMaxBytes() {
+  const configured = Number.parseInt(process.env.BACKUP_RESTORE_MAX_MB || "", 10) || 200;
+  return Math.max(configured, 10) * 1024 * 1024;
+}
+
+function resolveBackupDir() {
+  const raw = String(process.env.BACKUP_DIR || "./backups/postgres").trim();
+  if (!raw) {
+    return path.join(API_ROOT_DIR, "backups", "postgres");
+  }
+  return path.isAbsolute(raw) ? raw : path.resolve(API_ROOT_DIR, raw);
+}
+
+async function readBackupMetadata(filePath) {
+  const stats = await fs.stat(filePath);
+  return {
+    filename: path.basename(filePath),
+    path: filePath,
+    size_bytes: Number(stats.size || 0),
+    created_at: stats.mtime.toISOString(),
+  };
+}
+
+function toPublicBackupMetadata(metadata) {
+  if (!metadata) {
+    return null;
+  }
+  return {
+    filename: metadata.filename || null,
+    size_bytes: Number(metadata.size_bytes || 0),
+    created_at: metadata.created_at || null,
+    drive: metadata.drive || null,
+    telegram: metadata.telegram || null,
+  };
+}
+
+async function getLatestBackupMetadata() {
+  const backupDir = resolveBackupDir();
+  let files = [];
+  try {
+    files = await fs.readdir(backupDir);
+  } catch (error) {
+    if (error?.code === "ENOENT") {
+      return null;
+    }
+    throw error;
+  }
+
+  const gzipFiles = files
+    .filter((name) => name.endsWith(".sql.gz"))
+    .map((name) => path.join(backupDir, name));
+  if (gzipFiles.length === 0) {
+    return null;
+  }
+
+  const withStats = await Promise.all(
+    gzipFiles.map(async (fullPath) => {
+      const stats = await fs.stat(fullPath);
+      return { fullPath, mtimeMs: Number(stats.mtimeMs || 0) };
+    })
+  );
+  withStats.sort((a, b) => b.mtimeMs - a.mtimeMs);
+  return readBackupMetadata(withStats[0].fullPath);
+}
+
+function parseBackupFileFromOutput(stdout = "") {
+  const lines = String(stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const candidate = lines
+    .slice()
+    .reverse()
+    .find((line) => line.endsWith(".sql.gz"));
+  if (!candidate) {
+    return "";
+  }
+  if (path.isAbsolute(candidate)) {
+    return candidate;
+  }
+  return path.resolve(API_ROOT_DIR, candidate);
+}
+
+function sanitizeRestoreFilename(value) {
+  const raw = String(value || "").trim();
+  const base = path.basename(raw).replace(/\s+/g, "_");
+  const cleaned = base.replace(/[^a-zA-Z0-9._-]/g, "");
+  if (!cleaned || !cleaned.toLowerCase().endsWith(".sql.gz")) {
+    return "";
+  }
+  return cleaned;
+}
+
+function parseRestoreMetadataFromOutput(stdout = "") {
+  const lines = String(stdout || "")
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  const preBackupLine = lines.find((line) => line.startsWith("[restore] pre-backup:"));
+  const preBackupPath = preBackupLine
+    ? preBackupLine.replace("[restore] pre-backup:", "").trim()
+    : "";
+  return {
+    pre_backup_path: preBackupPath || null,
+  };
+}
+
+async function runRestoreNow(uploadedFilePath, sourceFilename) {
+  if (backupRestorePromise) {
+    const error = new Error("RESTORE_IN_PROGRESS");
+    error.status = 409;
+    error.payload = { error: "RESTORE_IN_PROGRESS" };
+    throw error;
+  }
+  if (backupExecutionPromise) {
+    const error = new Error("BACKUP_IN_PROGRESS");
+    error.status = 409;
+    error.payload = { error: "BACKUP_IN_PROGRESS" };
+    throw error;
+  }
+
+  const databaseUrl = String(process.env.DATABASE_URL || "").trim();
+  if (!databaseUrl) {
+    const error = new Error("DATABASE_URL is required");
+    error.status = 500;
+    error.payload = { error: "DATABASE_URL_MISSING" };
+    throw error;
+  }
+
+  const backupDir = resolveBackupDir();
+  backupRestorePromise = (async () => {
+    const env = {
+      ...process.env,
+      DATABASE_URL: databaseUrl,
+      BACKUP_DIR: backupDir,
+      FORCE_RESTORE: "true",
+    };
+    const { stdout } = await execFileAsync(
+      "/bin/bash",
+      [BACKUP_RESTORE_SCRIPT_PATH, uploadedFilePath],
+      {
+        cwd: API_ROOT_DIR,
+        env,
+        timeout: getBackupRestoreTimeoutMs(),
+        maxBuffer: 1024 * 1024 * 20,
+      }
+    );
+    const metadata = parseRestoreMetadataFromOutput(stdout);
+    return {
+      source_filename: sourceFilename,
+      source_path: uploadedFilePath,
+      restored_at: new Date().toISOString(),
+      ...metadata,
+    };
+  })().finally(() => {
+    backupRestorePromise = null;
+  });
+
+  return backupRestorePromise;
+}
+
+async function runBackupNow() {
+  if (backupExecutionPromise) {
+    return backupExecutionPromise;
+  }
+  if (backupRestorePromise) {
+    const error = new Error("RESTORE_IN_PROGRESS");
+    error.status = 409;
+    error.payload = { error: "RESTORE_IN_PROGRESS" };
+    throw error;
+  }
+
+  const now = Date.now();
+  const cooldownMs = getBackupCooldownSeconds() * 1000;
+  if (backupLastRunAt > 0 && now - backupLastRunAt < cooldownMs) {
+    const retryIn = Math.max(Math.ceil((cooldownMs - (now - backupLastRunAt)) / 1000), 1);
+    const error = new Error("BACKUP_COOLDOWN");
+    error.status = 429;
+    error.payload = { error: "BACKUP_COOLDOWN", retry_in: retryIn };
+    throw error;
+  }
+
+  const databaseUrl = String(process.env.DATABASE_URL || "").trim();
+  if (!databaseUrl) {
+    const error = new Error("DATABASE_URL is required");
+    error.status = 500;
+    error.payload = { error: "DATABASE_URL_MISSING" };
+    throw error;
+  }
+
+  const backupDir = resolveBackupDir();
+  backupExecutionPromise = (async () => {
+    await fs.mkdir(backupDir, { recursive: true });
+    const env = {
+      ...process.env,
+      DATABASE_URL: databaseUrl,
+      BACKUP_DIR: backupDir,
+    };
+    const { stdout } = await execFileAsync("/bin/bash", [BACKUP_SCRIPT_PATH], {
+      cwd: API_ROOT_DIR,
+      env,
+      timeout: getBackupRunTimeoutMs(),
+      maxBuffer: 1024 * 1024 * 5,
+    });
+    const outputFile = parseBackupFileFromOutput(stdout);
+    let metadata = null;
+    if (outputFile) {
+      metadata = await readBackupMetadata(outputFile);
+    } else {
+      metadata = await getLatestBackupMetadata();
+    }
+    const latest = metadata;
+    if (!latest) {
+      const error = new Error("BACKUP_FILE_NOT_FOUND");
+      error.status = 500;
+      throw error;
+    }
+
+    if (isDriveUploadEnabled()) {
+      try {
+        const uploaded = await uploadBackupFileToDrive(latest.path, {
+          filename: latest.filename,
+        });
+        latest.drive = {
+          uploaded: true,
+          ...uploaded,
+        };
+      } catch (uploadError) {
+        console.error("[backup] drive upload failed", {
+          message: uploadError?.message || String(uploadError),
+        });
+        latest.drive = {
+          uploaded: false,
+          error: uploadError?.message || "DRIVE_UPLOAD_FAILED",
+        };
+      }
+    }
+
+    if (isTelegramBackupEnabled()) {
+      try {
+        const uploaded = await uploadBackupFileToTelegram(latest.path, {
+          filename: latest.filename,
+        });
+        latest.telegram = uploaded;
+      } catch (uploadError) {
+        console.error("[backup] telegram upload failed", {
+          message: uploadError?.message || String(uploadError),
+        });
+        latest.telegram = {
+          uploaded: false,
+          delivered_count: 0,
+          failed_count: 0,
+          error: uploadError?.message || "TELEGRAM_UPLOAD_FAILED",
+        };
+      }
+    }
+
+    return latest;
+  })()
+    .then((metadata) => {
+      backupLastRunAt = Date.now();
+      return metadata;
+    })
+    .finally(() => {
+      backupExecutionPromise = null;
+    });
+
+  return backupExecutionPromise;
 }
 
 const MESSAGES = {
@@ -1227,109 +1562,765 @@ function parseAdminTelegramIds() {
     .map((item) => Number(item));
 }
 
-router.post("/auth/start", async (req, res) => {
-  const { username, password } = req.body || {};
-  const expectedUsername = (process.env.ADMIN_USERNAME || "").trim();
-  const expectedPasswordHash = (process.env.ADMIN_PASSWORD_HASH || "").trim();
-  const expectedPasswordPlain = (process.env.ADMIN_PASSWORD || "").trim();
+function generateNumericOtp(length = 6) {
+  const size = Number(length) > 0 ? Number(length) : 6;
+  const min = 10 ** (size - 1);
+  const max = 10 ** size;
+  return String(Math.floor(Math.random() * (max - min) + min));
+}
 
-  if (!expectedUsername || (!expectedPasswordHash && !expectedPasswordPlain)) {
-    return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
-  }
+function normalizeOtpInput(value) {
+  return String(value || "").replace(/\D/g, "").slice(0, 8);
+}
 
-  const providedUsername = String(username || "").trim();
-  if (providedUsername !== expectedUsername) {
-    console.warn("[admin/auth] invalid username", {
-      provided: providedUsername,
-      expected: expectedUsername,
-    });
-    return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+function normalizeResetChannel(value) {
+  const normalized = String(value || "").trim().toUpperCase();
+  if (normalized === ADMIN_PASSWORD_RESET_CHANNEL_EMAIL) {
+    return ADMIN_PASSWORD_RESET_CHANNEL_EMAIL;
   }
+  if (normalized === ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM) {
+    return ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM;
+  }
+  return "";
+}
 
-  const providedPassword = String(password || "");
-  let passwordOk = false;
-  if (expectedPasswordHash) {
-    passwordOk = await bcrypt.compare(providedPassword, expectedPasswordHash);
-  }
-  if (!passwordOk && expectedPasswordPlain) {
-    passwordOk = providedPassword === expectedPasswordPlain;
-  }
-  if (!passwordOk) {
-    console.warn("[admin/auth] invalid password", {
-      hasHash: Boolean(expectedPasswordHash),
-      hasPlain: Boolean(expectedPasswordPlain),
-      providedLength: providedPassword.length,
-    });
-    return res.status(401).json({ error: "INVALID_CREDENTIALS" });
-  }
-
-  const admins = parseAdminTelegramIds();
-  if (admins.length === 0) {
-    return res.status(500).json({ error: "NO_ADMIN_TELEGRAM_IDS" });
-  }
-
-  const { requestId } = createLoginRequest();
-  const replyMarkup = {
-    inline_keyboard: [
-      [
-        {
-          text: "✅ SÍ",
-          callback_data: `admin_auth:${requestId}:APPROVE`,
-        },
-        {
-          text: "❌ NO",
-          callback_data: `admin_auth:${requestId}:DENY`,
-        },
-      ],
-    ],
+function buildGenericResetStartResponse(channel = "") {
+  const normalized = normalizeResetChannel(channel);
+  return {
+    ok: true,
+    challenge_id: null,
+    channel: normalized || null,
+    delivery_hint: null,
+    expires_in: ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS,
+    generic: true,
+    message:
+      "Si existe una cuenta con ese usuario o correo, enviaremos un codigo por el canal configurado.",
   };
+}
 
-  const notifyAdmins = async () => {
-    await Promise.all(
-      admins.map((adminId) =>
-        sendMessage(
-          adminId,
-          "¿Estas intentando Ingresar en el panel del Bot?",
-          { reply_markup: replyMarkup }
-        ).catch((error) => {
-          console.error("Telegram 2FA notification failed", error);
-        })
-      )
+function maskEmail(email) {
+  const value = String(email || "").trim();
+  if (!value.includes("@")) {
+    return value;
+  }
+  const [local, domain] = value.split("@");
+  const safeLocal = local.length <= 2
+    ? `${local.slice(0, 1)}*`
+    : `${local.slice(0, 2)}${"*".repeat(Math.max(local.length - 2, 1))}`;
+  return `${safeLocal}@${domain}`;
+}
+
+function maskTelegramId(telegramId) {
+  const value = String(telegramId || "").trim();
+  if (!value) {
+    return "";
+  }
+  if (value.length <= 4) {
+    return value;
+  }
+  return `${"*".repeat(value.length - 4)}${value.slice(-4)}`;
+}
+
+function normalizeRecoveryEmail(value) {
+  const raw = String(value || "").trim().toLowerCase();
+  if (!raw) {
+    return null;
+  }
+  if (raw.length > 190) {
+    return null;
+  }
+  if (!/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(raw)) {
+    return null;
+  }
+  return raw;
+}
+
+function normalizeRecoveryTelegramId(value) {
+  const raw = String(value || "").replace(/\D/g, "").trim();
+  if (!raw) {
+    return null;
+  }
+  if (raw.length < 5 || raw.length > 19) {
+    return null;
+  }
+  if (raw.length === 19 && raw > "9223372036854775807") {
+    return null;
+  }
+  return raw;
+}
+
+async function resolveCurrentAdminAccount(pool, reqAdmin = null) {
+  const adminId = String(reqAdmin?.admin_id || "").trim();
+  if (adminId) {
+    const byIdRes = await pool.query(
+      `SELECT id, username, auth_version, telegram_id, recovery_email, is_active
+       FROM admin_accounts
+       WHERE id::text = $1
+         AND is_active = true
+       LIMIT 1`,
+      [adminId]
     );
-  };
+    if (byIdRes.rowCount > 0) {
+      return byIdRes.rows[0];
+    }
+  }
 
-  setImmediate(() => {
-    notifyAdmins().catch((error) => {
-      console.error("Telegram 2FA notification failed", error);
+  const envUsername = String(process.env.ADMIN_USERNAME || "").trim();
+  if (envUsername) {
+    const byUsernameRes = await pool.query(
+      `SELECT id, username, auth_version, telegram_id, recovery_email, is_active
+       FROM admin_accounts
+       WHERE lower(btrim(username)) = lower(btrim($1))
+         AND is_active = true
+       LIMIT 1`,
+      [envUsername]
+    );
+    if (byUsernameRes.rowCount > 0) {
+      return byUsernameRes.rows[0];
+    }
+  }
+
+  const fallbackRes = await pool.query(
+    `SELECT id, username, auth_version, telegram_id, recovery_email, is_active
+     FROM admin_accounts
+     WHERE is_active = true
+     ORDER BY created_at ASC
+     LIMIT 1`
+  );
+  return fallbackRes.rows[0] || null;
+}
+
+function getRequestIp(req) {
+  const forwarded = String(req.headers["x-forwarded-for"] || "")
+    .split(",")
+    .map((item) => item.trim())
+    .filter(Boolean);
+  const candidate = forwarded[0] || String(req.ip || "").trim();
+  return net.isIP(candidate) ? candidate : null;
+}
+
+function getRequestUserAgent(req) {
+  const userAgent = String(req.headers["user-agent"] || "").trim();
+  return userAgent || null;
+}
+
+async function writeAdminAuthAudit(pool, req, action, options = {}) {
+  try {
+    const adminId = options?.adminId || null;
+    const metadata = options?.metadata && typeof options.metadata === "object"
+      ? options.metadata
+      : {};
+    await pool.query(
+      `INSERT INTO admin_audit_logs (admin_id, action, ip, user_agent, metadata)
+       VALUES ($1, $2, $3, $4, $5::jsonb)`,
+      [
+        adminId,
+        String(action || "").trim() || "AUTH_EVENT",
+        getRequestIp(req),
+        getRequestUserAgent(req),
+        JSON.stringify(metadata),
+      ]
+    );
+  } catch (error) {
+    console.warn("[admin/audit] auth audit write failed", {
+      action,
+      error: error?.message || String(error),
     });
-  });
+  }
+}
 
-  return res.json({ request_id: requestId, expires_in: REQUEST_TTL_SECONDS });
+function validateNewAdminPassword(password) {
+  const raw = String(password || "");
+  if (raw.length < 8) {
+    return { ok: false, reason: "PASSWORD_TOO_SHORT" };
+  }
+  if (!/[A-Z]/.test(raw)) {
+    return { ok: false, reason: "PASSWORD_NEEDS_UPPERCASE" };
+  }
+  if (!/[a-z]/.test(raw)) {
+    return { ok: false, reason: "PASSWORD_NEEDS_LOWERCASE" };
+  }
+  if (!/[0-9]/.test(raw)) {
+    return { ok: false, reason: "PASSWORD_NEEDS_NUMBER" };
+  }
+  return { ok: true };
+}
+
+router.post("/auth/start", async (req, res, next) => {
+  const pool = getPool();
+  const { username, password } = req.body || {};
+  const providedUsername = String(username || "").trim();
+  const providedPassword = String(password || "");
+
+  if (!providedUsername || !providedPassword) {
+    return res.status(400).json({ error: "MISSING_CREDENTIALS" });
+  }
+
+  try {
+    const result = await validateAdminStartCredentials(
+      pool,
+      providedUsername,
+      providedPassword
+    );
+    if (!result.configured) {
+      await writeAdminAuthAudit(pool, req, "AUTH_START_FAILED_NOT_CONFIGURED", {
+        metadata: { username: providedUsername || null },
+      });
+      return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
+    }
+    if (!result.ok) {
+      console.warn("[admin/auth] invalid credentials", {
+        username: providedUsername,
+        source: result.source || "unknown",
+      });
+      await writeAdminAuthAudit(pool, req, "AUTH_START_FAILED_INVALID_CREDENTIALS", {
+        metadata: {
+          username: providedUsername || null,
+          source: result.source || "unknown",
+        },
+      });
+      return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+    }
+
+    const admins = parseAdminTelegramIds();
+    if (admins.length === 0) {
+      await writeAdminAuthAudit(pool, req, "AUTH_START_FAILED_NO_ADMIN_TELEGRAM", {
+        adminId: result?.admin?.id || null,
+        metadata: {
+          username: providedUsername || null,
+          source: result.source || "unknown",
+        },
+      });
+      return res.status(500).json({ error: "NO_ADMIN_TELEGRAM_IDS" });
+    }
+
+    const requestClaims = {
+      sub: "admin",
+      mode: "approval",
+      admin_id: result?.admin?.id || null,
+      username: result?.admin?.username || null,
+      auth_version: Number(result?.admin?.auth_version || 1),
+    };
+    const { requestId } = createLoginRequest(requestClaims);
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          {
+            text: "✅ SÍ",
+            callback_data: `admin_auth:${requestId}:APPROVE`,
+          },
+          {
+            text: "❌ NO",
+            callback_data: `admin_auth:${requestId}:DENY`,
+          },
+        ],
+      ],
+    };
+
+    const notifyAdmins = async () => {
+      await Promise.all(
+        admins.map((adminId) =>
+          sendMessage(
+            adminId,
+            "¿Estas intentando Ingresar en el panel del Bot?",
+            { reply_markup: replyMarkup }
+          ).catch((error) => {
+            console.error("Telegram 2FA notification failed", error);
+          })
+        )
+      );
+    };
+
+    setImmediate(() => {
+      notifyAdmins().catch((error) => {
+        console.error("Telegram 2FA notification failed", error);
+      });
+    });
+
+    await writeAdminAuthAudit(pool, req, "AUTH_START_REQUEST_CREATED", {
+      adminId: result?.admin?.id || null,
+      metadata: {
+        username: providedUsername || null,
+        source: result.source || "unknown",
+        request_id: requestId,
+      },
+    });
+
+    return res.json({ request_id: requestId, expires_in: REQUEST_TTL_SECONDS });
+  } catch (error) {
+    return next(error);
+  }
 });
 
-router.post("/auth/direct", async (req, res) => {
+router.post("/auth/direct", async (req, res, next) => {
+  const pool = getPool();
   const { password } = req.body || {};
-  const expectedPasswordHash = (process.env.ADMIN_PASSWORD_HASH || "").trim();
-  const expectedPasswordPlain = (process.env.ADMIN_PASSWORD || "").trim();
-
-  if (!expectedPasswordHash && !expectedPasswordPlain) {
-    return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
-  }
-
   const providedPassword = String(password || "");
-  let passwordOk = false;
-  if (expectedPasswordHash) {
-    passwordOk = await bcrypt.compare(providedPassword, expectedPasswordHash);
-  }
-  if (!passwordOk && expectedPasswordPlain) {
-    passwordOk = providedPassword === expectedPasswordPlain;
-  }
-  if (!passwordOk) {
-    return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+
+  if (!providedPassword) {
+    return res.status(400).json({ error: "MISSING_PASSWORD" });
   }
 
-  const token = createAdminToken({ sub: "admin", mode: "direct" }, 60 * 10);
-  return res.json({ token });
+  try {
+    const result = await validateAdminDirectCredentials(pool, providedPassword);
+    if (!result.configured) {
+      await writeAdminAuthAudit(pool, req, "AUTH_DIRECT_FAILED_NOT_CONFIGURED");
+      return res.status(500).json({ error: "ADMIN_AUTH_NOT_CONFIGURED" });
+    }
+    if (!result.ok) {
+      await writeAdminAuthAudit(pool, req, "AUTH_DIRECT_FAILED_INVALID_CREDENTIALS");
+      return res.status(401).json({ error: "INVALID_CREDENTIALS" });
+    }
+
+    const token = createAdminToken(
+      {
+        sub: "admin",
+        mode: "direct",
+        admin_id: result?.admin?.id || null,
+        username: result?.admin?.username || null,
+        auth_version: Number(result?.admin?.auth_version || 1),
+      },
+      60 * 10
+    );
+    await writeAdminAuthAudit(pool, req, "AUTH_DIRECT_SUCCESS", {
+      adminId: result?.admin?.id || null,
+      metadata: {
+        username: result?.admin?.username || null,
+        source: result.source || "unknown",
+      },
+    });
+    return res.json({ token });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/auth/password-reset/start", async (req, res, next) => {
+  const pool = getPool();
+  const loginIdentifier = String(req.body?.username || req.body?.identifier || "").trim();
+  const requestedChannel = normalizeResetChannel(req.body?.channel);
+
+  if (!loginIdentifier) {
+    return res.status(400).json({ error: "USERNAME_REQUIRED" });
+  }
+  if (req.body?.channel && !requestedChannel) {
+    return res.status(400).json({ error: "INVALID_RECOVERY_CHANNEL" });
+  }
+
+  try {
+    await ensureAdminCredentialsSchema(pool);
+    const accountRes = await pool.query(
+      `SELECT id, username, telegram_id, recovery_email, is_active
+       FROM admin_accounts
+       WHERE (
+         lower(btrim(username)) = lower(btrim($1))
+         OR lower(btrim(COALESCE(recovery_email, ''))) = lower(btrim($1))
+       )
+       ORDER BY
+         CASE WHEN lower(btrim(username)) = lower(btrim($1)) THEN 0 ELSE 1 END,
+         created_at ASC
+       LIMIT 1`,
+      [loginIdentifier]
+    );
+    const account = accountRes.rows[0];
+    if (!account || !account.is_active) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_FAILED_ADMIN_NOT_FOUND", {
+        metadata: { login_identifier: loginIdentifier || null },
+      });
+      return res.json(buildGenericResetStartResponse(requestedChannel));
+    }
+
+    let selectedChannel = requestedChannel;
+    if (!selectedChannel) {
+      if (account.telegram_id) {
+        selectedChannel = ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM;
+      } else if (account.recovery_email) {
+        selectedChannel = ADMIN_PASSWORD_RESET_CHANNEL_EMAIL;
+      }
+    }
+
+    if (!selectedChannel) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_FAILED_NO_CHANNEL", {
+        adminId: account.id,
+        metadata: { username: account.username || null },
+      });
+      return res.json(buildGenericResetStartResponse(requestedChannel));
+    }
+
+    if (
+      selectedChannel === ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM
+      && !account.telegram_id
+    ) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_FAILED_TELEGRAM_NOT_CONFIGURED", {
+        adminId: account.id,
+        metadata: { username: account.username || null },
+      });
+      return res.json(buildGenericResetStartResponse(requestedChannel));
+    }
+    if (
+      selectedChannel === ADMIN_PASSWORD_RESET_CHANNEL_EMAIL
+      && !account.recovery_email
+    ) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_FAILED_EMAIL_NOT_CONFIGURED", {
+        adminId: account.id,
+        metadata: { username: account.username || null },
+      });
+      return res.json(buildGenericResetStartResponse(requestedChannel));
+    }
+    if (
+      selectedChannel === ADMIN_PASSWORD_RESET_CHANNEL_EMAIL
+      && !isMailConfigured()
+    ) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_FAILED_SMTP_NOT_CONFIGURED", {
+        adminId: account.id,
+        metadata: { username: account.username || null },
+      });
+      return res.json(buildGenericResetStartResponse(requestedChannel));
+    }
+
+    const windowSince = new Date(Date.now() - (ADMIN_PASSWORD_RESET_START_WINDOW_SECONDS * 1000));
+    const throttleRes = await pool.query(
+      `SELECT
+         MAX(created_at) AS last_created_at,
+         COUNT(*) FILTER (WHERE created_at >= $3) AS requests_in_window
+       FROM admin_auth_otps
+       WHERE admin_id = $1
+         AND purpose = $2`,
+      [account.id, ADMIN_PASSWORD_RESET_PURPOSE, windowSince]
+    );
+    const throttleRow = throttleRes.rows[0] || {};
+    const lastCreatedAt = throttleRow.last_created_at
+      ? new Date(throttleRow.last_created_at).getTime()
+      : 0;
+    const requestsInWindow = Number(throttleRow.requests_in_window || 0);
+
+    if (lastCreatedAt > 0) {
+      const elapsedSeconds = Math.floor((Date.now() - lastCreatedAt) / 1000);
+      if (elapsedSeconds < ADMIN_PASSWORD_RESET_START_COOLDOWN_SECONDS) {
+        const retryIn = Math.max(ADMIN_PASSWORD_RESET_START_COOLDOWN_SECONDS - elapsedSeconds, 1);
+        await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_RATE_LIMIT_COOLDOWN", {
+          adminId: account.id,
+          metadata: {
+            username: account.username || null,
+            retry_in: retryIn,
+          },
+        });
+        return res.status(429).json({
+          error: "OTP_START_COOLDOWN",
+          retry_in: retryIn,
+        });
+      }
+    }
+
+    if (requestsInWindow >= ADMIN_PASSWORD_RESET_START_MAX_PER_WINDOW) {
+      const retryIn = ADMIN_PASSWORD_RESET_START_WINDOW_SECONDS;
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_RATE_LIMIT_WINDOW", {
+        adminId: account.id,
+        metadata: {
+          username: account.username || null,
+          retry_in: retryIn,
+          requests_in_window: requestsInWindow,
+        },
+      });
+      return res.status(429).json({
+        error: "OTP_START_RATE_LIMIT",
+        retry_in: retryIn,
+      });
+    }
+
+    await pool.query(
+      `UPDATE admin_auth_otps
+       SET used_at = now()
+       WHERE admin_id = $1
+         AND purpose = $2
+         AND used_at IS NULL`,
+      [account.id, ADMIN_PASSWORD_RESET_PURPOSE]
+    );
+
+    const otpCode = generateNumericOtp(6);
+    const codeHash = await bcrypt.hash(otpCode, 10);
+    const expiresAt = new Date(Date.now() + ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS * 1000);
+
+    const otpRes = await pool.query(
+      `INSERT INTO admin_auth_otps (
+         admin_id,
+         purpose,
+         channel,
+         code_hash,
+         expires_at,
+         max_attempts
+       )
+       VALUES ($1, $2, $3, $4, $5, $6)
+       RETURNING id`,
+      [
+        account.id,
+        ADMIN_PASSWORD_RESET_PURPOSE,
+        selectedChannel,
+        codeHash,
+        expiresAt,
+        ADMIN_PASSWORD_RESET_MAX_ATTEMPTS,
+      ]
+    );
+    const challengeId = otpRes.rows[0]?.id;
+
+    const messageText =
+      "🔐 Código de recuperación del panel admin\n\n"
+      + `Código: <code>${otpCode}</code>\n`
+      + `Vence en ${Math.floor(ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS / 60)} minutos.\n\n`
+      + "Si no solicitaste este cambio, ignora este mensaje.";
+
+    try {
+      if (selectedChannel === ADMIN_PASSWORD_RESET_CHANNEL_EMAIL) {
+        const emailPayload = buildPasswordRecoveryEmailTemplate({
+          code: otpCode,
+          expiresInMinutes: Math.floor(ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS / 60),
+          brandName: "NoroPayments",
+          panelUrl: process.env.ADMIN_PANEL_URL || "",
+          supportHandle: process.env.RECOVERY_EMAIL_SUPPORT_HANDLE || "@noropayments",
+          logoUrl: process.env.RECOVERY_EMAIL_LOGO_URL || "",
+        });
+        await sendMail({
+          to: account.recovery_email,
+          subject: emailPayload.subject,
+          text: emailPayload.text,
+          html: emailPayload.html,
+        });
+      } else {
+        await sendMessage(account.telegram_id, messageText, { parse_mode: "HTML" });
+      }
+    } catch (err) {
+      await pool.query("DELETE FROM admin_auth_otps WHERE id = $1", [challengeId]);
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_DELIVERY_FAILED", {
+        adminId: account.id,
+        metadata: {
+          username: account.username || null,
+          channel: selectedChannel,
+        },
+      });
+      return res.json(buildGenericResetStartResponse(selectedChannel));
+    }
+
+    await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_START_CODE_SENT", {
+      adminId: account.id,
+      metadata: {
+        username: account.username || null,
+        channel: selectedChannel,
+        challenge_id: challengeId,
+      },
+    });
+
+    return res.json({
+      challenge_id: challengeId,
+      channel: selectedChannel,
+      delivery_hint:
+        selectedChannel === ADMIN_PASSWORD_RESET_CHANNEL_EMAIL
+          ? maskEmail(account.recovery_email)
+          : maskTelegramId(account.telegram_id),
+      expires_in: ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/auth/password-reset/verify", async (req, res, next) => {
+  const pool = getPool();
+  const challengeId = String(req.body?.challenge_id || "").trim();
+  const code = normalizeOtpInput(req.body?.code);
+
+  if (!challengeId || !code) {
+    return res.status(400).json({ error: "CHALLENGE_AND_CODE_REQUIRED" });
+  }
+
+  try {
+    await ensureAdminCredentialsSchema(pool);
+    const otpRes = await pool.query(
+      `SELECT o.id,
+              o.admin_id,
+              o.code_hash,
+              o.expires_at,
+              o.attempts,
+              o.max_attempts,
+              o.used_at,
+              o.channel,
+              a.username,
+              a.is_active
+       FROM admin_auth_otps o
+       JOIN admin_accounts a ON a.id = o.admin_id
+       WHERE o.id = $1
+         AND o.purpose = $2
+       LIMIT 1`,
+      [challengeId, ADMIN_PASSWORD_RESET_PURPOSE]
+    );
+    const otp = otpRes.rows[0];
+    if (!otp || !otp.is_active) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_FAILED_NOT_FOUND", {
+        metadata: { challenge_id: challengeId || null },
+      });
+      return res.status(404).json({ error: "OTP_NOT_FOUND" });
+    }
+    if (otp.used_at) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_FAILED_ALREADY_USED", {
+        adminId: otp.admin_id,
+        metadata: { challenge_id: challengeId || null },
+      });
+      return res.status(409).json({ error: "OTP_ALREADY_USED" });
+    }
+    if (new Date(otp.expires_at).getTime() <= Date.now()) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_FAILED_EXPIRED", {
+        adminId: otp.admin_id,
+        metadata: { challenge_id: challengeId || null },
+      });
+      return res.status(409).json({ error: "OTP_EXPIRED" });
+    }
+    if (Number(otp.attempts || 0) >= Number(otp.max_attempts || ADMIN_PASSWORD_RESET_MAX_ATTEMPTS)) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_FAILED_MAX_ATTEMPTS", {
+        adminId: otp.admin_id,
+        metadata: { challenge_id: challengeId || null },
+      });
+      return res.status(429).json({ error: "OTP_MAX_ATTEMPTS" });
+    }
+
+    const codeOk = await bcrypt.compare(code, otp.code_hash);
+    if (!codeOk) {
+      const failedRes = await pool.query(
+        `UPDATE admin_auth_otps
+         SET attempts = attempts + 1
+         WHERE id = $1
+         RETURNING attempts, max_attempts`,
+        [otp.id]
+      );
+      const attempts = Number(failedRes.rows[0]?.attempts || 0);
+      const maxAttempts = Number(failedRes.rows[0]?.max_attempts || ADMIN_PASSWORD_RESET_MAX_ATTEMPTS);
+      if (attempts >= maxAttempts) {
+        await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_FAILED_MAX_ATTEMPTS", {
+          adminId: otp.admin_id,
+          metadata: { challenge_id: challengeId || null },
+        });
+        return res.status(429).json({ error: "OTP_MAX_ATTEMPTS" });
+      }
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_FAILED_INVALID_CODE", {
+        adminId: otp.admin_id,
+        metadata: {
+          challenge_id: challengeId || null,
+          attempts_left: Math.max(maxAttempts - attempts, 0),
+        },
+      });
+      return res.status(401).json({
+        error: "OTP_INVALID",
+        attempts_left: Math.max(maxAttempts - attempts, 0),
+      });
+    }
+
+    await pool.query(
+      `UPDATE admin_auth_otps
+       SET used_at = now()
+       WHERE id = $1`,
+      [otp.id]
+    );
+
+    const resetToken = createAdminToken(
+      {
+        sub: "admin",
+        purpose: "PASSWORD_RESET",
+        admin_id: otp.admin_id,
+        username: otp.username,
+      },
+      ADMIN_PASSWORD_RESET_TOKEN_TTL_SECONDS
+    );
+    await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_VERIFY_SUCCESS", {
+      adminId: otp.admin_id,
+      metadata: {
+        challenge_id: challengeId || null,
+        channel: otp.channel || null,
+      },
+    });
+    return res.json({
+      reset_token: resetToken,
+      channel: otp.channel,
+      expires_in: ADMIN_PASSWORD_RESET_TOKEN_TTL_SECONDS,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/auth/password-reset/complete", async (req, res, next) => {
+  const pool = getPool();
+  const resetToken = String(req.body?.reset_token || "").trim();
+  const newPassword = String(req.body?.new_password || "");
+
+  if (!resetToken || !newPassword) {
+    return res.status(400).json({ error: "RESET_TOKEN_AND_PASSWORD_REQUIRED" });
+  }
+
+  try {
+    const tokenPayload = verifyAdminToken(resetToken);
+    if (
+      !tokenPayload
+      || tokenPayload.sub !== "admin"
+      || tokenPayload.purpose !== "PASSWORD_RESET"
+      || !tokenPayload.admin_id
+    ) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_COMPLETE_FAILED_INVALID_TOKEN");
+      return res.status(401).json({ error: "INVALID_RESET_TOKEN" });
+    }
+
+    const passwordValidation = validateNewAdminPassword(newPassword);
+    if (!passwordValidation.ok) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_COMPLETE_FAILED_INVALID_PASSWORD", {
+        adminId: tokenPayload.admin_id,
+        metadata: { reason: passwordValidation.reason },
+      });
+      return res.status(400).json({ error: passwordValidation.reason });
+    }
+
+    await ensureAdminCredentialsSchema(pool);
+    const newPasswordHash = await bcrypt.hash(newPassword, 10);
+    const updateRes = await pool.query(
+      `UPDATE admin_accounts
+       SET password_hash = $2,
+           auth_version = COALESCE(auth_version, 1) + 1,
+           updated_at = now()
+       WHERE id = $1
+         AND is_active = true
+       RETURNING id, username, auth_version`,
+      [tokenPayload.admin_id, newPasswordHash]
+    );
+    if (updateRes.rowCount === 0) {
+      await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_COMPLETE_FAILED_ADMIN_NOT_FOUND", {
+        adminId: tokenPayload.admin_id,
+      });
+      return res.status(404).json({ error: "ADMIN_NOT_FOUND" });
+    }
+
+    await pool.query(
+      `UPDATE admin_auth_otps
+       SET used_at = COALESCE(used_at, now())
+       WHERE admin_id = $1
+         AND purpose = $2
+         AND (used_at IS NULL OR used_at > now())`,
+      [
+        tokenPayload.admin_id,
+        ADMIN_PASSWORD_RESET_PURPOSE,
+      ]
+    );
+
+    await writeAdminAuthAudit(pool, req, "PASSWORD_RESET_COMPLETE_SUCCESS", {
+      adminId: tokenPayload.admin_id,
+      metadata: {
+        username: updateRes.rows[0]?.username || null,
+        auth_version: Number(updateRes.rows[0]?.auth_version || 1),
+      },
+    });
+
+    return res.json({
+      ok: true,
+      username: updateRes.rows[0]?.username || null,
+    });
+  } catch (error) {
+    return next(error);
+  }
 });
 
 router.get("/auth/status", (req, res) => {
@@ -1372,6 +2363,128 @@ router.post("/auth/decision", (req, res) => {
 
 router.use(requireAdmin);
 
+router.get("/auth/recovery-profile", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensureAdminCredentialsSchema(pool);
+    const account = await resolveCurrentAdminAccount(pool, req.admin);
+    if (!account) {
+      return res.status(404).json({ error: "ADMIN_NOT_FOUND" });
+    }
+
+    return res.json({
+      id: account.id,
+      username: account.username,
+      auth_version: Number(account.auth_version || 1),
+      telegram_id: account.telegram_id || null,
+      recovery_email: account.recovery_email || null,
+      recovery_email_masked: account.recovery_email
+        ? maskEmail(account.recovery_email)
+        : null,
+      channels: {
+        telegram: Boolean(account.telegram_id),
+        email: Boolean(account.recovery_email),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.put("/auth/recovery-profile", async (req, res, next) => {
+  const pool = getPool();
+  const hasTelegramField = Object.prototype.hasOwnProperty.call(req.body || {}, "telegram_id");
+  const hasEmailField = Object.prototype.hasOwnProperty.call(req.body || {}, "recovery_email");
+
+  if (!hasTelegramField && !hasEmailField) {
+    return res.status(400).json({ error: "NO_FIELDS_TO_UPDATE" });
+  }
+
+  try {
+    await ensureAdminCredentialsSchema(pool);
+    const account = await resolveCurrentAdminAccount(pool, req.admin);
+    if (!account) {
+      return res.status(404).json({ error: "ADMIN_NOT_FOUND" });
+    }
+
+    let nextTelegramId = account.telegram_id ? String(account.telegram_id) : null;
+    let nextRecoveryEmail = account.recovery_email || null;
+
+    if (hasTelegramField) {
+      const input = req.body?.telegram_id;
+      if (input === null || String(input).trim() === "") {
+        nextTelegramId = null;
+      } else {
+        const normalizedTelegram = normalizeRecoveryTelegramId(input);
+        if (!normalizedTelegram) {
+          return res.status(400).json({ error: "INVALID_TELEGRAM_ID" });
+        }
+        nextTelegramId = normalizedTelegram;
+      }
+    }
+
+    if (hasEmailField) {
+      const input = req.body?.recovery_email;
+      if (input === null || String(input).trim() === "") {
+        nextRecoveryEmail = null;
+      } else {
+        const normalizedEmail = normalizeRecoveryEmail(input);
+        if (!normalizedEmail) {
+          return res.status(400).json({ error: "INVALID_RECOVERY_EMAIL" });
+        }
+        nextRecoveryEmail = normalizedEmail;
+      }
+    }
+
+    const updateRes = await pool.query(
+      `UPDATE admin_accounts
+       SET telegram_id = CASE
+             WHEN $2::text IS NULL OR btrim($2::text) = '' THEN NULL
+             ELSE $2::bigint
+           END,
+           recovery_email = $3,
+           updated_at = now()
+       WHERE id = $1
+         AND is_active = true
+       RETURNING id, username, auth_version, telegram_id, recovery_email`,
+      [account.id, nextTelegramId || null, nextRecoveryEmail]
+    );
+    if (updateRes.rowCount === 0) {
+      return res.status(404).json({ error: "ADMIN_NOT_FOUND" });
+    }
+
+    const updated = updateRes.rows[0];
+    await writeAdminAuthAudit(pool, req, "AUTH_RECOVERY_PROFILE_UPDATED", {
+      adminId: updated.id,
+      metadata: {
+        telegram_updated: hasTelegramField,
+        recovery_email_updated: hasEmailField,
+        channels: {
+          telegram: Boolean(updated.telegram_id),
+          email: Boolean(updated.recovery_email),
+        },
+      },
+    });
+
+    return res.json({
+      id: updated.id,
+      username: updated.username,
+      auth_version: Number(updated.auth_version || 1),
+      telegram_id: updated.telegram_id || null,
+      recovery_email: updated.recovery_email || null,
+      recovery_email_masked: updated.recovery_email
+        ? maskEmail(updated.recovery_email)
+        : null,
+      channels: {
+        telegram: Boolean(updated.telegram_id),
+        email: Boolean(updated.recovery_email),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/users/total", async (req, res, next) => {
   const pool = getPool();
   try {
@@ -1406,6 +2519,112 @@ router.post("/maintenance", async (req, res, next) => {
     }
     const active = await setMaintenanceStatus(pool, nextActive);
     return res.json({ active });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/ops/backup/latest", async (req, res, next) => {
+  try {
+    const latest = await getLatestBackupMetadata();
+    return res.json({
+      has_backup: Boolean(latest),
+      latest: toPublicBackupMetadata(latest),
+      running: Boolean(backupExecutionPromise),
+      restore_running: Boolean(backupRestorePromise),
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/ops/backup/run", async (req, res, next) => {
+  try {
+    const metadata = await runBackupNow();
+    return res.json({
+      ok: true,
+      backup: toPublicBackupMetadata(metadata),
+    });
+  } catch (error) {
+    if (error?.payload?.error === "BACKUP_COOLDOWN") {
+      return res.status(429).json(error.payload);
+    }
+    if (error?.payload?.error === "RESTORE_IN_PROGRESS") {
+      return res.status(409).json(error.payload);
+    }
+    if (error?.payload?.error === "DATABASE_URL_MISSING") {
+      return res.status(500).json(error.payload);
+    }
+    return next(error);
+  }
+});
+
+router.post("/ops/backup/restore", rawBackupRestoreBody, async (req, res, next) => {
+  try {
+    const confirm = String(req.query?.confirm || "").trim().toUpperCase();
+    if (confirm !== "REEMPLAZAR") {
+      return res.status(400).json({ error: "INVALID_RESTORE_CONFIRM" });
+    }
+
+    const filename = sanitizeRestoreFilename(req.query?.filename);
+    if (!filename) {
+      return res.status(400).json({ error: "BACKUP_RESTORE_INVALID_FILENAME" });
+    }
+
+    if (!Buffer.isBuffer(req.body) || req.body.length === 0) {
+      return res.status(400).json({ error: "BACKUP_RESTORE_FILE_REQUIRED" });
+    }
+
+    const maxBytes = getBackupRestoreMaxBytes();
+    if (req.body.length > maxBytes) {
+      return res.status(413).json({
+        error: "BACKUP_RESTORE_TOO_LARGE",
+        max_mb: Math.floor(maxBytes / (1024 * 1024)),
+      });
+    }
+
+    const backupDir = resolveBackupDir();
+    const uploadsDir = path.join(backupDir, "restore-uploads");
+    await fs.mkdir(uploadsDir, { recursive: true });
+    const timestamp = new Date().toISOString().replace(/[:.]/g, "-");
+    const storedFilename = `${timestamp}_${filename}`;
+    const storedPath = path.join(uploadsDir, storedFilename);
+    await fs.writeFile(storedPath, req.body);
+
+    const restored = await runRestoreNow(storedPath, filename);
+
+    return res.json({
+      ok: true,
+      restore: {
+        ...restored,
+        size_bytes: req.body.length,
+      },
+    });
+  } catch (error) {
+    if (error?.payload?.error === "RESTORE_IN_PROGRESS") {
+      return res.status(409).json(error.payload);
+    }
+    if (error?.payload?.error === "BACKUP_IN_PROGRESS") {
+      return res.status(409).json(error.payload);
+    }
+    if (error?.payload?.error === "DATABASE_URL_MISSING") {
+      return res.status(500).json(error.payload);
+    }
+    return next(error);
+  }
+});
+
+router.get("/ops/backup/latest/download", async (req, res, next) => {
+  try {
+    const latest = await getLatestBackupMetadata();
+    if (!latest) {
+      return res.status(404).json({ error: "BACKUP_NOT_FOUND" });
+    }
+    const buffer = await fs.readFile(latest.path);
+    res.set("Content-Type", "application/gzip");
+    res.set("Content-Disposition", `attachment; filename="${latest.filename}"`);
+    res.set("Cache-Control", "private, max-age=60");
+    return res.send(buffer);
   } catch (error) {
     return next(error);
   }
@@ -2781,6 +4000,7 @@ router.post("/products/:id/stock-mode", async (req, res, next) => {
 
 router.get("/orders", async (req, res, next) => {
   const status = req.query.status;
+  const includeAll = String(req.query.include_all || "").trim() === "1";
   const { page, pageSize, offset } = parsePagination(req.query);
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
@@ -2788,14 +4008,32 @@ router.get("/orders", async (req, res, next) => {
   const filters = [];
   const values = [];
 
-  if (status === "FREE") {
+  if (includeAll) {
+    if (status === "FREE") {
+      filters.push(
+        "(o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
+      );
+    } else if (status) {
+      values.push(status);
+      filters.push(`o.status = $${values.length}`);
+      if (status === "EXPIRED") {
+        filters.push(
+          "(o.free_order_number IS NULL AND COALESCE(o.unit_price_at_purchase, 0) > 0)"
+        );
+      }
+    }
+  } else if (status === "FREE") {
     filters.push(
       "(o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
     );
   } else if (status) {
     values.push(status);
     filters.push(`o.status = $${values.length}`);
-    if (status !== "EXPIRED") {
+    if (status === "EXPIRED") {
+      filters.push(
+        "(o.free_order_number IS NULL AND COALESCE(o.unit_price_at_purchase, 0) > 0)"
+      );
+    } else {
       filters.push(
         "(op.id IS NOT NULL OR o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
       );
@@ -2831,34 +4069,39 @@ router.get("/orders", async (req, res, next) => {
     );
     const total = countRes.rows[0].total;
 
-    const listRes = await pool.query(
-      `SELECT o.id, o.status, o.created_at,
-              o.order_number,
-              o.free_order_number,
-              o.unit_price_at_purchase,
-              u.telegram_id, u.telegram_username,
-              p.id AS product_id, p.code AS product_code, p.name AS product_name,
-              (op.id IS NOT NULL) AS has_payment_proof,
-              (
-                o.free_order_number IS NOT NULL
-                OR COALESCE(o.unit_price_at_purchase, 0) <= 0
-              ) AS is_free_order
-       FROM orders o
-       JOIN users u ON u.id = o.user_id
-       JOIN products p ON p.id = o.product_id
-       LEFT JOIN order_payments op ON op.order_id = o.id
-       ${whereClause}
-       ${orderClause}
-       LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
-      [...values, pageSize, offset]
-    );
+    const baseQuery = `SELECT o.id, o.status, o.created_at,
+                              o.order_number,
+                              o.free_order_number,
+                              o.unit_price_at_purchase,
+                              u.telegram_id, u.telegram_username,
+                              p.id AS product_id, p.code AS product_code, p.name AS product_name,
+                              (op.id IS NOT NULL) AS has_payment_proof,
+                              (
+                                o.free_order_number IS NOT NULL
+                                OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+                              ) AS is_free_order
+                       FROM orders o
+                       JOIN users u ON u.id = o.user_id
+                       JOIN products p ON p.id = o.product_id
+                       LEFT JOIN order_payments op ON op.order_id = o.id
+                       ${whereClause}
+                       ${orderClause}`;
+    const listRes = includeAll
+      ? await pool.query(baseQuery, values)
+      : await pool.query(
+        `${baseQuery}
+         LIMIT $${values.length + 1} OFFSET $${values.length + 2}`,
+        [...values, pageSize, offset]
+      );
+    const resultPageSize = includeAll ? listRes.rows.length : pageSize;
+    const resultTotalPages = includeAll ? 1 : (Math.ceil(total / pageSize) || 1);
 
     res.json({
       items: listRes.rows,
-      page,
-      page_size: pageSize,
+      page: includeAll ? 1 : page,
+      page_size: resultPageSize,
       total,
-      total_pages: Math.ceil(total / pageSize) || 1,
+      total_pages: resultTotalPages,
     });
   } catch (error) {
     next(error);
@@ -2866,24 +4109,41 @@ router.get("/orders", async (req, res, next) => {
 });
 
 router.get("/orders/status-counts", async (req, res, next) => {
+  const includeAll = String(req.query.include_all || "").trim() === "1";
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
   try {
-    const countsRes = await pool.query(
-      `SELECT o.status, COUNT(*)::int AS count
-       FROM orders o
-       LEFT JOIN order_payments op ON op.order_id = o.id
-       WHERE o.status = 'EXPIRED'
-          OR (
-            o.status != 'EXPIRED'
-            AND (
-              op.id IS NOT NULL
-              OR o.free_order_number IS NOT NULL
-              OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+    const countsQuery = includeAll
+      ? `SELECT o.status, COUNT(*)::int AS count
+         FROM orders o
+         WHERE NOT (
+           o.status = 'EXPIRED'
+           AND (
+             o.free_order_number IS NOT NULL
+             OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+           )
+         )
+         GROUP BY o.status`
+      : `SELECT o.status, COUNT(*)::int AS count
+         FROM orders o
+         LEFT JOIN order_payments op ON op.order_id = o.id
+         WHERE (
+           o.status = 'EXPIRED'
+           AND (
+             o.free_order_number IS NULL
+             AND COALESCE(o.unit_price_at_purchase, 0) > 0
+           )
+         )
+            OR (
+              o.status != 'EXPIRED'
+              AND (
+                op.id IS NOT NULL
+                OR o.free_order_number IS NOT NULL
+                OR COALESCE(o.unit_price_at_purchase, 0) <= 0
+              )
             )
-          )
-       GROUP BY o.status`
-    );
+         GROUP BY o.status`;
+    const countsRes = await pool.query(countsQuery);
     const freeCountRes = await pool.query(
       `SELECT COUNT(*)::int AS count
        FROM orders o

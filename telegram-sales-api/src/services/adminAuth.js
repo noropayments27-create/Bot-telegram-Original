@@ -4,11 +4,26 @@ const REQUEST_TTL_SECONDS = 60;
 const LOGIN_REQUESTS = new Map();
 
 function getTokenSecret() {
-  const secret = process.env.ADMIN_TOKEN_SECRET || process.env.ADMIN_PASSWORD;
-  if (!secret) {
+  const configuredSecret = String(process.env.ADMIN_TOKEN_SECRET || "").trim();
+  if (configuredSecret) {
+    return configuredSecret;
+  }
+
+  if (String(process.env.NODE_ENV || "").trim().toLowerCase() === "production") {
     throw new Error("ADMIN_TOKEN_SECRET is required");
   }
-  return secret;
+
+  const devFallback = String(process.env.ADMIN_PASSWORD || "").trim();
+  if (devFallback) {
+    return devFallback;
+  }
+
+  const jwtFallback = String(process.env.JWT_SECRET || "").trim();
+  if (jwtFallback) {
+    return jwtFallback;
+  }
+
+  throw new Error("ADMIN_TOKEN_SECRET is required");
 }
 
 function base64UrlEncode(value) {
@@ -71,13 +86,17 @@ function verifyAdminToken(token) {
   return payload;
 }
 
-function createLoginRequest() {
+function createLoginRequest(tokenClaims = { sub: "admin" }) {
   const requestId = crypto.randomUUID();
   const expiresAt = Date.now() + REQUEST_TTL_SECONDS * 1000;
   LOGIN_REQUESTS.set(requestId, {
     status: "PENDING",
     expiresAt,
     token: null,
+    tokenClaims:
+      tokenClaims && typeof tokenClaims === "object"
+        ? { ...tokenClaims }
+        : { sub: "admin" },
   });
   setTimeout(() => {
     const entry = LOGIN_REQUESTS.get(requestId);
@@ -107,7 +126,11 @@ function setLoginDecision(requestId, decision) {
     return null;
   }
   if (decision === "APPROVE") {
-    const token = createAdminToken({ sub: "admin" });
+    const tokenClaims =
+      entry.tokenClaims && typeof entry.tokenClaims === "object"
+        ? entry.tokenClaims
+        : { sub: "admin" };
+    const token = createAdminToken(tokenClaims);
     entry.status = "APPROVED";
     entry.token = token;
   } else {

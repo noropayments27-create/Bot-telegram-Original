@@ -1,9 +1,12 @@
 import logging
+import mimetypes
+from urllib.parse import urlparse
 from typing import Dict, Optional
 
+import httpx
 from aiogram.exceptions import TelegramBadRequest
 from aiogram.enums import ParseMode
-from aiogram.types import InlineKeyboardMarkup, InputMediaPhoto, Message
+from aiogram.types import BufferedInputFile, InlineKeyboardMarkup, InputMediaPhoto, Message
 
 logger = logging.getLogger(__name__)
 
@@ -11,6 +14,8 @@ _MAIN_MESSAGE_BY_USER: Dict[int, int] = {}
 _LAST_VIEW_BY_USER: Dict[int, Dict[str, object]] = {}
 _VIEW_HISTORY_BY_USER: Dict[int, list[Dict[str, object]]] = {}
 _MAX_HISTORY = 20
+_PHOTO_FETCH_TIMEOUT_SECONDS = 12.0
+_PHOTO_FETCH_MAX_BYTES = 10 * 1024 * 1024
 
 
 def _get_keyboard_stats(reply_markup: Optional[InlineKeyboardMarkup]) -> tuple[int, int]:
@@ -30,6 +35,63 @@ def _get_keyboard_stats(reply_markup: Optional[InlineKeyboardMarkup]) -> tuple[i
     return buttons, max_callback_len
 
 
+def _is_http_photo_source(photo: str) -> bool:
+    value = str(photo or "").strip()
+    if not value:
+        return False
+    parsed = urlparse(value)
+    return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
+
+
+def _guess_photo_filename(photo_url: str, content_type: str) -> str:
+    parsed = urlparse(photo_url)
+    name = (parsed.path or "").rsplit("/", 1)[-1].strip()
+    if name and "." in name and len(name) <= 120:
+        return name
+    guessed_ext = mimetypes.guess_extension(content_type.split(";", 1)[0].strip()) or ".jpg"
+    safe_ext = guessed_ext if guessed_ext.startswith(".") else ".jpg"
+    return f"photo{safe_ext}"
+
+
+async def _prepare_photo_for_telegram(photo: str):
+    source = str(photo or "").strip()
+    if not _is_http_photo_source(source):
+        return source
+    try:
+        async with httpx.AsyncClient(
+            timeout=_PHOTO_FETCH_TIMEOUT_SECONDS,
+            follow_redirects=True,
+            headers={"User-Agent": "telegram-sales-bot/photo-fetch"},
+        ) as client:
+            response = await client.get(source)
+            response.raise_for_status()
+            content_type = str(response.headers.get("content-type") or "").strip().lower()
+            if not content_type.startswith("image/"):
+                logger.warning(
+                    "photo_fetch_invalid_content_type source=%s content_type=%s",
+                    source,
+                    content_type or "-",
+                )
+                return source
+            body = response.content or b""
+            if not body:
+                logger.warning("photo_fetch_empty_body source=%s", source)
+                return source
+            if len(body) > _PHOTO_FETCH_MAX_BYTES:
+                logger.warning(
+                    "photo_fetch_too_large source=%s bytes=%s max_bytes=%s",
+                    source,
+                    len(body),
+                    _PHOTO_FETCH_MAX_BYTES,
+                )
+                return source
+            filename = _guess_photo_filename(str(response.url), content_type)
+            return BufferedInputFile(body, filename=filename)
+    except Exception as exc:
+        logger.warning("photo_fetch_failed source=%s error=%s", source, str(exc))
+        return source
+
+
 def _log_telegram_error(
     action: str,
     error: Exception,
@@ -42,14 +104,18 @@ def _log_telegram_error(
     photo: Optional[str] = None,
 ) -> None:
     buttons, max_callback_len = _get_keyboard_stats(reply_markup)
+    photo_sample = str(photo or "").strip()
+    if len(photo_sample) > 180:
+        photo_sample = f"{photo_sample[:177]}..."
     logger.warning(
-        "telegram_ui_error action=%s user_id=%s chat_id=%s message_id=%s text_len=%s photo=%s buttons=%s max_callback_len=%s error=%s",
+        "telegram_ui_error action=%s user_id=%s chat_id=%s message_id=%s text_len=%s photo=%s photo_sample=%s buttons=%s max_callback_len=%s error=%s",
         action,
         user_id,
         chat_id,
         message_id,
         len(text or ""),
         bool(photo),
+        photo_sample or "-",
         buttons,
         max_callback_len,
         str(error),
@@ -252,7 +318,8 @@ async def render_main_view_with_photo(
 ) -> Message:
     chat_id = message.chat.id
     message_id = _MAIN_MESSAGE_BY_USER.get(user_id)
-    media = InputMediaPhoto(media=photo, caption=text, parse_mode=parse_mode)
+    prepared_photo = await _prepare_photo_for_telegram(photo)
+    media = InputMediaPhoto(media=prepared_photo, caption=text, parse_mode=parse_mode)
 
     if message_id:
         try:
@@ -297,8 +364,9 @@ async def render_main_view_with_photo(
             )
 
     try:
+        prepared_photo = await _prepare_photo_for_telegram(photo)
         sent = await message.answer_photo(
-            photo=photo,
+            photo=prepared_photo,
             caption=text,
             reply_markup=reply_markup,
             parse_mode=parse_mode,

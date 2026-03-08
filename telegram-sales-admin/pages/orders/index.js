@@ -195,8 +195,6 @@ export default function OrdersPage() {
   const router = useRouter();
   const [items, setItems] = useState([]);
   const [status, setStatus] = useState("RECENT");
-  const [page, setPage] = useState(1);
-  const [totalPages, setTotalPages] = useState(1);
   const [error, setError] = useState("");
   const [selectedOrderIds, setSelectedOrderIds] = useState([]);
   const [details, setDetails] = useState({});
@@ -215,8 +213,8 @@ export default function OrdersPage() {
   const [isResponsiveView, setIsResponsiveView] = useState(false);
 
   const getOrderCount = (key) => Number(orderCounts[key] || 0);
-  const totalNonExpired = Object.entries(orderCounts).reduce((sum, [key, value]) => {
-    if (key === "EXPIRED") {
+  const totalOrders = Object.entries(orderCounts).reduce((sum, [key, value]) => {
+    if (key === "FREE" || key === "EXPIRED") {
       return sum;
     }
     return sum + Number(value || 0);
@@ -226,6 +224,12 @@ export default function OrdersPage() {
   const filterRecent = (orders) => {
     return orders.filter((order) => {
       return order.status === "WAITING_PAYMENT" || order.status === "CREATED";
+    });
+  };
+
+  const filterAll = (orders) => {
+    return orders.filter((order) => {
+      return order.status !== "EXPIRED" && !isFreeOrderData(order);
     });
   };
 
@@ -239,8 +243,7 @@ export default function OrdersPage() {
     try {
       const isRecent = status === "RECENT";
       const params = new URLSearchParams({
-        page: String(isRecent ? 1 : page),
-        page_size: "20",
+        include_all: "1",
       });
       if (status && !isRecent) {
         params.set("status", status);
@@ -248,18 +251,21 @@ export default function OrdersPage() {
 
       const [data, countsRes] = await Promise.all([
         apiFetch(`/admin/orders?${params.toString()}`),
-        apiFetch("/admin/orders/status-counts"),
+        apiFetch("/admin/orders/status-counts?include_all=1"),
       ]);
       const fetchedItems = data.items || [];
-      const nextItems = isRecent ? filterRecent(fetchedItems) : fetchedItems;
+      const nextItems = isRecent
+        ? filterRecent(fetchedItems)
+        : status === ""
+        ? filterAll(fetchedItems)
+        : fetchedItems;
       setItems(nextItems);
-      setTotalPages(isRecent ? 1 : data.total_pages || 1);
       setError("");
       setOrderCounts(countsRes?.counts || {});
     } catch (err) {
       setError("No se pudo cargar las ordenes.");
     }
-  }, [page, status]);
+  }, [status]);
 
   useEffect(() => {
     loadOrders();
@@ -286,7 +292,6 @@ export default function OrdersPage() {
 
   const handleStatusChange = (event) => {
     setStatus(event.target.value);
-    setPage(1);
   };
 
   const removeDetail = useCallback((orderId) => {
@@ -757,7 +762,7 @@ export default function OrdersPage() {
               <span className="orders-count-label">Total:</span>
               <span className="orders-count-value">
                 {status === ""
-                  ? totalNonExpired
+                  ? totalOrders
                   : status === "FREE"
                   ? getOrderCount("FREE")
                   : status === "CANCELLED"
