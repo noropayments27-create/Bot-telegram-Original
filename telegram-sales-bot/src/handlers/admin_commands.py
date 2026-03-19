@@ -200,6 +200,34 @@ def _extract_args(text: str | None) -> str:
     return parts[1].strip() if len(parts) > 1 else ""
 
 
+def _build_stop_broadcast_command(broadcast_id: str | None = None) -> str:
+    safe_id = str(broadcast_id or "").strip()
+    return f"/Parardifusion {safe_id}".strip()
+
+
+def _build_broadcast_already_sending_text(
+    locale: str | None = "es",
+    *,
+    broadcast_id: str | None = None,
+) -> str:
+    command_text = _build_stop_broadcast_command(broadcast_id)
+    return _tr(
+        locale,
+        "❌ <b>Error en la acción del panel</b>\n\n"
+        "Código: <b>409</b>\n"
+        "Detalle: <code>BROADCAST_ALREADY_SENDING</code>\n\n"
+        "Esa difusión ya sigue activa o quedó pausada/en proceso.\n"
+        "Si quieres detenerla, usa:\n"
+        f"<code>{_escape_html(command_text)}</code>",
+        "❌ <b>Panel action error</b>\n\n"
+        "Code: <b>409</b>\n"
+        "Detail: <code>BROADCAST_ALREADY_SENDING</code>\n\n"
+        "That broadcast is already active or paused/in progress.\n"
+        "If you want to stop it, use:\n"
+        f"<code>{_escape_html(command_text)}</code>",
+    )
+
+
 def _safe_int(value: str, default: int, minimum: int, maximum: int) -> int:
     try:
         parsed = int(value)
@@ -1039,6 +1067,33 @@ def _build_progress_bar(percent: int, width: int = 12) -> str:
     return f"[{'█' * filled}{'░' * (width - filled)}] {safe_percent}%"
 
 
+def _build_broadcast_progress_keyboard(
+    status: str | None,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    progress_status = str(status or "").upper().strip()
+    first_button = InlineKeyboardButton(
+        text=_tr(locale, "⏸ Pausar", "⏸ Pause"),
+        callback_data="adminui:broadcast:control:pause",
+    )
+    if progress_status == "PAUSED":
+        first_button = InlineKeyboardButton(
+            text=_tr(locale, "▶️ Play", "▶️ Play"),
+            callback_data="adminui:broadcast:control:resume",
+        )
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                first_button,
+                InlineKeyboardButton(
+                    text=_tr(locale, "⛔ Detener", "⛔ Stop"),
+                    callback_data="adminui:broadcast:control:stop",
+                ),
+            ]
+        ]
+    )
+
+
 def _build_broadcast_progress_text(
     broadcast_id: str,
     locale: str | None = "es",
@@ -1052,6 +1107,7 @@ def _build_broadcast_progress_text(
     status: str | None = None,
 ) -> str:
     progress_status = str(status or "").upper().strip()
+    title = _tr(locale, "📣 <b>Enviando difusión...</b>\n\n", "📣 <b>Sending broadcast...</b>\n\n")
     status_text = _tr(locale, "Preparando", "Preparing")
     if progress_status == "SENDING":
         status_text = _tr(locale, "Enviando", "Sending")
@@ -1061,12 +1117,22 @@ def _build_broadcast_progress_text(
         status_text = _tr(locale, "Finalizada", "Finished")
     elif progress_status == "QUEUED":
         status_text = _tr(locale, "En cola", "Queued")
+    elif progress_status == "PAUSING":
+        status_text = _tr(locale, "Pausando", "Pausing")
+    elif progress_status == "PAUSED":
+        title = _tr(locale, "⏸ <b>Difusión pausada</b>\n\n", "⏸ <b>Broadcast paused</b>\n\n")
+        status_text = _tr(locale, "Pausada", "Paused")
+    elif progress_status == "STOPPING":
+        status_text = _tr(locale, "Deteniendo", "Stopping")
+    elif progress_status == "STOPPED":
+        title = _tr(locale, "⛔ <b>Difusión detenida</b>\n\n", "⛔ <b>Broadcast stopped</b>\n\n")
+        status_text = _tr(locale, "Detenida", "Stopped")
     processed_count = max(sent_count + failed_count, 0)
     pending_count = max(target_count - processed_count, 0) if target_count > 0 else 0
     target_label = str(target_count) if target_count > 0 else "..."
     pending_label = str(pending_count) if target_count > 0 else "..."
     return (
-        _tr(locale, "📣 <b>Enviando difusión...</b>\n\n", "📣 <b>Sending broadcast...</b>\n\n")
+        title
         + f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
         + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(status_text)}</b>\n"
         + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons or [])}</b>\n"
@@ -1102,6 +1168,12 @@ def _build_broadcast_result_summary_text(
             "⚠️ <b>La difusión terminó sin envíos exitosos</b>\n\n",
             "⚠️ <b>The broadcast finished without successful deliveries</b>\n\n",
         )
+    elif status_key == "STOPPED":
+        title = _tr(
+            locale,
+            "⛔ <b>Difusión detenida</b>\n\n",
+            "⛔ <b>Broadcast stopped</b>\n\n",
+        )
     return (
         title
         + f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
@@ -1115,6 +1187,7 @@ def _build_broadcast_result_summary_text(
 
 async def _wait_broadcast_progress_and_build_result(
     panel_message: Message,
+    state: FSMContext,
     broadcast_id: str,
     locale: str | None = "es",
     *,
@@ -1124,41 +1197,53 @@ async def _wait_broadcast_progress_and_build_result(
     warmup_steps = (3, 7, 12, 18, 25, 33, 42, 50)
     warmup_index = 0
     last_progress_text = ""
+    last_progress_status = ""
     progress_status = "QUEUED"
     target_count = 0
     sent_count = 0
     failed_count = 0
 
-    while True:
-        progress_res = await api_client.admin_get_broadcast_progress(broadcast_id)
-        progress = progress_res.get("progress") or {}
-        progress_status = str(progress.get("status") or progress_status).upper().strip()
-        target_count = _safe_int(progress.get("target_count"), target_count, 0, 10**9)
-        sent_count = _safe_int(progress.get("sent_count"), sent_count, 0, 10**9)
-        failed_count = _safe_int(progress.get("failed_count"), failed_count, 0, 10**9)
-        if target_count > 0:
-            percent = _safe_int(progress.get("percent"), 0, 0, 100)
-        else:
-            percent = warmup_steps[warmup_index]
-            if warmup_index < len(warmup_steps) - 1:
-                warmup_index += 1
-        progress_text = _build_broadcast_progress_text(
-            broadcast_id,
-            locale,
-            buttons=buttons,
-            media_kind=media_kind,
-            target_count=target_count,
-            sent_count=sent_count,
-            failed_count=failed_count,
-            percent=percent,
-            status=progress_status,
-        )
-        if progress_text != last_progress_text:
-            await _edit_panel_message(panel_message, progress_text)
-            last_progress_text = progress_text
-        if bool(progress.get("is_done")) or progress_status in {"SENT", "FAILED"}:
-            break
-        await asyncio.sleep(0.2)
+    await state.update_data(admin_ui_active_broadcast_id=broadcast_id)
+
+    try:
+        while True:
+            progress_res = await api_client.admin_get_broadcast_progress(broadcast_id)
+            progress = progress_res.get("progress") or {}
+            progress_status = str(progress.get("status") or progress_status).upper().strip()
+            target_count = _safe_int(progress.get("target_count"), target_count, 0, 10**9)
+            sent_count = _safe_int(progress.get("sent_count"), sent_count, 0, 10**9)
+            failed_count = _safe_int(progress.get("failed_count"), failed_count, 0, 10**9)
+            if target_count > 0:
+                percent = _safe_int(progress.get("percent"), 0, 0, 100)
+            else:
+                percent = warmup_steps[warmup_index]
+                if warmup_index < len(warmup_steps) - 1:
+                    warmup_index += 1
+            progress_text = _build_broadcast_progress_text(
+                broadcast_id,
+                locale,
+                buttons=buttons,
+                media_kind=media_kind,
+                target_count=target_count,
+                sent_count=sent_count,
+                failed_count=failed_count,
+                percent=percent,
+                status=progress_status,
+            )
+            progress_keyboard = _build_broadcast_progress_keyboard(progress_status, locale)
+            if progress_text != last_progress_text or progress_status != last_progress_status:
+                await _edit_panel_message(
+                    panel_message,
+                    progress_text,
+                    reply_markup=progress_keyboard,
+                )
+                last_progress_text = progress_text
+                last_progress_status = progress_status
+            if bool(progress.get("is_done")) or progress_status in {"SENT", "FAILED", "STOPPED"}:
+                break
+            await asyncio.sleep(0.8 if progress_status == "PAUSED" else 0.2)
+    finally:
+        await state.update_data(admin_ui_active_broadcast_id="")
 
     return _build_broadcast_result_summary_text(
         broadcast_id,
@@ -1174,6 +1259,7 @@ async def _wait_broadcast_progress_and_build_result(
 
 async def _send_broadcast_with_progress(
     panel_message: Message,
+    state: FSMContext,
     text: str,
     locale: str | None = "es",
     *,
@@ -1202,6 +1288,7 @@ async def _send_broadcast_with_progress(
     await api_client.admin_send_broadcast_async(broadcast_id)
     return await _wait_broadcast_progress_and_build_result(
         panel_message,
+        state,
         broadcast_id,
         locale,
         buttons=buttons,
@@ -3660,9 +3747,11 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
                     buttons = _normalize_broadcast_buttons_state(broadcast.get("buttons"))
                     media_kind = _saved_broadcast_media_kind(broadcast)
+                    await state.update_data(admin_ui_active_broadcast_id=broadcast_id, **panel_anchor)
                     await api_client.admin_send_broadcast_async(broadcast_id)
                     text = await _wait_broadcast_progress_and_build_result(
                         callback.message,
+                        state,
                         broadcast_id,
                         locale,
                         buttons=buttons,
@@ -3793,6 +3882,90 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     await callback.answer(_tr(locale, "Vista previa cerrada.", "Preview closed."))
                     return
 
+            if sub_action == "control":
+                control_action = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                broadcast_id = str(data.get("admin_ui_active_broadcast_id") or "").strip()
+                if not broadcast_id:
+                    await _answer_callback_safe(
+                        callback,
+                        _tr(locale, "No hay una difusión activa.", "There is no active broadcast."),
+                        show_alert=True,
+                    )
+                    return
+                if control_action == "pause":
+                    response = await api_client.admin_pause_broadcast(broadcast_id)
+                    progress = response.get("progress") or {}
+                    text = _build_broadcast_progress_text(
+                        broadcast_id,
+                        locale,
+                        buttons=_normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons")),
+                        media_kind=str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower() or None,
+                        target_count=_safe_int(progress.get("target_count"), 0, 0, 10**9),
+                        sent_count=_safe_int(progress.get("sent_count"), 0, 0, 10**9),
+                        failed_count=_safe_int(progress.get("failed_count"), 0, 0, 10**9),
+                        percent=_safe_int(progress.get("percent"), 0, 0, 100),
+                        status=progress.get("status"),
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=_build_broadcast_progress_keyboard(progress.get("status"), locale),
+                    )
+                    await _answer_callback_safe(
+                        callback,
+                        _tr(locale, "Difusión pausándose.", "Broadcast is pausing."),
+                    )
+                    return
+                if control_action == "resume":
+                    response = await api_client.admin_resume_broadcast(broadcast_id)
+                    progress = response.get("progress") or {}
+                    text = _build_broadcast_progress_text(
+                        broadcast_id,
+                        locale,
+                        buttons=_normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons")),
+                        media_kind=str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower() or None,
+                        target_count=_safe_int(progress.get("target_count"), 0, 0, 10**9),
+                        sent_count=_safe_int(progress.get("sent_count"), 0, 0, 10**9),
+                        failed_count=_safe_int(progress.get("failed_count"), 0, 0, 10**9),
+                        percent=_safe_int(progress.get("percent"), 0, 0, 100),
+                        status=progress.get("status"),
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=_build_broadcast_progress_keyboard(progress.get("status"), locale),
+                    )
+                    await _answer_callback_safe(
+                        callback,
+                        _tr(locale, "Difusión reanudada.", "Broadcast resumed."),
+                    )
+                    return
+                if control_action == "stop":
+                    response = await api_client.admin_stop_broadcast(broadcast_id)
+                    progress = response.get("progress") or {}
+                    text = _build_broadcast_progress_text(
+                        broadcast_id,
+                        locale,
+                        buttons=_normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons")),
+                        media_kind=str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower() or None,
+                        target_count=_safe_int(progress.get("target_count"), 0, 0, 10**9),
+                        sent_count=_safe_int(progress.get("sent_count"), 0, 0, 10**9),
+                        failed_count=_safe_int(progress.get("failed_count"), 0, 0, 10**9),
+                        percent=_safe_int(progress.get("percent"), 0, 0, 100),
+                        status=progress.get("status"),
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=_build_broadcast_progress_keyboard(progress.get("status"), locale),
+                    )
+                    await _answer_callback_safe(
+                        callback,
+                        _tr(locale, "Difusión detenida.", "Broadcast stopped."),
+                    )
+                    return
+
             if sub_action == "skip":
                 step = str(parts[3] if len(parts) > 3 else "").lower()
                 data = await state.get_data()
@@ -3889,6 +4062,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     await _answer_callback_safe(callback)
                     text = await _send_broadcast_with_progress(
                         callback.message,
+                        state,
                         message_plain_text,
                         locale=locale,
                         buttons=buttons,
@@ -4364,6 +4538,17 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
         error_code = payload.get("error") if isinstance(payload, dict) else None
         if error_code == "ORDER_NOT_FOUND":
             text = _build_order_not_found_text(payload, locale)
+        elif error_code == "BROADCAST_ALREADY_SENDING":
+            data = await state.get_data()
+            active_broadcast_id = str(
+                data.get("admin_ui_active_broadcast_id")
+                or data.get("admin_ui_selected_saved_broadcast_id")
+                or ""
+            ).strip()
+            text = _build_broadcast_already_sending_text(
+                locale,
+                broadcast_id=active_broadcast_id or None,
+            )
         else:
             text = _tr(
                 locale,
@@ -5974,6 +6159,90 @@ async def cmd_broadcast(message: Message) -> None:
         )
     except Exception as exc:
         await message.answer(f"❌ Error enviando broadcast: {exc}")
+
+
+@router.message(Command("Parardifusion"))
+@router.message(Command("parardifusion"))
+async def cmd_stop_broadcast(message: Message, state: FSMContext) -> None:
+    locale = await _admin_guard(message)
+    if not locale:
+        return
+    if not _admin_http_configured():
+        await message.answer("⚠️ Falta API_TOKEN o ADMIN_API_KEY en `telegram-sales-bot/.env`.")
+        return
+
+    arg = _extract_args(message.text).split()
+    data = await state.get_data()
+    broadcast_id = (
+        (arg[0] if arg else "")
+        or str(data.get("admin_ui_active_broadcast_id") or "").strip()
+        or str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+    )
+    broadcast_id = str(broadcast_id or "").strip()
+    if not broadcast_id:
+        await message.answer(
+            _tr(
+                locale,
+                "Uso: <code>/Parardifusion ID_DE_LA_DIFUSION</code>\n\n"
+                "Si entraste desde una difusión activa, también puedes usar solo <code>/Parardifusion</code>.",
+                "Usage: <code>/Parardifusion BROADCAST_ID</code>\n\n"
+                "If you opened it from an active broadcast, you can also use only <code>/Parardifusion</code>.",
+            ),
+            parse_mode="HTML",
+        )
+        return
+
+    try:
+        broadcast_res = await api_client.admin_get_broadcast(broadcast_id)
+        broadcast = broadcast_res.get("broadcast", {}) or {}
+        buttons = _normalize_broadcast_buttons_state(broadcast.get("buttons"))
+        media_kind = _saved_broadcast_media_kind(broadcast)
+        stop_res = await api_client.admin_stop_broadcast(broadcast_id)
+        progress = stop_res.get("progress") or {}
+        await state.update_data(admin_ui_active_broadcast_id="")
+        await message.answer(
+            _build_broadcast_result_summary_text(
+                broadcast_id,
+                locale,
+                buttons=buttons,
+                media_kind=media_kind,
+                target_count=_safe_int(progress.get("target_count"), 0, 0, 10**9),
+                sent_count=_safe_int(progress.get("sent_count"), 0, 0, 10**9),
+                failed_count=_safe_int(progress.get("failed_count"), 0, 0, 10**9),
+                final_status="STOPPED",
+            ),
+            reply_markup=_build_back_to_panel_keyboard(locale),
+            parse_mode="HTML",
+        )
+    except httpx.HTTPStatusError as exc:
+        try:
+            payload = exc.response.json()
+        except Exception:
+            payload = {}
+        error_code = payload.get("error") if isinstance(payload, dict) else None
+        await message.answer(
+            _tr(
+                locale,
+                "❌ <b>No pude detener la difusión</b>\n\n"
+                f"Código: <b>{exc.response.status_code}</b>\n"
+                f"Detalle: <code>{_escape_html(error_code or 'ERROR')}</code>",
+                "❌ <b>I could not stop the broadcast</b>\n\n"
+                f"Code: <b>{exc.response.status_code}</b>\n"
+                f"Detail: <code>{_escape_html(error_code or 'ERROR')}</code>",
+            ),
+            parse_mode="HTML",
+        )
+    except Exception as exc:
+        await message.answer(
+            _tr(
+                locale,
+                "❌ <b>Error deteniendo la difusión</b>\n\n"
+                f"<code>{_escape_html(exc)}</code>",
+                "❌ <b>Error stopping the broadcast</b>\n\n"
+                f"<code>{_escape_html(exc)}</code>",
+            ),
+            parse_mode="HTML",
+        )
 
 
 @router.message(Command("logs"))

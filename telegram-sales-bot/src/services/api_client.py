@@ -368,6 +368,33 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_pause_broadcast(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}/pause"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, headers=self._headers(), timeout=20
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_resume_broadcast(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}/resume"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, headers=self._headers(), timeout=20
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_stop_broadcast(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}/stop"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, headers=self._headers(), timeout=20
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def admin_get_logs(self, category: str, limit: int = 10) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/logs"
         async with httpx.AsyncClient() as client:

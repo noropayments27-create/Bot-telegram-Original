@@ -784,11 +784,19 @@ async function acquireBroadcastLease(pool, broadcastId, workerToken) {
          END,
          progress_updated_at = now()
      WHERE id = $1
-       AND progress_status IN ('QUEUED', 'SENDING')
        AND (
-         progress_lease_token = $2
-         OR progress_lease_expires_at IS NULL
-         OR progress_lease_expires_at <= now()
+         (
+           progress_status IN ('QUEUED', 'SENDING')
+           AND (
+             progress_lease_token = $2
+             OR progress_lease_expires_at IS NULL
+             OR progress_lease_expires_at <= now()
+           )
+         )
+         OR (
+           progress_status IN ('PAUSING', 'STOPPING')
+           AND progress_lease_token = $2
+         )
        )
      RETURNING id`,
     [broadcastId, workerToken, BROADCAST_LEASE_SECONDS]
@@ -808,7 +816,11 @@ async function markBroadcastCheckpoint(
 ) {
   const updateRes = await pool.query(
     `UPDATE broadcasts
-     SET progress_status = 'SENDING',
+     SET progress_status = CASE
+           WHEN progress_status = 'PAUSING' THEN 'PAUSING'
+           WHEN progress_status = 'STOPPING' THEN 'STOPPING'
+           ELSE 'SENDING'
+         END,
          progress_target_count = $3,
          progress_sent_count = $4,
          progress_failed_count = $5,
@@ -821,7 +833,7 @@ async function markBroadcastCheckpoint(
          progress_started_at = COALESCE(progress_started_at, now())
      WHERE id = $1
        AND progress_lease_token = $2
-     RETURNING id`,
+     RETURNING progress_status`,
     [
       broadcastId,
       workerToken,
@@ -834,7 +846,60 @@ async function markBroadcastCheckpoint(
       BROADCAST_LEASE_SECONDS,
     ]
   );
+  return updateRes.rows[0]?.progress_status || null;
+}
+
+async function finalizePausedBroadcast(pool, broadcastId, workerToken) {
+  const updateRes = await pool.query(
+    `UPDATE broadcasts
+     SET progress_status = 'PAUSED',
+         progress_lease_token = NULL,
+         progress_lease_expires_at = NULL,
+         progress_updated_at = now()
+     WHERE id = $1
+       AND progress_lease_token = $2
+     RETURNING id`,
+    [broadcastId, workerToken]
+  );
   return updateRes.rowCount > 0;
+}
+
+async function finalizeStoppedBroadcast(
+  pool,
+  broadcastId,
+  workerToken,
+  recipientIds,
+  sentCount,
+  failedCount
+) {
+  const updateRes = await pool.query(
+    `UPDATE broadcasts
+     SET status = 'FAILED',
+         sent_at = now(),
+         progress_status = 'STOPPED',
+         progress_target_count = $3,
+         progress_sent_count = $4,
+         progress_failed_count = $5,
+         progress_cursor = $6,
+         progress_recipients = $7::jsonb,
+         progress_last_error = 'Stopped manually by admin',
+         progress_lease_token = NULL,
+         progress_lease_expires_at = NULL,
+         progress_updated_at = now()
+     WHERE id = $1
+       AND progress_lease_token = $2
+     RETURNING *`,
+    [
+      broadcastId,
+      workerToken,
+      recipientIds.length,
+      sentCount,
+      failedCount,
+      Math.max(Number(sentCount || 0) + Number(failedCount || 0), 0),
+      JSON.stringify(recipientIds),
+    ]
+  );
+  return updateRes.rows[0] || null;
 }
 
 async function finalizeBroadcastCheckpoint(
@@ -880,8 +945,23 @@ async function markBroadcastRetryableFailure(pool, broadcastId, workerToken, err
   const message = error && error.message ? String(error.message) : String(error || "UNKNOWN");
   await pool.query(
     `UPDATE broadcasts
-     SET progress_status = 'QUEUED',
-         progress_last_error = $3,
+     SET status = CASE
+           WHEN progress_status = 'STOPPING' THEN 'FAILED'
+           ELSE status
+         END,
+         sent_at = CASE
+           WHEN progress_status = 'STOPPING' THEN COALESCE(sent_at, now())
+           ELSE sent_at
+         END,
+         progress_status = CASE
+           WHEN progress_status = 'PAUSING' THEN 'PAUSED'
+           WHEN progress_status = 'STOPPING' THEN 'STOPPED'
+           ELSE 'QUEUED'
+         END,
+         progress_last_error = CASE
+           WHEN progress_status = 'STOPPING' THEN 'Stopped manually by admin'
+           ELSE $3
+         END,
          progress_lease_token = NULL,
          progress_lease_expires_at = NULL,
          progress_updated_at = now()
@@ -945,7 +1025,7 @@ async function runBroadcastSendJob(pool, broadcastId) {
       return;
     }
 
-    const checkpointOk = await markBroadcastCheckpoint(
+    const checkpointStatus = await markBroadcastCheckpoint(
       pool,
       broadcastId,
       workerToken,
@@ -955,7 +1035,22 @@ async function runBroadcastSendJob(pool, broadcastId) {
       cursor,
       null
     );
-    if (!checkpointOk) {
+    if (!checkpointStatus) {
+      return;
+    }
+    if (checkpointStatus === "PAUSING") {
+      await finalizePausedBroadcast(pool, broadcastId, workerToken);
+      return;
+    }
+    if (checkpointStatus === "STOPPING") {
+      await finalizeStoppedBroadcast(
+        pool,
+        broadcastId,
+        workerToken,
+        recipientIds,
+        sentCount,
+        failedCount
+      );
       return;
     }
 
@@ -979,7 +1074,7 @@ async function runBroadcastSendJob(pool, broadcastId) {
       }
 
       cursor += 1;
-      const saved = await markBroadcastCheckpoint(
+      const savedStatus = await markBroadcastCheckpoint(
         pool,
         broadcastId,
         workerToken,
@@ -989,7 +1084,39 @@ async function runBroadcastSendJob(pool, broadcastId) {
         cursor,
         null
       );
-      if (!saved) {
+      if (!savedStatus) {
+        return;
+      }
+      if (savedStatus === "PAUSING") {
+        await finalizePausedBroadcast(pool, broadcastId, workerToken);
+        return;
+      }
+      if (savedStatus === "STOPPING") {
+        const stopped = await finalizeStoppedBroadcast(
+          pool,
+          broadcastId,
+          workerToken,
+          recipientIds,
+          sentCount,
+          failedCount
+        );
+        if (stopped) {
+          await pool.query(
+            `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+             VALUES ($1, $2, $3, $4::jsonb)`,
+            [
+              "BROADCAST_SEND_RESULT",
+              "broadcast",
+              broadcastId,
+              JSON.stringify({
+                target_count: recipientIds.length,
+                sent_count: sentCount,
+                failed_count: failedCount,
+                stopped: true,
+              }),
+            ]
+          );
+        }
         return;
       }
 
@@ -1060,6 +1187,33 @@ function startBroadcastRecoveryLoop() {
     try {
       const pool = getPool();
       await ensureBroadcastSchema(pool);
+      await pool.query(
+        `UPDATE broadcasts
+         SET progress_status = 'PAUSED',
+             progress_lease_token = NULL,
+             progress_lease_expires_at = NULL,
+             progress_updated_at = now()
+         WHERE progress_status = 'PAUSING'
+           AND (
+             progress_lease_expires_at IS NULL
+             OR progress_lease_expires_at <= now()
+           )`
+      );
+      await pool.query(
+        `UPDATE broadcasts
+         SET status = 'FAILED',
+             sent_at = COALESCE(sent_at, now()),
+             progress_status = 'STOPPED',
+             progress_last_error = COALESCE(progress_last_error, 'Stopped manually by admin'),
+             progress_lease_token = NULL,
+             progress_lease_expires_at = NULL,
+             progress_updated_at = now()
+         WHERE progress_status = 'STOPPING'
+           AND (
+             progress_lease_expires_at IS NULL
+             OR progress_lease_expires_at <= now()
+           )`
+      );
       const pendingRes = await pool.query(
         `SELECT id
          FROM broadcasts
@@ -1123,7 +1277,7 @@ function buildBroadcastProgressPayload(row, fallbackResult = null) {
   const percent = targetCount > 0
     ? Math.max(0, Math.min(100, Math.round((processedCount / targetCount) * 100)))
     : 0;
-  const isDone = !["QUEUED", "SENDING"].includes(progressStatus);
+  const isDone = ["SENT", "FAILED", "STOPPED"].includes(progressStatus);
 
   return {
     status: progressStatus,
@@ -10061,6 +10215,154 @@ router.get("/broadcasts/:id/progress", async (req, res, next) => {
   }
 });
 
+router.post("/broadcasts/:id/pause", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureBroadcastSchema(pool);
+    const updateRes = await pool.query(
+      `UPDATE broadcasts
+       SET progress_status = CASE
+             WHEN progress_status = 'QUEUED' THEN 'PAUSED'
+             WHEN progress_status = 'SENDING' THEN 'PAUSING'
+             ELSE progress_status
+           END,
+           progress_lease_token = CASE
+             WHEN progress_status = 'QUEUED' THEN NULL
+             ELSE progress_lease_token
+           END,
+           progress_lease_expires_at = CASE
+             WHEN progress_status = 'QUEUED' THEN NULL
+             ELSE progress_lease_expires_at
+           END,
+           progress_last_error = NULL,
+           progress_updated_at = now()
+       WHERE id = $1
+         AND progress_status IN ('QUEUED', 'SENDING', 'PAUSED', 'PAUSING')
+       RETURNING *`,
+      [broadcastId]
+    );
+
+    if (updateRes.rowCount === 0) {
+      const existsRes = await pool.query("SELECT 1 FROM broadcasts WHERE id = $1", [broadcastId]);
+      if (existsRes.rowCount === 0) {
+        return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+      }
+      return res.status(409).json({ error: "BROADCAST_NOT_PAUSABLE" });
+    }
+
+    return res.json({
+      ok: true,
+      broadcast: updateRes.rows[0],
+      progress: buildBroadcastProgressPayload(updateRes.rows[0]),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/broadcasts/:id/resume", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureBroadcastSchema(pool);
+    const updateRes = await pool.query(
+      `UPDATE broadcasts
+       SET progress_status = 'QUEUED',
+           progress_last_error = NULL,
+           progress_lease_token = NULL,
+           progress_lease_expires_at = NULL,
+           progress_updated_at = now()
+       WHERE id = $1
+         AND progress_status = 'PAUSED'
+       RETURNING *`,
+      [broadcastId]
+    );
+
+    if (updateRes.rowCount === 0) {
+      const currentRes = await pool.query(
+        "SELECT progress_status FROM broadcasts WHERE id = $1",
+        [broadcastId]
+      );
+      if (currentRes.rowCount === 0) {
+        return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+      }
+      const currentStatus = String(currentRes.rows[0]?.progress_status || "").toUpperCase();
+      if (["QUEUED", "SENDING", "PAUSING", "STOPPING"].includes(currentStatus)) {
+        return res.status(409).json({ error: "BROADCAST_ALREADY_SENDING" });
+      }
+      return res.status(409).json({ error: "BROADCAST_NOT_PAUSED" });
+    }
+
+    scheduleBroadcastSendJob(pool, broadcastId);
+
+    return res.json({
+      ok: true,
+      broadcast: updateRes.rows[0],
+      progress: buildBroadcastProgressPayload(updateRes.rows[0]),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.post("/broadcasts/:id/stop", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureBroadcastSchema(pool);
+    const updateRes = await pool.query(
+      `UPDATE broadcasts
+       SET status = CASE
+             WHEN progress_status IN ('QUEUED', 'PAUSED') THEN 'FAILED'
+             ELSE status
+           END,
+           sent_at = CASE
+             WHEN progress_status IN ('QUEUED', 'PAUSED') THEN now()
+             ELSE sent_at
+           END,
+           progress_status = CASE
+             WHEN progress_status IN ('QUEUED', 'PAUSED') THEN 'STOPPED'
+             WHEN progress_status IN ('SENDING', 'PAUSING') THEN 'STOPPING'
+             ELSE progress_status
+           END,
+           progress_last_error = 'Stopped manually by admin',
+           progress_lease_token = CASE
+             WHEN progress_status IN ('QUEUED', 'PAUSED') THEN NULL
+             ELSE progress_lease_token
+           END,
+           progress_lease_expires_at = CASE
+             WHEN progress_status IN ('QUEUED', 'PAUSED') THEN NULL
+             ELSE progress_lease_expires_at
+           END,
+           progress_updated_at = now()
+       WHERE id = $1
+         AND progress_status IN ('QUEUED', 'SENDING', 'PAUSED', 'PAUSING', 'STOPPING', 'STOPPED')
+       RETURNING *`,
+      [broadcastId]
+    );
+
+    if (updateRes.rowCount === 0) {
+      const existsRes = await pool.query("SELECT 1 FROM broadcasts WHERE id = $1", [broadcastId]);
+      if (existsRes.rowCount === 0) {
+        return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+      }
+      return res.status(409).json({ error: "BROADCAST_NOT_STOPPABLE" });
+    }
+
+    return res.json({
+      ok: true,
+      broadcast: updateRes.rows[0],
+      progress: buildBroadcastProgressPayload(updateRes.rows[0]),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
 router.get("/broadcasts/:id/image", async (req, res, next) => {
   const broadcastId = req.params.id;
   const pool = getPool();
@@ -10451,7 +10753,7 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
     const asyncRequested = Boolean(req.body && req.body.async);
     if (asyncRequested) {
       const progressStatus = String(broadcast.progress_status || "").toUpperCase();
-      if (["QUEUED", "SENDING"].includes(progressStatus)) {
+      if (["QUEUED", "SENDING", "PAUSING", "STOPPING", "PAUSED"].includes(progressStatus)) {
         return res.status(409).json({ error: "BROADCAST_ALREADY_SENDING" });
       }
 
