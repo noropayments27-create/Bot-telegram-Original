@@ -3840,6 +3840,9 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 mode = str(parts[3] if len(parts) > 3 else "").lower()
                 data = await state.get_data()
                 message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                message_plain_text = str(
+                    data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
+                ).strip()
                 if not message_text:
                     await state.set_state(AdminUiStates.awaiting_value)
                     await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
