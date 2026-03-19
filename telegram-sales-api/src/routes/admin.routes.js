@@ -2,6 +2,7 @@ const express = require("express");
 const fs = require("fs/promises");
 const path = require("path");
 const net = require("net");
+const { randomUUID } = require("crypto");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
 const XLSX = require("xlsx");
@@ -593,6 +594,11 @@ async function ensureBroadcastSchema(pool) {
      ADD COLUMN IF NOT EXISTS progress_target_count integer NOT NULL DEFAULT 0,
      ADD COLUMN IF NOT EXISTS progress_sent_count integer NOT NULL DEFAULT 0,
      ADD COLUMN IF NOT EXISTS progress_failed_count integer NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS progress_recipients jsonb,
+     ADD COLUMN IF NOT EXISTS progress_cursor integer NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS progress_last_error text,
+     ADD COLUMN IF NOT EXISTS progress_lease_token text,
+     ADD COLUMN IF NOT EXISTS progress_lease_expires_at timestamptz,
      ADD COLUMN IF NOT EXISTS progress_started_at timestamptz,
      ADD COLUMN IF NOT EXISTS progress_updated_at timestamptz`
   );
@@ -656,6 +662,437 @@ function normalizeBroadcastMessageEntities(value) {
     .filter(Boolean);
 }
 
+const BROADCAST_BATCH_SIZE = 25;
+const BROADCAST_BATCH_DELAY_MS = 75;
+const BROADCAST_LEASE_SECONDS = Math.max(
+  Number(process.env.BROADCAST_LEASE_SECONDS || 45) || 45,
+  10
+);
+const BROADCAST_RECOVERY_INTERVAL_MS = Math.max(
+  Number(process.env.BROADCAST_RECOVERY_INTERVAL_MS || 15000) || 15000,
+  5000
+);
+const _activeBroadcastJobs = new Set();
+let _broadcastRecoveryStarted = false;
+
+function normalizeBroadcastRecipientIds(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return Array.from(
+    new Set(
+      value
+        .map((item) => String(item || "").trim())
+        .filter((item) => item && /^-?[0-9]+$/.test(item))
+    )
+  );
+}
+
+function buildBroadcastDeliveryContext(broadcast) {
+  const messageEntities = normalizeBroadcastMessageEntities(broadcast.message_entities);
+  const usesEntities = messageEntities.length > 0;
+  const formattedMessage = usesEntities
+    ? String(broadcast.message_text || "")
+    : formatBroadcastMessage(broadcast.message_text);
+  const buttons = Array.isArray(broadcast.buttons) ? broadcast.buttons : [];
+  const replyMarkup = buildInlineKeyboard(buttons);
+  const messageOptions = replyMarkup ? { reply_markup: replyMarkup } : {};
+  if (usesEntities) {
+    messageOptions.entities = messageEntities;
+  } else {
+    messageOptions.parse_mode = "HTML";
+  }
+  const storedTelegramMedia = parseStoredTelegramMedia(
+    broadcast.image_path,
+    broadcast.image_mime
+  );
+  return {
+    usesEntities,
+    messageEntities,
+    formattedMessage,
+    replyMarkup,
+    messageOptions,
+    storedTelegramMedia,
+  };
+}
+
+async function sendBroadcastToRecipient(context, broadcast, telegramId) {
+  const {
+    usesEntities,
+    messageEntities,
+    formattedMessage,
+    replyMarkup,
+    messageOptions,
+    storedTelegramMedia,
+  } = context;
+
+  if (storedTelegramMedia) {
+    const mediaPayload = {
+      file_id: storedTelegramMedia.fileId,
+      caption: formattedMessage,
+      reply_markup: replyMarkup || undefined,
+    };
+    if (usesEntities) {
+      mediaPayload.caption_entities = messageEntities;
+    } else {
+      mediaPayload.parse_mode = "HTML";
+    }
+    if (storedTelegramMedia.kind === "video") {
+      await sendVideo(telegramId, mediaPayload);
+    } else if (storedTelegramMedia.kind === "animation") {
+      await sendAnimation(telegramId, mediaPayload);
+    } else {
+      await sendPhoto(telegramId, mediaPayload);
+    }
+    return;
+  }
+
+  if (broadcast.image_path) {
+    const mime = String(broadcast.image_mime || "").trim().toLowerCase();
+    const mediaPayload = {
+      path: broadcast.image_path,
+      filename: broadcast.image_filename || undefined,
+      caption: formattedMessage,
+      reply_markup: replyMarkup || undefined,
+    };
+    if (usesEntities) {
+      mediaPayload.caption_entities = messageEntities;
+    } else {
+      mediaPayload.parse_mode = "HTML";
+    }
+    if (mime === "image/gif") {
+      await sendAnimation(telegramId, mediaPayload);
+    } else if (mime.startsWith("video/")) {
+      await sendVideo(telegramId, mediaPayload);
+    } else {
+      await sendPhoto(telegramId, mediaPayload);
+    }
+    return;
+  }
+
+  await sendMessage(telegramId, formattedMessage, messageOptions);
+}
+
+async function acquireBroadcastLease(pool, broadcastId, workerToken) {
+  const leaseRes = await pool.query(
+    `UPDATE broadcasts
+     SET progress_lease_token = $2,
+         progress_lease_expires_at = now() + ($3 * interval '1 second'),
+         progress_status = CASE
+           WHEN progress_status = 'QUEUED' THEN 'SENDING'
+           ELSE progress_status
+         END,
+         progress_updated_at = now()
+     WHERE id = $1
+       AND progress_status IN ('QUEUED', 'SENDING')
+       AND (
+         progress_lease_token = $2
+         OR progress_lease_expires_at IS NULL
+         OR progress_lease_expires_at <= now()
+       )
+     RETURNING id`,
+    [broadcastId, workerToken, BROADCAST_LEASE_SECONDS]
+  );
+  return leaseRes.rowCount > 0;
+}
+
+async function markBroadcastCheckpoint(
+  pool,
+  broadcastId,
+  workerToken,
+  recipientIds,
+  sentCount,
+  failedCount,
+  cursor,
+  lastError = null
+) {
+  const updateRes = await pool.query(
+    `UPDATE broadcasts
+     SET progress_status = 'SENDING',
+         progress_target_count = $3,
+         progress_sent_count = $4,
+         progress_failed_count = $5,
+         progress_cursor = $6,
+         progress_recipients = $7::jsonb,
+         progress_last_error = $8,
+         progress_lease_token = $2,
+         progress_lease_expires_at = now() + ($9 * interval '1 second'),
+         progress_updated_at = now(),
+         progress_started_at = COALESCE(progress_started_at, now())
+     WHERE id = $1
+       AND progress_lease_token = $2
+     RETURNING id`,
+    [
+      broadcastId,
+      workerToken,
+      recipientIds.length,
+      sentCount,
+      failedCount,
+      cursor,
+      JSON.stringify(recipientIds),
+      lastError,
+      BROADCAST_LEASE_SECONDS,
+    ]
+  );
+  return updateRes.rowCount > 0;
+}
+
+async function finalizeBroadcastCheckpoint(
+  pool,
+  broadcastId,
+  workerToken,
+  recipientIds,
+  sentCount,
+  failedCount,
+  finalStatus
+) {
+  const updatedRes = await pool.query(
+    `UPDATE broadcasts
+     SET status = $3,
+         sent_at = now(),
+         progress_status = $3,
+         progress_target_count = $4,
+         progress_sent_count = $5,
+         progress_failed_count = $6,
+         progress_cursor = $4,
+         progress_recipients = $7::jsonb,
+         progress_last_error = NULL,
+         progress_lease_token = NULL,
+         progress_lease_expires_at = NULL,
+         progress_updated_at = now()
+     WHERE id = $1
+       AND progress_lease_token = $2
+     RETURNING *`,
+    [
+      broadcastId,
+      workerToken,
+      finalStatus,
+      recipientIds.length,
+      sentCount,
+      failedCount,
+      JSON.stringify(recipientIds),
+    ]
+  );
+  return updatedRes.rows[0] || null;
+}
+
+async function markBroadcastRetryableFailure(pool, broadcastId, workerToken, error) {
+  const message = error && error.message ? String(error.message) : String(error || "UNKNOWN");
+  await pool.query(
+    `UPDATE broadcasts
+     SET progress_status = 'QUEUED',
+         progress_last_error = $3,
+         progress_lease_token = NULL,
+         progress_lease_expires_at = NULL,
+         progress_updated_at = now()
+     WHERE id = $1
+       AND progress_lease_token = $2`,
+    [broadcastId, workerToken, message.slice(0, 500)]
+  );
+}
+
+async function runBroadcastSendJob(pool, broadcastId) {
+  if (!broadcastId || _activeBroadcastJobs.has(broadcastId)) {
+    return;
+  }
+  _activeBroadcastJobs.add(broadcastId);
+  const workerToken = randomUUID();
+
+  try {
+    const leaseAcquired = await acquireBroadcastLease(pool, broadcastId, workerToken);
+    if (!leaseAcquired) {
+      return;
+    }
+
+    const broadcastRes = await pool.query("SELECT * FROM broadcasts WHERE id = $1", [broadcastId]);
+    if (broadcastRes.rowCount === 0) {
+      return;
+    }
+    const broadcast = broadcastRes.rows[0];
+    const recipientIds = normalizeBroadcastRecipientIds(broadcast.progress_recipients);
+    const context = buildBroadcastDeliveryContext(broadcast);
+    let cursor = Math.max(Number(broadcast.progress_cursor || 0), 0);
+    let sentCount = Math.max(Number(broadcast.progress_sent_count || 0), 0);
+    let failedCount = Math.max(Number(broadcast.progress_failed_count || 0), 0);
+
+    if (recipientIds.length === 0) {
+      const finalStatus = "FAILED";
+      const finalized = await finalizeBroadcastCheckpoint(
+        pool,
+        broadcastId,
+        workerToken,
+        recipientIds,
+        sentCount,
+        failedCount,
+        finalStatus
+      );
+      if (finalized) {
+        await pool.query(
+          `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+           VALUES ($1, $2, $3, $4::jsonb)`,
+          [
+            "BROADCAST_SEND_RESULT",
+            "broadcast",
+            broadcastId,
+            JSON.stringify({
+              target_count: 0,
+              sent_count: sentCount,
+              failed_count: failedCount,
+            }),
+          ]
+        );
+      }
+      return;
+    }
+
+    const checkpointOk = await markBroadcastCheckpoint(
+      pool,
+      broadcastId,
+      workerToken,
+      recipientIds,
+      sentCount,
+      failedCount,
+      cursor,
+      null
+    );
+    if (!checkpointOk) {
+      return;
+    }
+
+    while (cursor < recipientIds.length) {
+      const leaseOk = await acquireBroadcastLease(pool, broadcastId, workerToken);
+      if (!leaseOk) {
+        return;
+      }
+
+      const telegramId = recipientIds[cursor];
+      try {
+        await sendBroadcastToRecipient(context, broadcast, telegramId);
+        sentCount += 1;
+      } catch (err) {
+        failedCount += 1;
+        console.error("Broadcast send failed", {
+          broadcastId,
+          telegramId,
+          error: err && err.message ? err.message : err,
+        });
+      }
+
+      cursor += 1;
+      const saved = await markBroadcastCheckpoint(
+        pool,
+        broadcastId,
+        workerToken,
+        recipientIds,
+        sentCount,
+        failedCount,
+        cursor,
+        null
+      );
+      if (!saved) {
+        return;
+      }
+
+      if (cursor < recipientIds.length && cursor % BROADCAST_BATCH_SIZE === 0) {
+        await new Promise((resolve) => setTimeout(resolve, BROADCAST_BATCH_DELAY_MS));
+      }
+    }
+
+    const finalStatus = sentCount > 0 ? "SENT" : "FAILED";
+    const finalized = await finalizeBroadcastCheckpoint(
+      pool,
+      broadcastId,
+      workerToken,
+      recipientIds,
+      sentCount,
+      failedCount,
+      finalStatus
+    );
+    if (!finalized) {
+      return;
+    }
+
+    await pool.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "BROADCAST_SEND_RESULT",
+        "broadcast",
+        broadcastId,
+        JSON.stringify({
+          target_count: recipientIds.length,
+          sent_count: sentCount,
+          failed_count: failedCount,
+        }),
+      ]
+    );
+  } catch (error) {
+    console.error("Broadcast resilient send failed", {
+      broadcastId,
+      error: error && error.message ? error.message : error,
+    });
+    await markBroadcastRetryableFailure(pool, broadcastId, workerToken, error);
+  } finally {
+    _activeBroadcastJobs.delete(broadcastId);
+  }
+}
+
+function scheduleBroadcastSendJob(pool, broadcastId, delayMs = 0) {
+  if (!broadcastId || _activeBroadcastJobs.has(broadcastId)) {
+    return;
+  }
+  const launch = () => {
+    void runBroadcastSendJob(pool, broadcastId);
+  };
+  if (delayMs > 0) {
+    setTimeout(launch, delayMs);
+  } else {
+    setImmediate(launch);
+  }
+}
+
+function startBroadcastRecoveryLoop() {
+  if (_broadcastRecoveryStarted) {
+    return;
+  }
+  _broadcastRecoveryStarted = true;
+  const tick = async () => {
+    try {
+      const pool = getPool();
+      await ensureBroadcastSchema(pool);
+      const pendingRes = await pool.query(
+        `SELECT id
+         FROM broadcasts
+         WHERE progress_status IN ('QUEUED', 'SENDING')
+           AND progress_recipients IS NOT NULL
+           AND jsonb_typeof(progress_recipients) = 'array'
+           AND COALESCE(progress_cursor, 0) < jsonb_array_length(progress_recipients)
+           AND (
+             progress_lease_expires_at IS NULL
+             OR progress_lease_expires_at <= now()
+           )
+         ORDER BY progress_updated_at NULLS FIRST, created_at ASC
+         LIMIT 10`
+      );
+      for (const row of pendingRes.rows) {
+        const broadcastId = String(row.id || "").trim();
+        if (!broadcastId) {
+          continue;
+        }
+        scheduleBroadcastSendJob(pool, broadcastId);
+      }
+    } catch (error) {
+      console.error("Broadcast recovery tick failed", error);
+    }
+  };
+  setTimeout(() => {
+    void tick();
+    setInterval(() => {
+      void tick();
+    }, BROADCAST_RECOVERY_INTERVAL_MS);
+  }, 5000);
+}
+
 function buildBroadcastProgressPayload(row, fallbackResult = null) {
   const progressStatus = String(
     row?.progress_status
@@ -676,7 +1113,12 @@ function buildBroadcastProgressPayload(row, fallbackResult = null) {
       ? row.progress_failed_count
       : fallbackResult?.failed_count || 0
   );
-  const processedCount = sentCount + failedCount;
+  const cursor = Number(
+    row?.progress_cursor != null
+      ? row.progress_cursor
+      : sentCount + failedCount
+  );
+  const processedCount = Math.max(cursor, sentCount + failedCount);
   const pendingCount = Math.max(targetCount - processedCount, 0);
   const percent = targetCount > 0
     ? Math.max(0, Math.min(100, Math.round((processedCount / targetCount) * 100)))
@@ -688,12 +1130,14 @@ function buildBroadcastProgressPayload(row, fallbackResult = null) {
     target_count: targetCount,
     sent_count: sentCount,
     failed_count: failedCount,
+    cursor,
     processed_count: processedCount,
     pending_count: pendingCount,
     percent,
     is_done: isDone,
     started_at: row?.progress_started_at || null,
     updated_at: row?.progress_updated_at || null,
+    last_error: row?.progress_last_error || null,
   };
 }
 
@@ -839,29 +1283,9 @@ async function resolveBroadcastRecipients(pool, broadcastId, broadcast, body = {
 async function performBroadcastSend(pool, broadcast, recipientIds, options = {}) {
   const broadcastId = broadcast.id;
   const updateProgress = options.updateProgress === true;
-  const batchSize = 25;
-  const batchDelayMs = 75;
   let sentCount = 0;
   let failedCount = 0;
-
-  const messageEntities = normalizeBroadcastMessageEntities(broadcast.message_entities);
-  const usesEntities = messageEntities.length > 0;
-  const formattedMessage = usesEntities
-    ? String(broadcast.message_text || "")
-    : formatBroadcastMessage(broadcast.message_text);
-  const buttons = Array.isArray(broadcast.buttons) ? broadcast.buttons : [];
-  const replyMarkup = buildInlineKeyboard(buttons);
-  const messageOptions = replyMarkup ? { reply_markup: replyMarkup } : {};
-  if (usesEntities) {
-    messageOptions.entities = messageEntities;
-  } else {
-    messageOptions.parse_mode = "HTML";
-  }
-
-  const storedTelegramMedia = parseStoredTelegramMedia(
-    broadcast.image_path,
-    broadcast.image_mime
-  );
+  const context = buildBroadcastDeliveryContext(broadcast);
 
   if (updateProgress) {
     await pool.query(
@@ -870,57 +1294,18 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
            progress_target_count = $2,
            progress_sent_count = 0,
            progress_failed_count = 0,
+           progress_cursor = 0,
            progress_updated_at = now()
        WHERE id = $1`,
       [broadcastId, recipientIds.length]
     );
   }
 
-  for (let i = 0; i < recipientIds.length; i += batchSize) {
-    const batch = recipientIds.slice(i, i + batchSize);
+  for (let i = 0; i < recipientIds.length; i += BROADCAST_BATCH_SIZE) {
+    const batch = recipientIds.slice(i, i + BROADCAST_BATCH_SIZE);
     for (const telegramId of batch) {
       try {
-        if (storedTelegramMedia) {
-          const mediaPayload = {
-            file_id: storedTelegramMedia.fileId,
-            caption: formattedMessage,
-            reply_markup: replyMarkup || undefined,
-          };
-          if (usesEntities) {
-            mediaPayload.caption_entities = messageEntities;
-          } else {
-            mediaPayload.parse_mode = "HTML";
-          }
-          if (storedTelegramMedia.kind === "video") {
-            await sendVideo(telegramId, mediaPayload);
-          } else if (storedTelegramMedia.kind === "animation") {
-            await sendAnimation(telegramId, mediaPayload);
-          } else {
-            await sendPhoto(telegramId, mediaPayload);
-          }
-        } else if (broadcast.image_path) {
-          const mime = String(broadcast.image_mime || "").trim().toLowerCase();
-          const mediaPayload = {
-            path: broadcast.image_path,
-            filename: broadcast.image_filename || undefined,
-            caption: formattedMessage,
-            reply_markup: replyMarkup || undefined,
-          };
-          if (usesEntities) {
-            mediaPayload.caption_entities = messageEntities;
-          } else {
-            mediaPayload.parse_mode = "HTML";
-          }
-          if (mime === "image/gif") {
-            await sendAnimation(telegramId, mediaPayload);
-          } else if (mime.startsWith("video/")) {
-            await sendVideo(telegramId, mediaPayload);
-          } else {
-            await sendPhoto(telegramId, mediaPayload);
-          }
-        } else {
-          await sendMessage(telegramId, formattedMessage, messageOptions);
-        }
+        await sendBroadcastToRecipient(context, broadcast, telegramId);
         sentCount += 1;
       } catch (err) {
         failedCount += 1;
@@ -936,15 +1321,16 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
           `UPDATE broadcasts
            SET progress_sent_count = $2,
                progress_failed_count = $3,
+               progress_cursor = $4,
                progress_updated_at = now()
            WHERE id = $1`,
-          [broadcastId, sentCount, failedCount]
+          [broadcastId, sentCount, failedCount, sentCount + failedCount]
         );
       }
     }
 
-    if (i + batchSize < recipientIds.length) {
-      await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
+    if (i + BROADCAST_BATCH_SIZE < recipientIds.length) {
+      await new Promise((resolve) => setTimeout(resolve, BROADCAST_BATCH_DELAY_MS));
     }
   }
 
@@ -957,6 +1343,7 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
          progress_target_count = $3,
          progress_sent_count = $4,
          progress_failed_count = $5,
+         progress_cursor = $3,
          progress_updated_at = now()
      WHERE id = $2
      RETURNING *`,
@@ -9650,7 +10037,8 @@ router.get("/broadcasts/:id/progress", async (req, res, next) => {
     await ensureBroadcastSchema(pool);
     const broadcastRes = await pool.query(
       `SELECT id, status, progress_status, progress_target_count, progress_sent_count,
-              progress_failed_count, progress_started_at, progress_updated_at
+              progress_failed_count, progress_cursor, progress_last_error,
+              progress_started_at, progress_updated_at
        FROM broadcasts
        WHERE id = $1`,
       [broadcastId]
@@ -10067,55 +10455,31 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
         return res.status(409).json({ error: "BROADCAST_ALREADY_SENDING" });
       }
 
+      const { recipientIds } = await resolveBroadcastRecipients(
+        pool,
+        broadcastId,
+        broadcast,
+        req.body || {}
+      );
+
       await pool.query(
         `UPDATE broadcasts
          SET progress_status = 'QUEUED',
-             progress_target_count = 0,
+             progress_target_count = $2,
              progress_sent_count = 0,
              progress_failed_count = 0,
+             progress_cursor = 0,
+             progress_recipients = $3::jsonb,
+             progress_last_error = NULL,
+             progress_lease_token = NULL,
+             progress_lease_expires_at = NULL,
              progress_started_at = now(),
              progress_updated_at = now()
          WHERE id = $1`,
-        [broadcastId]
+        [broadcastId, recipientIds.length, JSON.stringify(recipientIds)]
       );
 
-      const requestBody = req.body || {};
-      setImmediate(() => {
-        void (async () => {
-          try {
-            const freshBroadcastRes = await pool.query(
-              "SELECT * FROM broadcasts WHERE id = $1",
-              [broadcastId]
-            );
-            if (freshBroadcastRes.rowCount === 0) {
-              return;
-            }
-            const freshBroadcast = freshBroadcastRes.rows[0];
-            const { recipientIds } = await resolveBroadcastRecipients(
-              pool,
-              broadcastId,
-              freshBroadcast,
-              requestBody
-            );
-            await performBroadcastSend(pool, freshBroadcast, recipientIds, {
-              updateProgress: true,
-            });
-          } catch (error) {
-            console.error("Broadcast async send failed", {
-              broadcastId,
-              error: error && error.message ? error.message : error,
-            });
-            await pool.query(
-              `UPDATE broadcasts
-               SET status = 'FAILED',
-                   progress_status = 'FAILED',
-                   progress_updated_at = now()
-               WHERE id = $1`,
-              [broadcastId]
-            );
-          }
-        })();
-      });
+      scheduleBroadcastSendJob(pool, broadcastId);
 
       const queuedRes = await pool.query("SELECT * FROM broadcasts WHERE id = $1", [
         broadcastId,
@@ -10150,5 +10514,7 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
     next(error);
   }
 });
+
+startBroadcastRecoveryLoop();
 
 module.exports = router;

@@ -2185,6 +2185,16 @@ async def _edit_state_panel_message(
     await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
 
 
+async def _answer_callback_safe(callback: CallbackQuery, *args: Any, **kwargs: Any) -> bool:
+    try:
+        await callback.answer(*args, **kwargs)
+        return True
+    except TelegramBadRequest:
+        return False
+    except Exception:
+        return False
+
+
 async def _delete_message_safe(message: Message) -> None:
     try:
         await message.delete()
@@ -3646,6 +3656,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         )
                         await _edit_panel_message(callback.message, text, reply_markup=keyboard)
                         return
+                    await _answer_callback_safe(callback)
                     broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
                     buttons = _normalize_broadcast_buttons_state(broadcast.get("buttons"))
                     media_kind = _saved_broadcast_media_kind(broadcast)
@@ -3875,6 +3886,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     return
 
                 if mode == "send":
+                    await _answer_callback_safe(callback)
                     text = await _send_broadcast_with_progress(
                         callback.message,
                         message_plain_text,
@@ -4380,7 +4392,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             reply_markup=_build_admin_panel_keyboard(locale),
         )
     finally:
-        await callback.answer()
+        await _answer_callback_safe(callback)
 
 
 @router.message(AdminUiStates.awaiting_value)
