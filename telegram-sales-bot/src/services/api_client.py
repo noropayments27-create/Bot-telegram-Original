@@ -117,8 +117,9 @@ class ApiClient:
             "active": "true",
             "page": page,
             "page_size": page_size,
-            "telegram_id": telegram_id,
         }
+        if telegram_id is not None:
+            params["telegram_id"] = telegram_id
         if category_key:
             params["category_key"] = category_key
         response = await self._request(
@@ -211,6 +212,13 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_get_summary(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/summary"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=10)
+            response.raise_for_status()
+            return response.json()
+
     async def admin_get_order(self, order_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/orders/{order_id}"
         async with httpx.AsyncClient() as client:
@@ -273,6 +281,7 @@ class ApiClient:
         buttons: Optional[list[Dict[str, str]]] = None,
         media_file_id: Optional[str] = None,
         media_kind: Optional[str] = None,
+        message_entities: Optional[list[Dict[str, Any]]] = None,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/broadcasts"
         payload: Dict[str, Any] = {"message": message, "segment": segment}
@@ -282,9 +291,52 @@ class ApiClient:
             payload["media_file_id"] = media_file_id
         if media_kind:
             payload["media_kind"] = media_kind
+        if message_entities is not None:
+            payload["message_entities"] = message_entities
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url, json=payload, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_list_broadcasts(self, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"page": page, "page_size": page_size},
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_broadcast(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=20)
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_update_broadcast(
+        self,
+        broadcast_id: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(
+                url, json=payload, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_delete_broadcast(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                url, headers=self._headers(), timeout=20
             )
             response.raise_for_status()
             return response.json()
@@ -294,6 +346,24 @@ class ApiClient:
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url, json={}, headers=self._headers(), timeout=180
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_send_broadcast_async(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}/send"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={"async": True}, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_broadcast_progress(self, broadcast_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/broadcasts/{broadcast_id}/progress"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url, headers=self._headers(), timeout=20
             )
             response.raise_for_status()
             return response.json()

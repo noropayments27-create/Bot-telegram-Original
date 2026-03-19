@@ -180,6 +180,9 @@ async function sendMedia(telegramId, endpoint, fieldName, payload) {
   if (payload.parse_mode) {
     extraFields.parse_mode = payload.parse_mode;
   }
+  if (payload.caption_entities) {
+    extraFields.caption_entities = payload.caption_entities;
+  }
   if (payload.reply_markup) {
     extraFields.reply_markup = payload.reply_markup;
   }

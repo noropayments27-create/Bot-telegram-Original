@@ -108,6 +108,13 @@ function formatPaymentStatus(status) {
   return status || "-";
 }
 
+function escapeHtml(value) {
+  return String(value ?? "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;");
+}
+
 async function getFiatRate(currency) {
   try {
     const response = await fetch("https://open.er-api.com/v6/latest/USD");
@@ -218,14 +225,14 @@ function buildOrderNotificationCaption({
 
   const lines = [
     "🧾 Detalle de la Orden",
-    `🆔 Orden: ${orderNumberText}`,
+    `🆔 Orden: <code>${escapeHtml(orderNumberText)}</code>`,
     "",
     "👤 Usuario",
-    `🆔 Telegram ID: ${telegramId}`,
-    `👤 Username: ${username}`,
+    `🆔 Telegram ID: ${escapeHtml(telegramId)}`,
+    `👤 Username: ${escapeHtml(username)}`,
     "",
     "📦 Producto",
-    `🛒 Método: ${productName}`,
+    `🛒 Método: ${escapeHtml(productName)}`,
     `💵 Precio: ${formatUsdAmount(subtotalUsd)} USD`,
     "",
     "💰 Totales",
@@ -249,8 +256,8 @@ function buildOrderNotificationCaption({
   lines.push(
     "",
     "💳 Pago",
-    `🏦 Método: ${formatPaymentMethod(paymentMethod)}`,
-    `📉 Estado del pago: ${formatPaymentStatus(payment?.review_status)}`,
+    `🏦 Método: ${escapeHtml(formatPaymentMethod(paymentMethod))}`,
+    `📉 Estado del pago: ${escapeHtml(formatPaymentStatus(payment?.review_status))}`,
     `⏰ Enviado: ${formatBogotaDateTime(payment?.submitted_at)}`,
     "",
     "🗓️ Información adicional",
@@ -266,8 +273,11 @@ function buildOrderNotificationKeyboard(order) {
   return {
     inline_keyboard: [
       [
-        { text: "Panel Admin", callback_data: `admin_panel:${orderId}` },
-        { text: "Banear Usuario", callback_data: `admin_ban:${telegramId}:${orderId}` },
+        { text: "Panel Web", callback_data: `admin_panel:${orderId}` },
+        { text: "Panel Bot", callback_data: "adminui:home" },
+      ],
+      [
+        { text: "Banear usuario", callback_data: `admin_ban:${telegramId}:${orderId}` },
       ],
     ],
   };

@@ -748,6 +748,7 @@ async function submitPaymentProof(req, res, next) {
           const result = await sendPhoto(adminId, {
             file_id: paymentRow.screenshot_file_id,
             caption,
+            parse_mode: "HTML",
             reply_markup: replyMarkup,
           });
           if (result?.message_id) {

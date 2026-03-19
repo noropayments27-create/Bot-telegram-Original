@@ -1261,7 +1261,7 @@ async def _build_product_link_block(
     link = build_bot_start_link(BOT_USERNAME, payload)
     if not link:
         return ""
-    return f"\n\n{t(locale, 'product_link_label')}\n{html.escape(link)}"
+    return f"\n\n{t(locale, 'product_link_label')}\n<code>{html.escape(link)}</code>"
 
 
 async def _build_product_detail_text(

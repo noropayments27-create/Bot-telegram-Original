@@ -110,15 +110,17 @@ export default function OrderDetail() {
 
   const loadDetail = async () => {
     if (!id) {
-      return;
+      return null;
     }
     try {
       const data = await apiFetch(`/admin/orders/${id}`);
       setDetail(data);
       setError("");
       setMessage("");
+      return data;
     } catch (err) {
       setError("No se pudo cargar la orden.");
+      return null;
     }
   };
 
@@ -168,8 +170,13 @@ export default function OrderDetail() {
         return;
       }
       if (response.status === 409) {
-        await loadDetail();
-        setMessage("Este pedido ya fue procesado anteriormente");
+        const refreshedDetail = await loadDetail();
+        const refreshedStatus = refreshedDetail?.order?.status;
+        setMessage(
+          refreshedStatus === "EXPIRED"
+            ? "La orden ya expiró."
+            : "Este pedido ya fue procesado anteriormente"
+        );
         return;
       }
       if (!response.ok) {
@@ -298,7 +305,14 @@ export default function OrderDetail() {
   const hasProof = Boolean(payment && payment.screenshot_file_id);
   const isFreeOrder = isFreeOrderData(order, detail);
   const canModerate = hasProof || isFreeOrder;
-  const isAlreadyProcessed = order.status === "PAID" || order.status === "DELIVERED";
+  const isAlreadyProcessed =
+    order.status === "PAID"
+    || order.status === "DELIVERED"
+    || order.status === "CANCELLED"
+    || order.status === "EXPIRED"
+    || order.status === "REFUNDED"
+    || payment?.review_status === "APPROVED"
+    || payment?.review_status === "REJECTED";
   const orderNumberText = formatOrderNumberLabel(order);
   const items = detail.items || [];
 

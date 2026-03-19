@@ -259,11 +259,8 @@ async def _process_admin_panel_password(
         ]
     )
     try:
-        safe_url = html_escape(access_url, quote=True)
         await message.answer(
-            f"{t(locale, 'admin_panel_access_ready')}\n\n"
-            "🔗 Link de acceso:\n"
-            f"<code>{safe_url}</code>",
+            t(locale, "admin_panel_access_ready"),
             parse_mode="HTML",
             reply_markup=keyboard,
         )

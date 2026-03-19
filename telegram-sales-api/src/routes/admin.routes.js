@@ -78,6 +78,71 @@ const execFileAsync = promisify(execFile);
 
 const ADMIN_PASSWORD_RESET_PURPOSE = "RESET_PASSWORD";
 const ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM = "TELEGRAM";
+
+function getOrderExpirySeconds() {
+  return Math.max(
+    parseInt(process.env.ORDER_EXPIRY_SECONDS || "", 10)
+      || (parseInt(process.env.ORDER_EXPIRY_MINUTES || "", 10) || 0) * 60
+      || 900,
+    1
+  );
+}
+
+async function syncExpiredWaitingPaymentOrders(pool) {
+  const expirySeconds = getOrderExpirySeconds();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    const expiredRes = await client.query(
+      `UPDATE orders o
+       SET status = 'EXPIRED',
+           cancelled_at = COALESCE(cancelled_at, now()),
+           cancel_source = 'EXPIRED',
+           order_number = NULL
+       WHERE o.status = 'WAITING_PAYMENT'
+         AND COALESCE(o.unit_price_at_purchase, 0) > 0
+         AND o.created_at <= now() - ($1 * interval '1 second')
+         AND NOT EXISTS (
+           SELECT 1 FROM order_payments op WHERE op.order_id = o.id
+         )
+       RETURNING o.id`,
+      [expirySeconds]
+    );
+
+    const expiredOrderIds = expiredRes.rows.map((row) => row.id).filter(Boolean);
+    if (expiredOrderIds.length > 0) {
+      await client.query(
+        `UPDATE product_stock_units
+         SET status = 'AVAILABLE',
+             held_by_order_id = NULL,
+             held_by_telegram_id = NULL,
+             held_by_username = NULL,
+             held_at = NULL,
+             updated_at = now()
+         WHERE held_by_order_id = ANY($1::uuid[])
+           AND status = 'HELD'`,
+        [expiredOrderIds]
+      );
+
+      await client.query(
+        `UPDATE product_stock_holds
+         SET status = 'EXPIRED',
+             updated_at = now()
+         WHERE order_id = ANY($1::uuid[])
+           AND status = 'HELD'`,
+        [expiredOrderIds]
+      );
+    }
+
+    await client.query("COMMIT");
+    return expiredOrderIds.length;
+  } catch (error) {
+    await client.query("ROLLBACK");
+    throw error;
+  } finally {
+    client.release();
+  }
+}
 const ADMIN_PASSWORD_RESET_CHANNEL_EMAIL = "EMAIL";
 const ADMIN_PASSWORD_RESET_OTP_TTL_SECONDS = 5 * 60;
 const ADMIN_PASSWORD_RESET_TOKEN_TTL_SECONDS = 10 * 60;
@@ -522,9 +587,405 @@ async function ensureBroadcastSchema(pool) {
      ADD COLUMN IF NOT EXISTS image_filename text,
      ADD COLUMN IF NOT EXISTS image_mime text,
      ADD COLUMN IF NOT EXISTS buttons jsonb,
-     ADD COLUMN IF NOT EXISTS saved boolean NOT NULL DEFAULT false`
+     ADD COLUMN IF NOT EXISTS message_entities jsonb,
+     ADD COLUMN IF NOT EXISTS saved boolean NOT NULL DEFAULT false,
+     ADD COLUMN IF NOT EXISTS progress_status text NOT NULL DEFAULT 'IDLE',
+     ADD COLUMN IF NOT EXISTS progress_target_count integer NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS progress_sent_count integer NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS progress_failed_count integer NOT NULL DEFAULT 0,
+     ADD COLUMN IF NOT EXISTS progress_started_at timestamptz,
+     ADD COLUMN IF NOT EXISTS progress_updated_at timestamptz`
   );
   broadcastSchemaReady = true;
+}
+
+function normalizeBroadcastMessageEntities(value) {
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  const allowedTypes = new Set([
+    "bold",
+    "italic",
+    "underline",
+    "strikethrough",
+    "spoiler",
+    "code",
+    "pre",
+    "blockquote",
+    "expandable_blockquote",
+    "text_link",
+    "custom_emoji",
+  ]);
+  return value
+    .map((item) => {
+      if (!item || typeof item !== "object") {
+        return null;
+      }
+      const type = String(item.type || "").trim();
+      const offset = Number(item.offset);
+      const length = Number(item.length);
+      if (!type || !allowedTypes.has(type) || !Number.isInteger(offset) || !Number.isInteger(length)) {
+        return null;
+      }
+      if (offset < 0 || length <= 0) {
+        return null;
+      }
+      const entity = { type, offset, length };
+      if (type === "text_link") {
+        const url = String(item.url || "").trim();
+        if (!/^https?:\/\//i.test(url)) {
+          return null;
+        }
+        entity.url = url;
+      }
+      if (type === "pre") {
+        const language = String(item.language || "").trim();
+        if (language) {
+          entity.language = language;
+        }
+      }
+      if (type === "custom_emoji") {
+        const customEmojiId = String(item.custom_emoji_id || "").trim();
+        if (!/^[0-9]+$/.test(customEmojiId)) {
+          return null;
+        }
+        entity.custom_emoji_id = customEmojiId;
+      }
+      return entity;
+    })
+    .filter(Boolean);
+}
+
+function buildBroadcastProgressPayload(row, fallbackResult = null) {
+  const progressStatus = String(
+    row?.progress_status
+      || (row?.status === "SENT" || row?.status === "FAILED" ? row.status : "IDLE")
+  ).toUpperCase();
+  const targetCount = Number(
+    row?.progress_target_count != null
+      ? row.progress_target_count
+      : fallbackResult?.target_count || 0
+  );
+  const sentCount = Number(
+    row?.progress_sent_count != null
+      ? row.progress_sent_count
+      : fallbackResult?.sent_count || 0
+  );
+  const failedCount = Number(
+    row?.progress_failed_count != null
+      ? row.progress_failed_count
+      : fallbackResult?.failed_count || 0
+  );
+  const processedCount = sentCount + failedCount;
+  const pendingCount = Math.max(targetCount - processedCount, 0);
+  const percent = targetCount > 0
+    ? Math.max(0, Math.min(100, Math.round((processedCount / targetCount) * 100)))
+    : 0;
+  const isDone = !["QUEUED", "SENDING"].includes(progressStatus);
+
+  return {
+    status: progressStatus,
+    target_count: targetCount,
+    sent_count: sentCount,
+    failed_count: failedCount,
+    processed_count: processedCount,
+    pending_count: pendingCount,
+    percent,
+    is_done: isDone,
+    started_at: row?.progress_started_at || null,
+    updated_at: row?.progress_updated_at || null,
+  };
+}
+
+async function getLatestBroadcastSendResult(pool, broadcastId) {
+  const auditRes = await pool.query(
+    `SELECT meta
+     FROM audit_logs
+     WHERE entity_type = 'broadcast'
+       AND entity_id = $1
+       AND admin_action = 'BROADCAST_SEND_RESULT'
+     ORDER BY created_at DESC
+     LIMIT 1`,
+    [broadcastId]
+  );
+  if (auditRes.rowCount === 0) {
+    return null;
+  }
+  const meta = auditRes.rows[0]?.meta || {};
+  return {
+    target_count: Number(meta.target_count || 0),
+    sent_count: Number(meta.sent_count || 0),
+    failed_count: Number(meta.failed_count || 0),
+  };
+}
+
+async function resolveBroadcastRecipients(pool, broadcastId, broadcast, body = {}) {
+  const bodyTelegramIds = normalizeTelegramIds(body && body.telegram_ids);
+  const bodyChatIds = normalizeChatIds(body && body.chat_ids);
+  const bodyExceptIds = normalizeChatIds(body && body.except_ids);
+
+  const auditRes = await pool.query(
+    `SELECT admin_action, meta
+     FROM audit_logs
+     WHERE entity_type = 'broadcast'
+       AND entity_id = $1
+       AND admin_action IN (
+         'BROADCAST_CUSTOM_RECIPIENTS',
+         'BROADCAST_GROUP_CHATS',
+         'BROADCAST_EXCLUDED_RECIPIENTS'
+       )
+     ORDER BY created_at DESC`,
+    [broadcastId]
+  );
+
+  let savedTelegramIds = [];
+  let savedChatIds = [];
+  let savedExceptIds = [];
+  for (const row of auditRes.rows) {
+    const action = row?.admin_action;
+    const meta = row?.meta || {};
+    if (action === "BROADCAST_CUSTOM_RECIPIENTS" && savedTelegramIds.length === 0) {
+      savedTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
+    }
+    if (action === "BROADCAST_GROUP_CHATS" && savedChatIds.length === 0) {
+      savedChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
+    }
+    if (action === "BROADCAST_EXCLUDED_RECIPIENTS" && savedExceptIds.length === 0) {
+      savedExceptIds = Array.isArray(meta.except_ids) ? meta.except_ids : [];
+    }
+  }
+
+  let recipientIds = [];
+  const customIds = bodyTelegramIds.length > 0 ? bodyTelegramIds : savedTelegramIds;
+  const groupIds = bodyChatIds.length > 0 ? bodyChatIds : savedChatIds;
+  const excludedIds = bodyExceptIds.length > 0 ? bodyExceptIds : savedExceptIds;
+  const isCustom = customIds.length > 0;
+  const isGroups = broadcast.segment === "GROUPS" || groupIds.length > 0;
+  const isChannels = broadcast.segment === "CHANNELS" || groupIds.length > 0;
+
+  if (isGroups || isChannels) {
+    recipientIds = Array.from(new Set(groupIds.map((id) => String(id))));
+  } else if (isCustom) {
+    const uniqueIds = Array.from(new Set(customIds.map((id) => String(id))));
+    const bannedRes = await pool.query(
+      "SELECT telegram_id FROM user_bans WHERE telegram_id = ANY($1::bigint[])",
+      [uniqueIds]
+    );
+    const bannedSet = new Set(bannedRes.rows.map((row) => String(row.telegram_id)));
+    recipientIds = uniqueIds.filter((id) => !bannedSet.has(String(id)));
+  } else if (broadcast.segment === "BUYERS_AFFILIATES") {
+    const usersRes = await pool.query(
+      `SELECT DISTINCT u.telegram_id
+       FROM users u
+       LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+       LEFT JOIN orders o ON o.user_id = u.id AND o.status IN ('PAID', 'DELIVERED')
+       LEFT JOIN affiliates a ON a.user_id = u.id AND a.status = 'APPROVED'
+       WHERE b.telegram_id IS NULL
+         AND u.telegram_id IS NOT NULL
+         AND u.telegram_id <> 90000000000
+         AND (o.id IS NOT NULL OR a.id IS NOT NULL)`
+    );
+    recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
+  } else if (broadcast.segment === "BUYERS") {
+    const usersRes = await pool.query(
+      `SELECT DISTINCT u.telegram_id
+       FROM users u
+       JOIN orders o ON o.user_id = u.id AND o.status IN ('PAID', 'DELIVERED')
+       LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+       WHERE b.telegram_id IS NULL
+         AND u.telegram_id IS NOT NULL
+         AND u.telegram_id <> 90000000000`
+    );
+    recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
+  } else if (broadcast.segment === "AFFILIATES") {
+    const usersRes = await pool.query(
+      `SELECT DISTINCT u.telegram_id
+       FROM affiliates a
+       JOIN users u ON u.id = a.user_id
+       LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+       WHERE a.status = 'APPROVED'
+         AND b.telegram_id IS NULL
+         AND u.telegram_id IS NOT NULL
+         AND u.telegram_id <> 90000000000`
+    );
+    recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
+  } else {
+    const usersRes = await pool.query(
+      `SELECT u.telegram_id
+       FROM users u
+       LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
+       WHERE b.telegram_id IS NULL
+         AND u.telegram_id IS NOT NULL
+         AND u.telegram_id <> 90000000000`
+    );
+    recipientIds = Array.from(
+      new Set(usersRes.rows.map((row) => String(row.telegram_id)))
+    );
+  }
+
+  if (excludedIds.length > 0) {
+    const excludedSet = new Set(excludedIds.map((id) => String(id)));
+    recipientIds = recipientIds.filter((id) => !excludedSet.has(String(id)));
+  }
+
+  return {
+    recipientIds,
+    isCustom,
+    isGroups,
+    isChannels,
+  };
+}
+
+async function performBroadcastSend(pool, broadcast, recipientIds, options = {}) {
+  const broadcastId = broadcast.id;
+  const updateProgress = options.updateProgress === true;
+  const batchSize = 25;
+  const batchDelayMs = 75;
+  let sentCount = 0;
+  let failedCount = 0;
+
+  const messageEntities = normalizeBroadcastMessageEntities(broadcast.message_entities);
+  const usesEntities = messageEntities.length > 0;
+  const formattedMessage = usesEntities
+    ? String(broadcast.message_text || "")
+    : formatBroadcastMessage(broadcast.message_text);
+  const buttons = Array.isArray(broadcast.buttons) ? broadcast.buttons : [];
+  const replyMarkup = buildInlineKeyboard(buttons);
+  const messageOptions = replyMarkup ? { reply_markup: replyMarkup } : {};
+  if (usesEntities) {
+    messageOptions.entities = messageEntities;
+  } else {
+    messageOptions.parse_mode = "HTML";
+  }
+
+  const storedTelegramMedia = parseStoredTelegramMedia(
+    broadcast.image_path,
+    broadcast.image_mime
+  );
+
+  if (updateProgress) {
+    await pool.query(
+      `UPDATE broadcasts
+       SET progress_status = 'SENDING',
+           progress_target_count = $2,
+           progress_sent_count = 0,
+           progress_failed_count = 0,
+           progress_updated_at = now()
+       WHERE id = $1`,
+      [broadcastId, recipientIds.length]
+    );
+  }
+
+  for (let i = 0; i < recipientIds.length; i += batchSize) {
+    const batch = recipientIds.slice(i, i + batchSize);
+    for (const telegramId of batch) {
+      try {
+        if (storedTelegramMedia) {
+          const mediaPayload = {
+            file_id: storedTelegramMedia.fileId,
+            caption: formattedMessage,
+            reply_markup: replyMarkup || undefined,
+          };
+          if (usesEntities) {
+            mediaPayload.caption_entities = messageEntities;
+          } else {
+            mediaPayload.parse_mode = "HTML";
+          }
+          if (storedTelegramMedia.kind === "video") {
+            await sendVideo(telegramId, mediaPayload);
+          } else if (storedTelegramMedia.kind === "animation") {
+            await sendAnimation(telegramId, mediaPayload);
+          } else {
+            await sendPhoto(telegramId, mediaPayload);
+          }
+        } else if (broadcast.image_path) {
+          const mime = String(broadcast.image_mime || "").trim().toLowerCase();
+          const mediaPayload = {
+            path: broadcast.image_path,
+            filename: broadcast.image_filename || undefined,
+            caption: formattedMessage,
+            reply_markup: replyMarkup || undefined,
+          };
+          if (usesEntities) {
+            mediaPayload.caption_entities = messageEntities;
+          } else {
+            mediaPayload.parse_mode = "HTML";
+          }
+          if (mime === "image/gif") {
+            await sendAnimation(telegramId, mediaPayload);
+          } else if (mime.startsWith("video/")) {
+            await sendVideo(telegramId, mediaPayload);
+          } else {
+            await sendPhoto(telegramId, mediaPayload);
+          }
+        } else {
+          await sendMessage(telegramId, formattedMessage, messageOptions);
+        }
+        sentCount += 1;
+      } catch (err) {
+        failedCount += 1;
+        console.error("Broadcast send failed", {
+          broadcastId,
+          telegramId,
+          error: err && err.message ? err.message : err,
+        });
+      }
+
+      if (updateProgress) {
+        await pool.query(
+          `UPDATE broadcasts
+           SET progress_sent_count = $2,
+               progress_failed_count = $3,
+               progress_updated_at = now()
+           WHERE id = $1`,
+          [broadcastId, sentCount, failedCount]
+        );
+      }
+    }
+
+    if (i + batchSize < recipientIds.length) {
+      await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
+    }
+  }
+
+  const finalStatus = sentCount > 0 ? "SENT" : "FAILED";
+  const updatedRes = await pool.query(
+    `UPDATE broadcasts
+     SET status = $1,
+         sent_at = now(),
+         progress_status = $1,
+         progress_target_count = $3,
+         progress_sent_count = $4,
+         progress_failed_count = $5,
+         progress_updated_at = now()
+     WHERE id = $2
+     RETURNING *`,
+    [finalStatus, broadcastId, recipientIds.length, sentCount, failedCount]
+  );
+
+  await pool.query(
+    `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+     VALUES ($1, $2, $3, $4::jsonb)`,
+    [
+      "BROADCAST_SEND_RESULT",
+      "broadcast",
+      broadcastId,
+      JSON.stringify({
+        target_count: recipientIds.length,
+        sent_count: sentCount,
+        failed_count: failedCount,
+      }),
+    ]
+  );
+
+  return {
+    broadcast: updatedRes.rows[0],
+    result: {
+      target_count: recipientIds.length,
+      sent_count: sentCount,
+      failed_count: failedCount,
+    },
+  };
 }
 
 let globalCommissionSchemaReady = false;
@@ -932,7 +1393,7 @@ async function updateAdminOrderNotifications(pool, orderId) {
           row.admin_telegram_id,
           row.message_id,
           caption,
-          { reply_markup: replyMarkup }
+          { parse_mode: "HTML", reply_markup: replyMarkup }
         ).catch((error) => {
           console.error("Admin order notify update failed", error);
         })
@@ -980,6 +1441,52 @@ function parseOrderLookupRef(rawValue) {
     return { ref, orderNumber: null };
   }
   return { ref, orderNumber: parsed };
+}
+
+async function resolveOrderLookupId(db, rawRef, orderNumber) {
+  const ref = String(rawRef || "").trim();
+  if (ref) {
+    const exactIdRes = await db.query(
+      `SELECT id
+       FROM orders
+       WHERE id::text = $1
+       LIMIT 1`,
+      [ref]
+    );
+    if (exactIdRes.rowCount > 0) {
+      return exactIdRes.rows[0].id;
+    }
+  }
+
+  if (orderNumber !== null && orderNumber !== undefined) {
+    const exactNumberRes = await db.query(
+      `SELECT id
+       FROM orders
+       WHERE order_number = $1
+       ORDER BY created_at DESC, id DESC
+       LIMIT 1`,
+      [orderNumber]
+    );
+    if (exactNumberRes.rowCount > 0) {
+      return exactNumberRes.rows[0].id;
+    }
+  }
+
+  if (Number.isFinite(orderNumber) && orderNumber > 0) {
+    const fallbackRes = await db.query(
+      `SELECT id
+       FROM orders
+       ORDER BY created_at ASC, id ASC
+       OFFSET ($1::bigint - 1)
+       LIMIT 1`,
+      [orderNumber]
+    );
+    if (fallbackRes.rowCount > 0) {
+      return fallbackRes.rows[0].id;
+    }
+  }
+
+  return null;
 }
 
 async function getOrderLookupRange(pool) {
@@ -1083,6 +1590,12 @@ function escapeBroadcastHtml(value) {
 
 function restoreAllowedBroadcastHtml(value) {
   let text = String(value || "");
+
+  text = text.replace(
+    /&lt;tg-emoji\s+emoji-id=(?:"|')([0-9]+)(?:"|')\s*&gt;/gi,
+    (_, emojiId) => `<tg-emoji emoji-id="${emojiId}">`
+  );
+  text = text.replace(/&lt;\/tg-emoji&gt;/gi, "</tg-emoji>");
 
   text = text.replace(
     /&lt;a\s+href="(https?:\/\/[^"]+)"\s*&gt;/gi,
@@ -3131,20 +3644,66 @@ router.post("/products/:id/deactivate", async (req, res, next) => {
     const client = await pool.connect();
     try {
       await client.query("BEGIN");
-      const updateRes = await client.query(
-        `UPDATE products
-         SET is_active = false,
-             code = NULL,
-             sku_key = NULL,
-             updated_at = now()
+      const currentRes = await client.query(
+        `SELECT *
+         FROM products
          WHERE id = $1
-         RETURNING *`,
+         FOR UPDATE`,
+        [productId]
+      );
+      if (currentRes.rowCount === 0) {
+        await client.query("ROLLBACK");
+        return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+      }
+
+      const ordersRes = await client.query(
+        `SELECT 1
+         FROM orders
+         WHERE product_id = $1
+         LIMIT 1`,
         [productId]
       );
 
-      if (updateRes.rowCount === 0) {
-        await client.query("ROLLBACK");
-        return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+      let action = "deleted";
+      let productRow = currentRes.rows[0];
+      let auditAction = "PRODUCT_DELETE";
+      let auditMeta = { deleted: true };
+
+      if (ordersRes.rowCount > 0) {
+        const updateRes = await client.query(
+          `UPDATE products
+           SET is_active = false,
+               code = NULL,
+               sku_key = NULL,
+               updated_at = now()
+           WHERE id = $1
+           RETURNING *`,
+          [productId]
+        );
+
+        if (updateRes.rowCount === 0) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+        }
+
+        action = "deactivated";
+        productRow = updateRes.rows[0];
+        auditAction = "PRODUCT_DEACTIVATE";
+        auditMeta = { is_active: false, reason: "HAS_ORDERS" };
+      } else {
+        const deleteRes = await client.query(
+          `DELETE FROM products
+           WHERE id = $1
+           RETURNING *`,
+          [productId]
+        );
+
+        if (deleteRes.rowCount === 0) {
+          await client.query("ROLLBACK");
+          return res.status(404).json({ error: "PRODUCT_NOT_FOUND" });
+        }
+
+        productRow = deleteRes.rows[0];
       }
 
       await recalcSkuKeys(client);
@@ -3152,15 +3711,15 @@ router.post("/products/:id/deactivate", async (req, res, next) => {
         `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
          VALUES ($1, $2, $3, $4::jsonb)`,
         [
-          "PRODUCT_DEACTIVATE",
+          auditAction,
           "product",
           productId,
-          JSON.stringify({ is_active: false }),
+          JSON.stringify(auditMeta),
         ]
       );
 
       await client.query("COMMIT");
-      return res.json({ product: updateRes.rows[0] });
+      return res.json({ product: productRow, action });
     } catch (error) {
       await client.query("ROLLBACK");
       throw error;
@@ -4050,6 +4609,7 @@ router.get("/orders", async (req, res, next) => {
     status === "EXPIRED" ? "ORDER BY o.created_at ASC" : "ORDER BY o.created_at DESC";
 
   try {
+    await syncExpiredWaitingPaymentOrders(pool);
     await pool.query(
       `UPDATE orders
        SET free_order_number = COALESCE(
@@ -4113,6 +4673,7 @@ router.get("/orders/status-counts", async (req, res, next) => {
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
   try {
+    await syncExpiredWaitingPaymentOrders(pool);
     const countsQuery = includeAll
       ? `SELECT o.status, COUNT(*)::int AS count
          FROM orders o
@@ -4278,6 +4839,15 @@ router.get("/orders/:id", async (req, res, next) => {
   await ensureFreeOrderSchema(pool);
 
   try {
+    await syncExpiredWaitingPaymentOrders(pool);
+    const resolvedOrderId = await resolveOrderLookupId(
+      pool,
+      orderLookupRef,
+      orderLookupNumber
+    );
+    if (!resolvedOrderId) {
+      return sendOrderNotFound(res, pool, orderLookupNumber);
+    }
     const orderRes = await pool.query(
       `SELECT o.*, u.telegram_id, u.telegram_username,
               b.telegram_id AS banned_telegram_id,
@@ -4287,22 +4857,8 @@ router.get("/orders/:id", async (req, res, next) => {
        JOIN users u ON u.id = o.user_id
        LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
        LEFT JOIN products p ON p.id = o.product_id
-       WHERE (
-         o.id::text = $1
-         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
-         OR (
-           $2::bigint IS NOT NULL
-           AND $2::bigint > 0
-           AND o.id = (
-             SELECT oo.id
-             FROM orders oo
-             ORDER BY oo.created_at ASC, oo.id ASC
-             OFFSET ($2::bigint - 1)
-             LIMIT 1
-           )
-         )
-       )`,
-      [orderLookupRef, orderLookupNumber]
+       WHERE o.id = $1`,
+      [resolvedOrderId]
     );
 
     if (orderRes.rowCount === 0) {
@@ -4908,6 +5464,11 @@ router.get("/summary", async (req, res, next) => {
        WHERE o.status IN ('PAID', 'DELIVERED')`
     );
 
+    const usersTotalRes = await pool.query(
+      `SELECT COUNT(*)::int AS count
+       FROM users`
+    );
+
     const salesRes = await pool.query(
       `SELECT COUNT(*)::int AS count
        FROM orders o
@@ -4956,6 +5517,7 @@ router.get("/summary", async (req, res, next) => {
 
     return res.json({
       new_orders: newOrdersRes.rows[0]?.count || 0,
+      users_total: usersTotalRes.rows[0]?.count || 0,
       customers: customersRes.rows[0]?.count || 0,
       total_sales: salesRes.rows[0]?.count || 0,
       total_revenue_usd: Number(revenueRes.rows[0]?.total || 0).toFixed(2),
@@ -5641,6 +6203,15 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
   let commissionInserted = false;
   try {
     await client.query("BEGIN");
+    const resolvedOrderId = await resolveOrderLookupId(
+      client,
+      orderLookupRef,
+      orderLookupNumber
+    );
+    if (!resolvedOrderId) {
+      await client.query("ROLLBACK");
+      return sendOrderNotFound(res, pool, orderLookupNumber);
+    }
 
     const orderRes = await client.query(
       `SELECT o.*, u.telegram_id, u.telegram_username,
@@ -5655,23 +6226,9 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
        JOIN users u ON u.id = o.user_id
        JOIN products p ON p.id = o.product_id
        LEFT JOIN order_payments op ON op.order_id = o.id
-       WHERE (
-         o.id::text = $1
-         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
-         OR (
-           $2::bigint IS NOT NULL
-           AND $2::bigint > 0
-           AND o.id = (
-             SELECT oo.id
-             FROM orders oo
-             ORDER BY oo.created_at ASC, oo.id ASC
-             OFFSET ($2::bigint - 1)
-             LIMIT 1
-           )
-         )
-       )
+       WHERE o.id = $1
        FOR UPDATE OF o`,
-      [orderLookupRef, orderLookupNumber]
+      [resolvedOrderId]
     );
 
     if (orderRes.rowCount === 0) {
@@ -5994,8 +6551,8 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     }
 
     if (!isFreeOrder) {
+      let receipt = "";
       try {
-        let receipt = "";
         let items = [];
         let subtotal = Number(order.unit_price_at_purchase || 0);
         let commissionAmount = 0;
@@ -6132,11 +6689,24 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
         }
       } catch (err) {
         console.error("Telegram receipt failed", err);
-        if (err && err.message === "playwright_not_installed") {
+        if (
+          err
+          && (
+            err.message === "playwright_not_installed"
+            || String(err.message || "").toLowerCase().includes("executable doesn't exist")
+          )
+        ) {
           console.error("Playwright browsers missing. Run: npx playwright install");
         }
         try {
-          await sendMessage(telegramId, receipt);
+          const fallbackReceipt =
+            receipt
+            || (
+              userLocale === "en"
+                ? "✅ Payment approved.\nYour receipt image could not be generated, but your order was processed successfully."
+                : "✅ Pago aprobado.\nNo se pudo generar la imagen del recibo, pero tu orden fue procesada correctamente."
+            );
+          await sendMessage(telegramId, fallbackReceipt, { parse_mode: "HTML" });
         } catch (fallbackError) {
           console.error("Telegram receipt fallback failed", fallbackError);
         }
@@ -6204,28 +6774,23 @@ router.post("/orders/:id/refund", async (req, res, next) => {
 
   try {
     await client.query("BEGIN");
+    const resolvedOrderId = await resolveOrderLookupId(
+      client,
+      orderLookupRef,
+      orderLookupNumber
+    );
+    if (!resolvedOrderId) {
+      await client.query("ROLLBACK");
+      return sendOrderNotFound(res, pool, orderLookupNumber);
+    }
 
     const orderRes = await client.query(
       `SELECT o.*, u.telegram_id, u.telegram_username, u.locale
        FROM orders o
        JOIN users u ON u.id = o.user_id
-       WHERE (
-         o.id::text = $1
-         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
-         OR (
-           $2::bigint IS NOT NULL
-           AND $2::bigint > 0
-           AND o.id = (
-             SELECT oo.id
-             FROM orders oo
-             ORDER BY oo.created_at ASC, oo.id ASC
-             OFFSET ($2::bigint - 1)
-             LIMIT 1
-           )
-         )
-       )
+       WHERE o.id = $1
        FOR UPDATE OF o`,
-      [orderLookupRef, orderLookupNumber]
+      [resolvedOrderId]
     );
 
     if (orderRes.rowCount === 0) {
@@ -6440,28 +7005,23 @@ router.post("/orders/:id/reject", async (req, res, next) => {
 
   try {
     await client.query("BEGIN");
+    const resolvedOrderId = await resolveOrderLookupId(
+      client,
+      orderLookupRef,
+      orderLookupNumber
+    );
+    if (!resolvedOrderId) {
+      await client.query("ROLLBACK");
+      return sendOrderNotFound(res, pool, orderLookupNumber);
+    }
 
     const orderRes = await client.query(
       `SELECT o.*, u.telegram_id
        FROM orders o
        JOIN users u ON u.id = o.user_id
-       WHERE (
-         o.id::text = $1
-         OR ($2::bigint IS NOT NULL AND o.order_number = $2)
-         OR (
-           $2::bigint IS NOT NULL
-           AND $2::bigint > 0
-           AND o.id = (
-             SELECT oo.id
-             FROM orders oo
-             ORDER BY oo.created_at ASC, oo.id ASC
-             OFFSET ($2::bigint - 1)
-             LIMIT 1
-           )
-         )
-       )
+       WHERE o.id = $1
        FOR UPDATE`,
-      [orderLookupRef, orderLookupNumber]
+      [resolvedOrderId]
     );
 
     if (orderRes.rowCount === 0) {
@@ -9075,6 +9635,38 @@ router.get("/broadcasts/:id", async (req, res, next) => {
         // Back-compat alias (deprecated):
         custom_telegram_ids: customTelegramIds,
       },
+      progress: buildBroadcastProgressPayload(broadcast, sendResult),
+    });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/broadcasts/:id/progress", async (req, res, next) => {
+  const broadcastId = req.params.id;
+  const pool = getPool();
+
+  try {
+    await ensureBroadcastSchema(pool);
+    const broadcastRes = await pool.query(
+      `SELECT id, status, progress_status, progress_target_count, progress_sent_count,
+              progress_failed_count, progress_started_at, progress_updated_at
+       FROM broadcasts
+       WHERE id = $1`,
+      [broadcastId]
+    );
+
+    if (broadcastRes.rowCount === 0) {
+      return res.status(404).json({ error: "BROADCAST_NOT_FOUND" });
+    }
+
+    const broadcast = broadcastRes.rows[0];
+    const sendResult = await getLatestBroadcastSendResult(pool, broadcastId);
+
+    return res.json({
+      broadcast_id: broadcastId,
+      status: broadcast.status,
+      progress: buildBroadcastProgressPayload(broadcast, sendResult),
     });
   } catch (error) {
     next(error);
@@ -9127,6 +9719,12 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
   const broadcastId = req.params.id;
   const messageText = req.body && req.body.message !== undefined
     ? String(req.body.message).trim()
+    : null;
+  const hasMessageEntitiesInput = Boolean(
+    req.body && Object.prototype.hasOwnProperty.call(req.body, "message_entities")
+  );
+  const messageEntities = hasMessageEntitiesInput
+    ? normalizeBroadcastMessageEntities(req.body.message_entities)
     : null;
   const rawSegment = req.body && req.body.segment ? String(req.body.segment).trim() : "";
   const imageDataUrl = req.body && req.body.image_data_url
@@ -9183,6 +9781,7 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
     const updateRes = await pool.query(
       `UPDATE broadcasts
        SET message_text = $1,
+           message_entities = COALESCE($8::jsonb, message_entities),
            segment = $2,
            destination = $3,
            buttons = $4::jsonb,
@@ -9200,6 +9799,7 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
         savedFlag,
         clearImage,
         broadcastId,
+        hasMessageEntitiesInput ? JSON.stringify(messageEntities) : null,
       ]
     );
 
@@ -9282,6 +9882,7 @@ router.delete("/broadcasts/:id", async (req, res, next) => {
 
 router.post("/broadcasts", async (req, res, next) => {
   const messageText = req.body && req.body.message ? String(req.body.message).trim() : "";
+  const messageEntities = normalizeBroadcastMessageEntities(req.body && req.body.message_entities);
   const rawSegment = req.body && req.body.segment ? String(req.body.segment).trim() : "ALL_USERS";
   const imageDataUrl = req.body && req.body.image_data_url
     ? String(req.body.image_data_url).trim()
@@ -9341,8 +9942,8 @@ router.post("/broadcasts", async (req, res, next) => {
   try {
     await ensureBroadcastSchema(pool);
     const broadcastRes = await pool.query(
-      `INSERT INTO broadcasts (segment, destination, message_text, buttons)
-       VALUES ($1, $2, $3, $4::jsonb)
+      `INSERT INTO broadcasts (segment, destination, message_text, buttons, message_entities)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
        RETURNING *`,
       [
         isBuyers
@@ -9359,6 +9960,7 @@ router.post("/broadcasts", async (req, res, next) => {
         isGroups || isChannels ? "CHAT" : "DM",
         messageText,
         JSON.stringify(buttons),
+        JSON.stringify(messageEntities),
       ]
     );
 
@@ -9458,223 +10060,91 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
     }
 
     const broadcast = broadcastRes.rows[0];
-    const bodyTelegramIds = normalizeTelegramIds(req.body && req.body.telegram_ids);
-    const bodyChatIds = normalizeChatIds(req.body && req.body.chat_ids);
-    const bodyExceptIds = normalizeChatIds(req.body && req.body.except_ids);
-
-    const auditRes = await pool.query(
-      `SELECT admin_action, meta
-       FROM audit_logs
-       WHERE entity_type = 'broadcast'
-         AND entity_id = $1
-         AND admin_action IN (
-           'BROADCAST_CUSTOM_RECIPIENTS',
-           'BROADCAST_GROUP_CHATS',
-           'BROADCAST_EXCLUDED_RECIPIENTS'
-         )
-       ORDER BY created_at DESC`,
-      [broadcastId]
-    );
-
-    let savedTelegramIds = [];
-    let savedChatIds = [];
-    let savedExceptIds = [];
-    for (const row of auditRes.rows) {
-      const action = row?.admin_action;
-      const meta = row?.meta || {};
-      if (action === "BROADCAST_CUSTOM_RECIPIENTS" && savedTelegramIds.length === 0) {
-        savedTelegramIds = Array.isArray(meta.telegram_ids) ? meta.telegram_ids : [];
+    const asyncRequested = Boolean(req.body && req.body.async);
+    if (asyncRequested) {
+      const progressStatus = String(broadcast.progress_status || "").toUpperCase();
+      if (["QUEUED", "SENDING"].includes(progressStatus)) {
+        return res.status(409).json({ error: "BROADCAST_ALREADY_SENDING" });
       }
-      if (action === "BROADCAST_GROUP_CHATS" && savedChatIds.length === 0) {
-        savedChatIds = Array.isArray(meta.chat_ids) ? meta.chat_ids : [];
-      }
-      if (action === "BROADCAST_EXCLUDED_RECIPIENTS" && savedExceptIds.length === 0) {
-        savedExceptIds = Array.isArray(meta.except_ids) ? meta.except_ids : [];
-      }
-    }
 
-    let recipientIds = [];
-    const customIds = bodyTelegramIds.length > 0 ? bodyTelegramIds : savedTelegramIds;
-    const groupIds = bodyChatIds.length > 0 ? bodyChatIds : savedChatIds;
-    const excludedIds = bodyExceptIds.length > 0 ? bodyExceptIds : savedExceptIds;
-    const isCustom = customIds.length > 0;
-    const isGroups = broadcast.segment === "GROUPS" || groupIds.length > 0;
-    const isChannels = broadcast.segment === "CHANNELS" || groupIds.length > 0;
-
-    if (isGroups || isChannels) {
-      recipientIds = Array.from(new Set(groupIds.map((id) => String(id))));
-    } else if (isCustom) {
-      const uniqueIds = Array.from(new Set(customIds.map((id) => String(id))));
-      const bannedRes = await pool.query(
-        "SELECT telegram_id FROM user_bans WHERE telegram_id = ANY($1::bigint[])",
-        [uniqueIds]
+      await pool.query(
+        `UPDATE broadcasts
+         SET progress_status = 'QUEUED',
+             progress_target_count = 0,
+             progress_sent_count = 0,
+             progress_failed_count = 0,
+             progress_started_at = now(),
+             progress_updated_at = now()
+         WHERE id = $1`,
+        [broadcastId]
       );
-      const bannedSet = new Set(bannedRes.rows.map((row) => String(row.telegram_id)));
-      recipientIds = uniqueIds.filter((id) => !bannedSet.has(String(id)));
-    } else if (broadcast.segment === "BUYERS_AFFILIATES") {
-      const usersRes = await pool.query(
-        `SELECT DISTINCT u.telegram_id
-         FROM users u
-         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
-         LEFT JOIN orders o ON o.user_id = u.id AND o.status IN ('PAID', 'DELIVERED')
-         LEFT JOIN affiliates a ON a.user_id = u.id AND a.status = 'APPROVED'
-         WHERE b.telegram_id IS NULL
-           AND u.telegram_id IS NOT NULL
-           AND u.telegram_id <> 90000000000
-           AND (o.id IS NOT NULL OR a.id IS NOT NULL)`
-      );
-      recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
-    } else if (broadcast.segment === "BUYERS") {
-      const usersRes = await pool.query(
-        `SELECT DISTINCT u.telegram_id
-         FROM users u
-         JOIN orders o ON o.user_id = u.id AND o.status IN ('PAID', 'DELIVERED')
-         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
-         WHERE b.telegram_id IS NULL
-           AND u.telegram_id IS NOT NULL
-           AND u.telegram_id <> 90000000000`
-      );
-      recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
-    } else if (broadcast.segment === "AFFILIATES") {
-      const usersRes = await pool.query(
-        `SELECT DISTINCT u.telegram_id
-         FROM affiliates a
-         JOIN users u ON u.id = a.user_id
-         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
-         WHERE a.status = 'APPROVED'
-           AND b.telegram_id IS NULL
-           AND u.telegram_id IS NOT NULL
-           AND u.telegram_id <> 90000000000`
-      );
-      recipientIds = usersRes.rows.map((row) => String(row.telegram_id));
-    } else {
-      const usersRes = await pool.query(
-        `SELECT u.telegram_id
-         FROM users u
-         LEFT JOIN user_bans b ON b.telegram_id = u.telegram_id
-         WHERE b.telegram_id IS NULL
-           AND u.telegram_id IS NOT NULL
-           AND u.telegram_id <> 90000000000`
-      );
-      recipientIds = Array.from(
-        new Set(usersRes.rows.map((row) => String(row.telegram_id)))
-      );
-    }
 
-    if (excludedIds.length > 0) {
-      const excludedSet = new Set(excludedIds.map((id) => String(id)));
-      recipientIds = recipientIds.filter((id) => !excludedSet.has(String(id)));
-    }
-
-    const targetCount = recipientIds.length;
-    const batchSize = 25;
-    const batchDelayMs = 75;
-    let sentCount = 0;
-    let failedCount = 0;
-
-    const formattedMessage = formatBroadcastMessage(broadcast.message_text);
-    const buttons = Array.isArray(broadcast.buttons) ? broadcast.buttons : [];
-    const replyMarkup = buildInlineKeyboard(buttons);
-    const messageOptions = replyMarkup
-      ? { parse_mode: "HTML", reply_markup: replyMarkup }
-      : { parse_mode: "HTML" };
-
-    const storedTelegramMedia = parseStoredTelegramMedia(
-      broadcast.image_path,
-      broadcast.image_mime
-    );
-
-    for (let i = 0; i < recipientIds.length; i += batchSize) {
-      const batch = recipientIds.slice(i, i + batchSize);
-      for (const telegramId of batch) {
-        try {
-          if (storedTelegramMedia) {
-            const mediaPayload = {
-              file_id: storedTelegramMedia.fileId,
-              caption: formattedMessage,
-              parse_mode: "HTML",
-              reply_markup: replyMarkup || undefined,
-            };
-            if (storedTelegramMedia.kind === "video") {
-              await sendVideo(telegramId, mediaPayload);
-            } else if (storedTelegramMedia.kind === "animation") {
-              await sendAnimation(telegramId, mediaPayload);
-            } else {
-              await sendPhoto(telegramId, mediaPayload);
+      const requestBody = req.body || {};
+      setImmediate(() => {
+        void (async () => {
+          try {
+            const freshBroadcastRes = await pool.query(
+              "SELECT * FROM broadcasts WHERE id = $1",
+              [broadcastId]
+            );
+            if (freshBroadcastRes.rowCount === 0) {
+              return;
             }
-          } else if (broadcast.image_path) {
-            const mime = String(broadcast.image_mime || "").trim().toLowerCase();
-            const mediaPayload = {
-              path: broadcast.image_path,
-              filename: broadcast.image_filename || undefined,
-              caption: formattedMessage,
-              parse_mode: "HTML",
-              reply_markup: replyMarkup || undefined,
-            };
-            if (mime === "image/gif") {
-              await sendAnimation(telegramId, mediaPayload);
-            } else if (mime.startsWith("video/")) {
-              await sendVideo(telegramId, mediaPayload);
-            } else {
-              await sendPhoto(telegramId, mediaPayload);
-            }
-          } else {
-            await sendMessage(telegramId, formattedMessage, messageOptions);
+            const freshBroadcast = freshBroadcastRes.rows[0];
+            const { recipientIds } = await resolveBroadcastRecipients(
+              pool,
+              broadcastId,
+              freshBroadcast,
+              requestBody
+            );
+            await performBroadcastSend(pool, freshBroadcast, recipientIds, {
+              updateProgress: true,
+            });
+          } catch (error) {
+            console.error("Broadcast async send failed", {
+              broadcastId,
+              error: error && error.message ? error.message : error,
+            });
+            await pool.query(
+              `UPDATE broadcasts
+               SET status = 'FAILED',
+                   progress_status = 'FAILED',
+                   progress_updated_at = now()
+               WHERE id = $1`,
+              [broadcastId]
+            );
           }
-          sentCount += 1;
-        } catch (err) {
-          failedCount += 1;
-          console.error("Broadcast send failed", {
-            broadcastId: broadcast.id,
-            telegramId,
-            error: err && err.message ? err.message : err,
-          });
-        }
-      }
+        })();
+      });
 
-      if (i + batchSize < recipientIds.length) {
-        await new Promise((resolve) => setTimeout(resolve, batchDelayMs));
-      }
+      const queuedRes = await pool.query("SELECT * FROM broadcasts WHERE id = $1", [
+        broadcastId,
+      ]);
+      return res.status(202).json({
+        ok: true,
+        broadcast: queuedRes.rows[0],
+        progress: buildBroadcastProgressPayload(queuedRes.rows[0]),
+      });
     }
 
-    const status = sentCount > 0 ? "SENT" : "FAILED";
-    const updatedRes = await pool.query(
-      `UPDATE broadcasts
-       SET status = $1, sent_at = now()
-       WHERE id = $2
-       RETURNING *`,
-      [status, broadcast.id]
+    const { recipientIds, isCustom, isGroups, isChannels } = await resolveBroadcastRecipients(
+      pool,
+      broadcastId,
+      broadcast,
+      req.body || {}
     );
-
-    await pool.query(
-      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
-       VALUES ($1, $2, $3, $4::jsonb)`,
-      [
-        "BROADCAST_SEND_RESULT",
-        "broadcast",
-        broadcast.id,
-        JSON.stringify({
-          target_count: targetCount,
-          sent_count: sentCount,
-          failed_count: failedCount,
-        }),
-      ]
-    );
+    const sendOutcome = await performBroadcastSend(pool, broadcast, recipientIds);
 
     return res.json({
       ok: true,
       broadcast: {
-        ...updatedRes.rows[0],
+        ...sendOutcome.broadcast,
         segment: mapBroadcastSegment(
-          updatedRes.rows[0].segment,
+          sendOutcome.broadcast.segment,
           isCustom || isGroups || isChannels
         ),
       },
-      result: {
-        target_count: targetCount,
-        sent_count: sentCount,
-        failed_count: failedCount,
-      },
+      result: sendOutcome.result,
     });
   } catch (error) {
     next(error);

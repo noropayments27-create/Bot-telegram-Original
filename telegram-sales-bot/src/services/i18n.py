@@ -331,7 +331,7 @@ MESSAGES = {
         "unique_already_purchased": "❌ Ya adquiriste este producto.",
         "unique_in_cart": "⚠️ Este producto ya está en tu carrito.",
         "unique_limit": "❌ Este producto solo permite 1 compra por cliente.",
-        "screenshot_received": "✅ ¡Recibido! Estamos verificando tu pago ahora mismo 🔎⏳",
+        "screenshot_received": "✅💸 ¡Pago recibido! Estamos verificándolo en este momento 🔎⏳\n\n🛡️ Tu pago está pendiente de validación por parte de un administrador para poder liberar la orden.\n\n🙏 Te pedimos un poco de paciencia, ya que este proceso puede tardar 30 minutos o más.",
         "screenshot_received_already": "❌ No se pudo enviar, espera confirmación de tu primera imagen.",
         "payment_screenshot_invalid": "⚠️ La imagen no parece un comprobante de pago válido.\n\nEnvía una captura donde se vea el método y el monto pagado.",
         "payment_screenshot_support_contact": "💡 <b>¿Problemas con la captura de pago?</b>\n\nSi el sistema no la detecta correctamente, no te preocupes.\n\n📩 Comunícate con soporte: <b>@noropayments</b>\nEstamos para ayudarte 🤝",

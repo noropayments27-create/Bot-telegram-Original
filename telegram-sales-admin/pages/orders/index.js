@@ -345,7 +345,7 @@ export default function OrdersPage() {
 
   const loadDetail = useCallback(async (orderId) => {
     if (!orderId) {
-      return;
+      return null;
     }
     setDetailLoading((prev) => ({ ...prev, [orderId]: true }));
     setDetailErrors((prev) => ({ ...prev, [orderId]: "" }));
@@ -392,6 +392,7 @@ export default function OrdersPage() {
       } else {
         setReceiptUrls((prev) => ({ ...prev, [orderId]: "" }));
       }
+      return data;
     } catch (err) {
       setDetailErrors((prev) => ({
         ...prev,
@@ -404,6 +405,7 @@ export default function OrdersPage() {
       });
       setProofUrls((prev) => ({ ...prev, [orderId]: "" }));
       setReceiptUrls((prev) => ({ ...prev, [orderId]: "" }));
+      return null;
     } finally {
       setDetailLoading((prev) => ({ ...prev, [orderId]: false }));
     }
@@ -532,7 +534,8 @@ export default function OrdersPage() {
         } catch (err) {
           payload = null;
         }
-        await loadDetail(detail.order.id);
+        const refreshedDetail = await loadDetail(detail.order.id);
+        await loadOrders();
         if (payload?.code === "INSUFFICIENT_STOCK") {
           setDetailMessages((prev) => ({
             ...prev,
@@ -540,9 +543,13 @@ export default function OrdersPage() {
           }));
           return;
         }
+        const refreshedStatus = refreshedDetail?.order?.status;
         setDetailMessages((prev) => ({
           ...prev,
-          [orderId]: "Este pedido ya fue procesado anteriormente",
+          [orderId]:
+            refreshedStatus === "EXPIRED"
+              ? "La orden ya expiró."
+              : "Este pedido ya fue procesado anteriormente",
         }));
         return;
       }
@@ -902,9 +909,13 @@ export default function OrdersPage() {
             const isFreeOrder = isFreeOrderData(detail?.order, detail);
             const hasPaymentProof = Boolean(detail?.payment?.screenshot_file_id);
             const canModerate = hasPaymentProof || isFreeOrder;
-            const isApproved =
+            const isFinalized =
               detail?.order?.status === "PAID"
+              || detail?.order?.status === "CANCELLED"
               || detail?.order?.status === "DELIVERED"
+              || detail?.order?.status === "EXPIRED"
+              || detail?.order?.status === "REFUNDED"
+              || detail?.payment?.review_status === "REJECTED"
               || detail?.payment?.review_status === "APPROVED";
             const isHeaderActionsOpen = Boolean(headerActionsOpenById[orderId]);
 
@@ -1229,8 +1240,7 @@ export default function OrdersPage() {
                           onClick={() => handleApprove(orderId)}
                           disabled={
                             !canModerate ||
-                            detail.order.status === "PAID" ||
-                            detail.order.status === "DELIVERED" ||
+                            isFinalized ||
                             isApproving
                           }
                         >
@@ -1243,7 +1253,7 @@ export default function OrdersPage() {
                           <button
                             type="button"
                             onClick={() => handleReject(orderId, "cancel")}
-                            disabled={!canModerate || isApproved}
+                            disabled={!canModerate || isFinalized}
                           >
                             Rechazar
                           </button>
@@ -1252,14 +1262,14 @@ export default function OrdersPage() {
                             <button
                               type="button"
                               onClick={() => handleReject(orderId, "retry")}
-                              disabled={!canModerate || isApproved}
+                              disabled={!canModerate || isFinalized}
                             >
                               Reintentar
                             </button>
                             <button
                               type="button"
                               onClick={() => handleReject(orderId, "cancel")}
-                              disabled={!canModerate || isApproved}
+                              disabled={!canModerate || isFinalized}
                             >
                               Cancelar
                             </button>

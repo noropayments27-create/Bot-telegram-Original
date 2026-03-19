@@ -27,8 +27,10 @@ from ..config import (
     BOT_RATE_LIMIT_ENABLED,
     BOT_RATE_LIMIT_SECONDS,
     BOT_TO_API_SECRET,
+    BOT_USERNAME,
 )
 from ..services.api_client import ApiClient
+from ..services.deeplinks import build_bot_start_link, build_product_start_payload
 from ..services.home_layout import clear_home_layout_cache
 from ..services.i18n import t
 from ..services.user_locale import get_user_locale
@@ -834,10 +836,6 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                     text=_tr(locale, "📊 Estado", "📊 Status"),
                     callback_data="adminui:status",
                 ),
-                InlineKeyboardButton(
-                    text=_tr(locale, "💰 Ganancias", "💰 Earnings"),
-                    callback_data="adminui:earnings:0:0",
-                ),
             ],
             [
                 InlineKeyboardButton(
@@ -845,8 +843,8 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                     callback_data="adminui:topsales:0",
                 ),
                 InlineKeyboardButton(
-                    text=_tr(locale, "❓ Ayuda", "❓ Help"),
-                    callback_data="adminui:home",
+                    text=_tr(locale, "💰 Ganancias", "💰 Earnings"),
+                    callback_data="adminui:earnings:0:0",
                 ),
             ],
             [
@@ -912,7 +910,7 @@ def _normalize_broadcast_buttons_state(value: Any) -> list[Dict[str, str]]:
     for item in value:
         if not isinstance(item, dict):
             continue
-        text = str(item.get("text") or "").strip()
+        text = _sanitize_broadcast_button_text(item.get("text") or "")
         url = str(item.get("url") or "").strip()
         if not text or not url:
             continue
@@ -927,6 +925,42 @@ def _normalize_broadcast_buttons_state(value: Any) -> list[Dict[str, str]]:
             row = default_row
         normalized.append({"text": text[:64], "url": url, "row": row})
         default_row += 1
+    return normalized
+
+
+def _sanitize_broadcast_button_text(value: Any) -> str:
+    text = str(value or "")
+    text = re.sub(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", r"\1", text, flags=re.IGNORECASE | re.DOTALL)
+    text = re.sub(r"</?tg-emoji\b[^>]*>", "", text, flags=re.IGNORECASE)
+    text = re.sub(r"<[^>]+>", "", text)
+    return html.unescape(text).strip()
+
+
+def _normalize_broadcast_message_entities(value: Any) -> list[Dict[str, Any]]:
+    if not isinstance(value, list):
+        return []
+    normalized: list[Dict[str, Any]] = []
+    for item in value:
+        if not isinstance(item, dict):
+            continue
+        entity_type = str(item.get("type") or "").strip()
+        try:
+            offset = int(item.get("offset"))
+            length = int(item.get("length"))
+        except (TypeError, ValueError):
+            continue
+        if not entity_type or offset < 0 or length <= 0:
+            continue
+        entity: Dict[str, Any] = {
+            "type": entity_type,
+            "offset": offset,
+            "length": length,
+        }
+        for key in ("url", "language", "custom_emoji_id"):
+            value_part = item.get(key)
+            if value_part is not None and str(value_part).strip():
+                entity[key] = str(value_part).strip()
+        normalized.append(entity)
     return normalized
 
 
@@ -980,7 +1014,7 @@ def _build_broadcast_step_keyboard(
             ],
             [
                 InlineKeyboardButton(
-                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
                     callback_data="adminui:home",
                 )
             ],
@@ -997,6 +1031,182 @@ def _broadcast_media_label(media_kind: str | None, locale: str | None = "es") ->
     if media_kind_safe == "video":
         return _tr(locale, "Video", "Video")
     return _tr(locale, "Sin multimedia", "No media")
+
+
+def _build_progress_bar(percent: int, width: int = 12) -> str:
+    safe_percent = max(0, min(100, int(percent)))
+    filled = round((safe_percent / 100) * width)
+    return f"[{'█' * filled}{'░' * (width - filled)}] {safe_percent}%"
+
+
+def _build_broadcast_progress_text(
+    broadcast_id: str,
+    locale: str | None = "es",
+    *,
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_kind: str | None = None,
+    target_count: int = 0,
+    sent_count: int = 0,
+    failed_count: int = 0,
+    percent: int = 0,
+    status: str | None = None,
+) -> str:
+    progress_status = str(status or "").upper().strip()
+    status_text = _tr(locale, "Preparando", "Preparing")
+    if progress_status == "SENDING":
+        status_text = _tr(locale, "Enviando", "Sending")
+    elif progress_status == "SENT":
+        status_text = _tr(locale, "Completada", "Completed")
+    elif progress_status == "FAILED":
+        status_text = _tr(locale, "Finalizada", "Finished")
+    elif progress_status == "QUEUED":
+        status_text = _tr(locale, "En cola", "Queued")
+    processed_count = max(sent_count + failed_count, 0)
+    pending_count = max(target_count - processed_count, 0) if target_count > 0 else 0
+    target_label = str(target_count) if target_count > 0 else "..."
+    pending_label = str(pending_count) if target_count > 0 else "..."
+    return (
+        _tr(locale, "📣 <b>Enviando difusión...</b>\n\n", "📣 <b>Sending broadcast...</b>\n\n")
+        + f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
+        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(status_text)}</b>\n"
+        + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons or [])}</b>\n"
+        + f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n"
+        + f"🎯 {_tr(locale, 'Objetivo', 'Target')}: <b>{target_label}</b>\n"
+        + f"✅ {_tr(locale, 'Enviados', 'Sent')}: <b>{sent_count}</b>\n"
+        + f"❌ {_tr(locale, 'Rechazados', 'Rejected')}: <b>{failed_count}</b>\n"
+        + f"⏳ {_tr(locale, 'Pendientes', 'Pending')}: <b>{pending_label}</b>\n\n"
+        + f"<code>{_build_progress_bar(percent)}</code>"
+    )
+
+
+def _build_broadcast_result_summary_text(
+    broadcast_id: str,
+    locale: str | None = "es",
+    *,
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_kind: str | None = None,
+    target_count: int = 0,
+    sent_count: int = 0,
+    failed_count: int = 0,
+    final_status: str | None = None,
+) -> str:
+    status_key = str(final_status or "").upper().strip()
+    title = _tr(
+        locale,
+        "📣 <b>Difusiones enviadas Exitosamente</b>\n\n",
+        "📣 <b>Broadcasts sent successfully</b>\n\n",
+    )
+    if status_key == "FAILED" and sent_count == 0:
+        title = _tr(
+            locale,
+            "⚠️ <b>La difusión terminó sin envíos exitosos</b>\n\n",
+            "⚠️ <b>The broadcast finished without successful deliveries</b>\n\n",
+        )
+    return (
+        title
+        + f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
+        + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons or [])}</b>\n"
+        + f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n"
+        + f"🎯 {_tr(locale, 'Objetivo', 'Target')}: <b>{target_count}</b>\n"
+        + f"✅ {_tr(locale, 'Enviados', 'Sent')}: <b>{sent_count}</b>\n"
+        + f"❌ {_tr(locale, 'Rechazados', 'Rejected')}: <b>{failed_count}</b>"
+    )
+
+
+async def _wait_broadcast_progress_and_build_result(
+    panel_message: Message,
+    broadcast_id: str,
+    locale: str | None = "es",
+    *,
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_kind: str | None = None,
+) -> str:
+    warmup_steps = (3, 7, 12, 18, 25, 33, 42, 50)
+    warmup_index = 0
+    last_progress_text = ""
+    progress_status = "QUEUED"
+    target_count = 0
+    sent_count = 0
+    failed_count = 0
+
+    while True:
+        progress_res = await api_client.admin_get_broadcast_progress(broadcast_id)
+        progress = progress_res.get("progress") or {}
+        progress_status = str(progress.get("status") or progress_status).upper().strip()
+        target_count = _safe_int(progress.get("target_count"), target_count, 0, 10**9)
+        sent_count = _safe_int(progress.get("sent_count"), sent_count, 0, 10**9)
+        failed_count = _safe_int(progress.get("failed_count"), failed_count, 0, 10**9)
+        if target_count > 0:
+            percent = _safe_int(progress.get("percent"), 0, 0, 100)
+        else:
+            percent = warmup_steps[warmup_index]
+            if warmup_index < len(warmup_steps) - 1:
+                warmup_index += 1
+        progress_text = _build_broadcast_progress_text(
+            broadcast_id,
+            locale,
+            buttons=buttons,
+            media_kind=media_kind,
+            target_count=target_count,
+            sent_count=sent_count,
+            failed_count=failed_count,
+            percent=percent,
+            status=progress_status,
+        )
+        if progress_text != last_progress_text:
+            await _edit_panel_message(panel_message, progress_text)
+            last_progress_text = progress_text
+        if bool(progress.get("is_done")) or progress_status in {"SENT", "FAILED"}:
+            break
+        await asyncio.sleep(0.2)
+
+    return _build_broadcast_result_summary_text(
+        broadcast_id,
+        locale,
+        buttons=buttons,
+        media_kind=media_kind,
+        target_count=target_count,
+        sent_count=sent_count,
+        failed_count=failed_count,
+        final_status=progress_status,
+    )
+
+
+async def _send_broadcast_with_progress(
+    panel_message: Message,
+    text: str,
+    locale: str | None = "es",
+    *,
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_file_id: str | None = None,
+    media_kind: str | None = None,
+    message_entities: Optional[list[Dict[str, Any]]] = None,
+) -> str:
+    create_res = await api_client.admin_create_broadcast(
+        text,
+        segment="ALL_USERS",
+        buttons=buttons or [],
+        media_file_id=media_file_id,
+        media_kind=media_kind,
+        message_entities=_normalize_broadcast_message_entities(message_entities),
+    )
+    broadcast = create_res.get("broadcast", {})
+    broadcast_id = str(broadcast.get("id") or "").strip()
+    if not broadcast_id:
+        return _tr(
+            locale,
+            "❌ <b>No se pudo crear la difusión.</b>",
+            "❌ <b>Could not create the broadcast.</b>",
+        )
+
+    await api_client.admin_send_broadcast_async(broadcast_id)
+    return await _wait_broadcast_progress_and_build_result(
+        panel_message,
+        broadcast_id,
+        locale,
+        buttons=buttons,
+        media_kind=media_kind,
+    )
 
 
 def _build_broadcast_review_text(
@@ -1031,7 +1241,7 @@ def _build_broadcast_review_keyboard(locale: str | None = "es") -> InlineKeyboar
                     callback_data="adminui:broadcast:review:preview",
                 ),
                 InlineKeyboardButton(
-                    text=_tr(locale, "✅ Enviar", "✅ Send"),
+                    text=_tr(locale, "🟢 Enviar", "🟢 Send"),
                     callback_data="adminui:broadcast:review:send",
                 ),
             ],
@@ -1053,11 +1263,278 @@ def _build_broadcast_review_keyboard(locale: str | None = "es") -> InlineKeyboar
             ],
             [
                 InlineKeyboardButton(
-                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    text=_tr(locale, "💾 Guardar", "💾 Save"),
+                    callback_data="adminui:broadcast:review:save",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
                     callback_data="adminui:home",
                 )
             ],
         ]
+    )
+
+
+def _build_broadcast_menu_text(locale: str | None = "es") -> str:
+    return _tr(
+        locale,
+        "📣 <b>Menú de Difusiones</b>\n\nSelecciona si quieres crear una nueva difusión o abrir una guardada.",
+        "📣 <b>Broadcast Menu</b>\n\nChoose whether you want to create a new broadcast or open a saved one.",
+    )
+
+
+def _build_broadcast_menu_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Crear Difusión", "➕ Create Broadcast"),
+                    callback_data="adminui:broadcast:new",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💾 Guardadas", "💾 Saved"),
+                    callback_data="adminui:broadcast:saved",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+def _broadcast_preview_snippet(text: str, limit: int = 44) -> str:
+    raw = re.sub(r"<[^>]+>", "", str(text or ""))
+    raw = " ".join(raw.split()).strip()
+    if len(raw) <= limit:
+        return raw or "-"
+    return f"{raw[:limit - 1]}…"
+
+
+def _extract_saved_broadcast_media(
+    broadcast: Dict[str, Any],
+) -> tuple[str | None, str | None]:
+    image_path = str(broadcast.get("image_path") or "").strip()
+    image_mime = str(broadcast.get("image_mime") or "").strip().lower()
+    if image_path.startswith("tgfile:"):
+        file_id = image_path[len("tgfile:"):].strip()
+        media_kind = ""
+        if image_mime.startswith("tg:"):
+            media_kind = image_mime[3:].strip().lower()
+        if media_kind not in {"photo", "animation", "video"}:
+            media_kind = "photo"
+        return (file_id or None), media_kind
+    return None, None
+
+
+def _saved_broadcast_media_kind(broadcast: Dict[str, Any]) -> str | None:
+    media_file_id, media_kind = _extract_saved_broadcast_media(broadcast)
+    if media_file_id and media_kind:
+        return media_kind
+    image_mime = str(broadcast.get("image_mime") or "").strip().lower()
+    if image_mime == "image/gif" or image_mime == "tg:animation":
+        return "animation"
+    if image_mime.startswith("video/") or image_mime == "tg:video":
+        return "video"
+    if broadcast.get("image_path"):
+        return "photo"
+    return None
+
+
+def _build_broadcast_state_signature(
+    text: str,
+    entities: Optional[list[Dict[str, Any]]],
+    buttons: list[Dict[str, str]],
+    media_file_id: str,
+    media_kind: str,
+) -> str:
+    normalized_buttons = [
+        {
+            "text": str(button.get("text") or "").strip(),
+            "url": str(button.get("url") or "").strip(),
+            "row": int(button.get("row") or 1),
+        }
+        for button in buttons
+    ]
+    normalized_buttons.sort(key=lambda item: (item["row"], item["text"], item["url"]))
+    payload = {
+        "text": str(text or "").strip(),
+        "entities": _normalize_broadcast_message_entities(entities),
+        "buttons": normalized_buttons,
+        "media_file_id": str(media_file_id or "").strip(),
+        "media_kind": str(media_kind or "").strip().lower(),
+    }
+    return repr(payload)
+
+
+async def _build_saved_broadcasts_view(
+    locale: str | None = "es",
+    page: int = 1,
+) -> tuple[str, InlineKeyboardMarkup, list[str]]:
+    response = await api_client.admin_list_broadcasts(page=1, page_size=50)
+    items = response.get("items", []) or []
+    saved_items_all = [
+        item for item in items
+        if bool(item.get("saved"))
+    ]
+    total_items = len(saved_items_all)
+    total_pages = max((total_items + 4) // 5, 1)
+    current_page = max(1, min(page, total_pages))
+    start_index = (current_page - 1) * 5
+    saved_items = saved_items_all[start_index:start_index + 5]
+    if not saved_items:
+        text = _tr(
+            locale,
+            "💾 <b>Difusiones guardadas</b>\n\nNo hay difusiones guardadas todavía.",
+            "💾 <b>Saved broadcasts</b>\n\nThere are no saved broadcasts yet.",
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=_tr(locale, "⬅ volver", "⬅ back"),
+                        callback_data="adminui:broadcast",
+                    )
+                ]
+            ]
+        )
+        return text, keyboard, []
+
+    lines = [
+        _tr(locale, "💾 <b>Difusiones guardadas</b>", "💾 <b>Saved broadcasts</b>"),
+        f"{_tr(locale, 'Página', 'Page')}: <b>{current_page}/{total_pages}</b>",
+        "",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    saved_ids: list[str] = []
+    for index, item in enumerate(saved_items, start=1):
+        broadcast_id = str(item.get("id") or "").strip()
+        if not broadcast_id:
+            continue
+        saved_ids.append(broadcast_id)
+        snippet = _escape_html(_broadcast_preview_snippet(item.get("message_text") or ""))
+        buttons_count = len(item.get("buttons") or [])
+        media_kind = _saved_broadcast_media_kind(item)
+        lines.append(
+            f"{index}. <b>{snippet}</b>\n"
+            f"   🖼 {_escape_html(_broadcast_media_label(media_kind, locale))} | "
+            f"🔗 {buttons_count} | "
+            f"🗓 {_fmt_dt(item.get('created_at'))}"
+        )
+        current_row.append(
+            InlineKeyboardButton(
+                text=f"{index}",
+                callback_data=f"adminui:broadcast:saved:pick:{index}",
+            )
+        )
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    nav_row: list[InlineKeyboardButton] = []
+    if current_page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅ volver", "⬅ back"),
+                callback_data=f"adminui:broadcast:saved:page:{current_page - 1}",
+            )
+        )
+    if current_page < total_pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text=_tr(locale, "Siguiente ➡", "Next ➡"),
+                callback_data=f"adminui:broadcast:saved:page:{current_page + 1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr(locale, "🔄 Recargar", "🔄 Refresh"),
+                callback_data="adminui:broadcast:saved",
+            ),
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅ volver", "⬅ back"),
+                callback_data="adminui:broadcast",
+            ),
+        ]
+    )
+    return "\n\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows), saved_ids
+
+
+def _build_saved_broadcast_actions_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👁 Ver previa", "👁 Preview"),
+                    callback_data="adminui:broadcast:saved:preview",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🟢 Enviar", "🟢 Send"),
+                    callback_data="adminui:broadcast:saved:send",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Editar texto", "✏️ Edit text"),
+                    callback_data="adminui:broadcast:saved:edit:text",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔗 Editar botones", "🔗 Edit buttons"),
+                    callback_data="adminui:broadcast:saved:edit:buttons",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🖼 Editar multimedia", "🖼 Edit media"),
+                    callback_data="adminui:broadcast:saved:edit:media",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🗑 Eliminar", "🗑 Delete"),
+                    callback_data="adminui:broadcast:saved:delete",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data="adminui:broadcast:saved",
+                )
+            ],
+        ]
+    )
+
+
+def _build_saved_broadcast_detail_text(
+    broadcast: Dict[str, Any],
+    locale: str | None = "es",
+) -> str:
+    broadcast_id = _escape_html(broadcast.get("id") or "-")
+    snippet = _escape_html(_broadcast_preview_snippet(broadcast.get("message_text") or "", 80))
+    buttons_count = len(broadcast.get("buttons") or [])
+    media_kind = _saved_broadcast_media_kind(broadcast)
+    return (
+        _tr(locale, "💾 <b>Difusión guardada</b>\n\n", "💾 <b>Saved broadcast</b>\n\n")
+        + f"🆔 ID: <code>{broadcast_id}</code>\n"
+        + f"📝 {_tr(locale, 'Texto', 'Text')}: <b>{snippet}</b>\n"
+        + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{buttons_count}</b>\n"
+        + f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n"
+        + f"🗓 {_tr(locale, 'Creada', 'Created')}: {_fmt_dt(broadcast.get('created_at'))}\n\n"
+        + _tr(
+            locale,
+            "Puedes ver la previa o enviarla directamente.",
+            "You can preview it or send it directly.",
+        )
     )
 
 
@@ -1067,6 +1544,7 @@ async def _send_broadcast_preview_message(
     buttons: list[Dict[str, str]],
     media_file_id: str | None,
     media_kind: str | None,
+    message_entities: Optional[list[Dict[str, Any]]] = None,
     locale: str | None = "es",
 ) -> None:
     preview_markup = _build_broadcast_preview_keyboard(buttons, locale)
@@ -1074,38 +1552,44 @@ async def _send_broadcast_preview_message(
     media_id = str(media_file_id or "").strip()
     text_value = text.strip()
     caption = text_value[:900] if text_value else ""
+    normalized_entities = _normalize_broadcast_message_entities(message_entities)
+    can_use_entities = bool(normalized_entities)
+    can_use_caption_entities = can_use_entities and len(text_value) <= 1024
 
     try:
         if media_id:
+            media_kwargs: Dict[str, Any] = {
+                "caption": (text_value if can_use_caption_entities else caption) or None,
+                "reply_markup": preview_markup,
+            }
+            if can_use_caption_entities:
+                media_kwargs["caption_entities"] = normalized_entities
+            else:
+                media_kwargs["parse_mode"] = "HTML"
             if media_kind_safe == "video":
                 await message.answer_video(
                     video=media_id,
-                    caption=caption or None,
-                    parse_mode="HTML",
-                    reply_markup=preview_markup,
+                    **media_kwargs,
                 )
                 return
             if media_kind_safe == "animation":
                 await message.answer_animation(
                     animation=media_id,
-                    caption=caption or None,
-                    parse_mode="HTML",
-                    reply_markup=preview_markup,
+                    **media_kwargs,
                 )
                 return
             await message.answer_photo(
                 photo=media_id,
-                caption=caption or None,
-                parse_mode="HTML",
-                reply_markup=preview_markup,
+                **media_kwargs,
             )
             return
 
-        await message.answer(
-            text_value,
-            parse_mode="HTML",
-            reply_markup=preview_markup,
-        )
+        message_kwargs: Dict[str, Any] = {"reply_markup": preview_markup}
+        if can_use_entities:
+            message_kwargs["entities"] = normalized_entities
+        else:
+            message_kwargs["parse_mode"] = "HTML"
+        await message.answer(text_value, **message_kwargs)
     except TelegramBadRequest:
         if media_id:
             if media_kind_safe == "video":
@@ -1132,6 +1616,165 @@ async def _send_broadcast_preview_message(
             text_value,
             reply_markup=preview_markup,
         )
+
+
+async def _save_current_broadcast_draft(
+    state: FSMContext,
+    locale: str | None = "es",
+) -> str:
+    data = await state.get_data()
+    message_text = str(
+        data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
+    ).strip()
+    message_entities = _normalize_broadcast_message_entities(data.get("admin_ui_broadcast_entities"))
+    buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+    media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+    media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+    selected_broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+    current_signature = _build_broadcast_state_signature(
+        message_text,
+        message_entities,
+        buttons,
+        media_file_id,
+        media_kind,
+    )
+    saved_signature = str(data.get("admin_ui_saved_broadcast_signature") or "").strip()
+
+    if not message_text and not media_file_id:
+        return _tr(
+            locale,
+            "❌ <b>No hay contenido para guardar.</b>",
+            "❌ <b>There is no content to save.</b>",
+        )
+
+    if selected_broadcast_id and current_signature == saved_signature:
+        return _tr(
+            locale,
+            "ℹ️ <b>Esta difusión ya estaba guardada y no tiene cambios.</b>",
+            "ℹ️ <b>This broadcast was already saved and has no changes.</b>",
+        )
+
+    payload: Dict[str, Any] = {
+        "message": message_text,
+        "message_entities": message_entities,
+        "buttons": buttons,
+        "saved": True,
+        "clear_image": not bool(media_file_id),
+    }
+    if media_file_id:
+        payload["media_file_id"] = media_file_id
+        payload["media_kind"] = media_kind
+
+    broadcast_id = selected_broadcast_id
+    if broadcast_id:
+        update_res = await api_client.admin_update_broadcast(broadcast_id, payload)
+        broadcast = update_res.get("broadcast", {})
+        broadcast_id = str(broadcast.get("id") or "").strip()
+    else:
+        create_res = await api_client.admin_create_broadcast(
+            message_text,
+            segment="ALL_USERS",
+            buttons=buttons,
+            media_file_id=media_file_id or None,
+            media_kind=media_kind or None,
+            message_entities=message_entities,
+        )
+        broadcast = create_res.get("broadcast", {})
+        broadcast_id = str(broadcast.get("id") or "").strip()
+        if broadcast_id:
+            update_res = await api_client.admin_update_broadcast(broadcast_id, payload)
+            broadcast = update_res.get("broadcast", {}) or broadcast
+            broadcast_id = str(broadcast.get("id") or "").strip()
+
+    if not broadcast_id:
+        return _tr(
+            locale,
+            "❌ <b>No se pudo guardar la difusión.</b>",
+            "❌ <b>Could not save the broadcast.</b>",
+        )
+
+    await state.update_data(
+        admin_ui_selected_saved_broadcast_id=broadcast_id,
+        admin_ui_saved_broadcast_signature=current_signature,
+    )
+    return _tr(
+        locale,
+        "💾 <b>Difusión guardada correctamente.</b>\n\n"
+        f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>",
+        "💾 <b>Broadcast saved successfully.</b>\n\n"
+        f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>",
+    )
+
+
+async def _load_saved_broadcast_for_state(
+    state: FSMContext,
+    broadcast_id: str,
+) -> Dict[str, Any]:
+    response = await api_client.admin_get_broadcast(broadcast_id)
+    broadcast = response.get("broadcast", {}) or {}
+    buttons = _normalize_broadcast_buttons_state(broadcast.get("buttons"))
+    media_file_id, media_kind = _extract_saved_broadcast_media(broadcast)
+    message_text = str(broadcast.get("message_text") or "").strip()
+    message_entities = _normalize_broadcast_message_entities(broadcast.get("message_entities"))
+    await state.update_data(
+        admin_ui_broadcast_text=message_text,
+        admin_ui_broadcast_plain_text=message_text,
+        admin_ui_broadcast_entities=message_entities,
+        admin_ui_broadcast_buttons=buttons,
+        admin_ui_broadcast_media_file_id=media_file_id or "",
+        admin_ui_broadcast_media_kind=media_kind or "",
+        admin_ui_selected_saved_broadcast_id=broadcast_id,
+        admin_ui_saved_broadcast_signature=_build_broadcast_state_signature(
+            message_text,
+            message_entities,
+            buttons,
+            media_file_id or "",
+            media_kind or "",
+        ),
+        admin_ui_saved_broadcast=broadcast,
+    )
+    return broadcast
+
+
+def _extract_message_html_text(message: Message) -> str:
+    html_text = getattr(message, "html_text", None)
+    if isinstance(html_text, str) and html_text.strip():
+        return html_text.strip()
+    caption_html = getattr(message, "caption_html", None)
+    if isinstance(caption_html, str) and caption_html.strip():
+        return caption_html.strip()
+    return (message.text or message.caption or "").strip()
+
+
+def _extract_message_entities(message: Message) -> list[Dict[str, Any]]:
+    raw_entities = message.caption_entities if message.caption is not None else message.entities
+    if not raw_entities:
+        return []
+    serialized: list[Dict[str, Any]] = []
+    for entity in raw_entities:
+        entity_type = str(getattr(entity, "type", "") or "").strip()
+        offset = getattr(entity, "offset", None)
+        length = getattr(entity, "length", None)
+        if not entity_type or offset is None or length is None:
+            continue
+        try:
+            normalized_offset = int(offset)
+            normalized_length = int(length)
+        except (TypeError, ValueError):
+            continue
+        if normalized_offset < 0 or normalized_length <= 0:
+            continue
+        item: Dict[str, Any] = {
+            "type": entity_type,
+            "offset": normalized_offset,
+            "length": normalized_length,
+        }
+        for key in ("url", "language", "custom_emoji_id"):
+            value = getattr(entity, key, None)
+            if value is not None and str(value).strip():
+                item[key] = str(value).strip()
+        serialized.append(item)
+    return serialized
 
 
 async def _build_delete_categories_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
@@ -1200,6 +1843,31 @@ def _build_delete_products_keyboard(
         ]
     )
     return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _build_delete_confirm_keyboard(
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✅ Sí", "✅ Yes"),
+                    callback_data="adminui:product:delete:confirm",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "❌ No", "❌ No"),
+                    callback_data="adminui:product:delete:cancel",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
 
 
 def _build_admin_panel_text(locale: str | None = "es") -> str:
@@ -1442,7 +2110,7 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
             _tr(
                 locale,
                 "➕ <b>Agregar Producto</b>\n\n"
-                "Paso 1/3 · Envía en una sola línea este formato:\n"
+                "Paso 1/4 · Envía en una sola línea este formato:\n"
                 "<code>nombre | precio | categoria</code>\n\n"
                 "✍️ Ejemplo:\n"
                 "<code>Netflix Premium | 9.99 | TIENDA</code>\n\n"
@@ -1451,7 +2119,7 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
                 "Si creas botón Home para esa categoría: <code>category:page:cuentas</code>\n"
                 "Si no envías categoría, se usa <code>TIENDA</code>.",
                 "➕ <b>Add Product</b>\n\n"
-                "Step 1/3 · Send this format in one line:\n"
+                "Step 1/4 · Send this format in one line:\n"
                 "<code>name | price | category</code>\n\n"
                 "✍️ Example:\n"
                 "<code>Netflix Premium | 9.99 | STORE</code>\n\n"
@@ -1535,12 +2203,14 @@ def _build_status_text(
     health: Dict[str, Any],
     maintenance: Dict[str, Any],
     counts: Dict[str, Any],
+    summary: Dict[str, Any],
     locale: str | None = "es",
 ) -> str:
     waiting = counts.get("counts", {}).get("WAITING_PAYMENT", 0)
     paid = counts.get("counts", {}).get("PAID", 0)
     delivered = counts.get("counts", {}).get("DELIVERED", 0)
     cancelled = counts.get("counts", {}).get("CANCELLED", 0)
+    users_total = _safe_int(summary.get("users_total"), 0, 0, 10**9)
     api_state = "OK" if health.get("ok") else "ERROR"
     maint_state = _tr(locale, "ACTIVO", "ON") if maintenance.get("active") else _tr(locale, "INACTIVO", "OFF")
     return _tr(
@@ -1548,6 +2218,8 @@ def _build_status_text(
         "📊 <b>Estado del Sistema</b>\n\n"
         f"🧠 API: <b>{api_state}</b>\n"
         f"🛠 Mantenimiento: <b>{maint_state}</b>\n\n"
+        "👥 <b>Usuarios</b>\n"
+        f"• 👤 Totales: <b>{users_total}</b>\n\n"
         "🧾 <b>Órdenes</b>\n"
         f"• ⏳ Pendientes de pago: <b>{waiting}</b>\n"
         f"• ✅ Pagadas: <b>{paid}</b>\n"
@@ -1556,6 +2228,8 @@ def _build_status_text(
         "📊 <b>System Status</b>\n\n"
         f"🧠 API: <b>{api_state}</b>\n"
         f"🛠 Maintenance: <b>{maint_state}</b>\n\n"
+        "👥 <b>Users</b>\n"
+        f"• 👤 Total: <b>{users_total}</b>\n\n"
         "🧾 <b>Orders</b>\n"
         f"• ⏳ Waiting payment: <b>{waiting}</b>\n"
         f"• ✅ Paid: <b>{paid}</b>\n"
@@ -1565,12 +2239,13 @@ def _build_status_text(
 
 
 async def _fetch_status_text(locale: str | None = "es") -> str:
-    health, maintenance, counts = await asyncio.gather(
+    health, maintenance, counts, summary = await asyncio.gather(
         api_client.ping_health(),
         api_client.admin_get_maintenance(),
         api_client.admin_get_order_status_counts(),
+        api_client.admin_get_summary(),
     )
-    return _build_status_text(health, maintenance, counts, locale)
+    return _build_status_text(health, maintenance, counts, summary, locale)
 
 
 async def _build_orders_pending_text(limit: int, locale: str | None = "es") -> str:
@@ -1949,6 +2624,34 @@ async def _build_product_delete_view(
     return text, _build_delete_products_keyboard(items, category_key, locale)
 
 
+async def _find_active_product_by_id(
+    product_id: str,
+    category_key: str | None = None,
+) -> Dict[str, Any] | None:
+    target = str(product_id or "").strip()
+    if not target:
+        return None
+    normalized_category = _normalize_category_key(category_key)
+    page = 1
+    while True:
+        response = await api_client.list_products(
+            page=page,
+            page_size=50,
+            telegram_id=None,
+            category_key=normalized_category or None,
+        )
+        batch = response.get("items", [])
+        if not batch:
+            return None
+        for item in batch:
+            if str(item.get("id") or "").strip() == target:
+                return item
+        total_pages = int(response.get("total_pages") or 1)
+        if page >= total_pages:
+            return None
+        page += 1
+
+
 def _build_product_create_payload(raw_text: str, locale: str | None = "es") -> Dict[str, Any]:
     parts = [part.strip() for part in raw_text.split("|")]
     if len(parts) < 2:
@@ -2011,12 +2714,57 @@ def _build_product_description(description_text: str, locale: str | None = "es")
     return "\n".join(lines)
 
 
+def _build_product_delivery_text(delivery_text: str, locale: str | None = "es") -> str:
+    text = delivery_text.strip()
+    if not text:
+        raise ValueError(
+            _tr(
+                locale,
+                "El texto para el cliente no puede estar vacío.",
+                "The customer text cannot be empty.",
+            )
+        )
+    if len(text) > 3500:
+        raise ValueError(
+            _tr(
+                locale,
+                "El texto para el cliente es demasiado largo.",
+                "The customer text is too long.",
+            )
+        )
+    return text
+
+
+def _build_product_admin_link(product: Dict[str, Any]) -> str:
+    if not str(BOT_USERNAME or "").strip():
+        return ""
+    product_id = str(product.get("id") or "").strip()
+    product_code = str(product.get("code") or "").strip().upper()
+    product_token = product_code or product_id
+    if not product_token:
+        return ""
+    payload = build_product_start_payload(product_token, None)
+    if not payload:
+        payload = build_product_start_payload(product_id, None)
+    if not payload:
+        return ""
+    return build_bot_start_link(BOT_USERNAME, payload) or ""
+
+
 def _build_product_created_text(product: Dict[str, Any], locale: str | None = "es") -> str:
     code = _escape_html(product.get("code") or "-")
     name = _escape_html(product.get("name") or "-")
     category = _escape_html(product.get("category_key") or "-")
     product_id = _escape_html(product.get("id"))
     price = _fmt_amount(product.get("price"))
+    link = _build_product_admin_link(product)
+    link_block = ""
+    if link:
+        link_block = _tr(
+            locale,
+            f"\n🔗 Link: <code>{_escape_html(link)}</code>",
+            f"\n🔗 Link: <code>{_escape_html(link)}</code>",
+        )
     return _tr(
         locale,
         "✅ <b>Producto creado</b>\n\n"
@@ -2024,13 +2772,15 @@ def _build_product_created_text(product: Dict[str, Any], locale: str | None = "e
         f"📦 Nombre: <b>{name}</b>\n"
         f"🧩 Categoría: <b>{category}</b>\n"
         f"💵 Precio: <b>${price}</b>\n"
-        f"🆔 ID: <code>{product_id}</code>",
+        f"🆔 ID: <code>{product_id}</code>"
+        f"{link_block}",
         "✅ <b>Product created</b>\n\n"
         f"🏷 Code: <b>{code}</b>\n"
         f"📦 Name: <b>{name}</b>\n"
         f"🧩 Category: <b>{category}</b>\n"
         f"💵 Price: <b>${price}</b>\n"
-        f"🆔 ID: <code>{product_id}</code>",
+        f"🆔 ID: <code>{product_id}</code>"
+        f"{link_block}",
     )
 
 
@@ -2061,7 +2811,7 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
     return (
         _tr(locale, "🧾 <b>Detalle de la Orden</b>\n\n", "🧾 <b>Order Detail</b>\n\n")
         + f"🆔 ID: <code>{_escape_html(order.get('id'))}</code>\n"
-        + f"🏷 {_tr(locale, 'Número', 'Number')}: <b>#{order_number_text}</b>\n"
+        + f"🏷 {_tr(locale, 'Número', 'Number')}: <code>{_escape_html(order_number_text)}</code>\n"
         + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_text(order.get('status'), locale))}</b>\n\n"
         + _tr(locale, "👤 <b>Usuario</b>\n", "👤 <b>User</b>\n")
         + f"• ID: <code>{_escape_html(user.get('telegram_id'))}</code>\n"
@@ -2082,7 +2832,40 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
 
 
 async def _build_approve_order_text(order_ref: str, locale: str | None = "es") -> str:
-    response = await api_client.admin_mark_order_paid(order_ref)
+    try:
+        response = await api_client.admin_mark_order_paid(order_ref)
+    except httpx.HTTPStatusError as exc:
+        payload: Dict[str, Any]
+        try:
+            payload = exc.response.json()
+        except Exception:
+            payload = {}
+        error_code = str(payload.get("error") or "").strip().upper()
+        if exc.response.status_code == 409 and error_code == "ORDER_ALREADY_FINALIZED":
+            data = await api_client.admin_get_order(order_ref)
+            order = data.get("order", {})
+            status = order.get("status") or "OK"
+            order_number = order.get("order_number")
+            order_number_text = (
+                str(order_number).zfill(5) if order_number is not None else "-"
+            )
+            return (
+                _tr(
+                    locale,
+                    "ℹ️ <b>La orden ya estaba finalizada</b>\n\n",
+                    "ℹ️ <b>The order was already finalized</b>\n\n",
+                )
+                + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
+                + f"🏷 {_tr(locale, 'Número', 'Number')}: <b>#{order_number_text}</b>\n"
+                + f"📌 {_tr(locale, 'Estado actual', 'Current status')}: "
+                + f"<b>{_escape_html(_order_status_text(status, locale))}</b>\n\n"
+                + _tr(
+                    locale,
+                    "No se aprobó de nuevo porque solo se pueden aprobar órdenes en espera de pago.",
+                    "It was not approved again because only orders waiting for payment can be approved.",
+                )
+            )
+        raise
     status = response.get("order", {}).get("status") or response.get("status") or "OK"
     return (
         _tr(locale, "✅ <b>Orden aprobada correctamente</b>\n\n", "✅ <b>Order approved successfully</b>\n\n")
@@ -2174,6 +2957,7 @@ def _parse_broadcast_buttons_input(raw_text: str, locale: str | None = "es") -> 
                     )
                 )
             label, url = parts
+            label = _sanitize_broadcast_button_text(label)
             if not label:
                 raise ValueError(_tr(locale, "Falta el texto del botón.", "Button text is required."))
             if not (url.startswith("http://") or url.startswith("https://")):
@@ -2273,7 +3057,7 @@ async def _send_order_detail(message: Message, order_ref: str) -> None:
     text = (
         "🧾 <b>Detalle de la Orden</b>\n\n"
         f"🆔 ID: <code>{order_id}</code>\n"
-        f"🏷 Número: <b>#{order_number_text}</b>\n"
+        f"🏷 Número: <code>{_escape_html(order_number_text)}</code>\n"
         f"📌 Estado: <b>{status}</b>\n\n"
         "👤 <b>Usuario</b>\n"
         f"• ID: <code>{telegram_id}</code>\n"
@@ -2757,6 +3541,237 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
 
         if action == "broadcast":
             sub_action = parts[2] if len(parts) > 2 else ""
+            if not sub_action:
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _build_broadcast_menu_text(locale),
+                    reply_markup=_build_broadcast_menu_keyboard(locale),
+                )
+                return
+
+            if sub_action == "new":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="broadcast_text",
+                    admin_ui_selected_saved_broadcast_id="",
+                    admin_ui_saved_broadcast_signature="",
+                    admin_ui_saved_broadcast_ids=[],
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("broadcast", locale),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
+                )
+                return
+
+            if sub_action == "saved":
+                mode = str(parts[3] if len(parts) > 3 else "").strip().lower()
+                if mode == "page":
+                    page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
+                    text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                    await state.update_data(
+                        admin_ui_saved_broadcast_ids=saved_ids,
+                        admin_ui_saved_broadcast_page=page,
+                        admin_ui_selected_saved_broadcast_id="",
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                    return
+
+                if mode == "pick":
+                    data = await state.get_data()
+                    saved_ids = data.get("admin_ui_saved_broadcast_ids") or []
+                    index = _safe_int(parts[4] if len(parts) > 4 else "0", 0, 0, 99)
+                    if index <= 0 or index > len(saved_ids):
+                        page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        await state.update_data(
+                            admin_ui_saved_broadcast_ids=saved_ids,
+                            admin_ui_saved_broadcast_page=page,
+                            admin_ui_selected_saved_broadcast_id="",
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    broadcast_id = str(saved_ids[index - 1] or "").strip()
+                    broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
+                    await state.update_data(**panel_anchor)
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_saved_broadcast_detail_text(broadcast, locale),
+                        reply_markup=_build_saved_broadcast_actions_keyboard(locale),
+                    )
+                    return
+
+                if mode == "preview":
+                    data = await state.get_data()
+                    broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+                    if not broadcast_id:
+                        page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        await state.update_data(
+                            admin_ui_saved_broadcast_ids=saved_ids,
+                            admin_ui_saved_broadcast_page=page,
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
+                    buttons = _normalize_broadcast_buttons_state(broadcast.get("buttons"))
+                    media_file_id, media_kind = _extract_saved_broadcast_media(broadcast)
+                    await _send_broadcast_preview_message(
+                        callback.message,
+                        str(broadcast.get("message_text") or "").strip(),
+                        buttons,
+                        media_file_id,
+                        media_kind,
+                        _normalize_broadcast_message_entities(broadcast.get("message_entities")),
+                        locale=locale,
+                    )
+                    await callback.answer(_tr(locale, "Vista previa enviada.", "Preview sent."))
+                    return
+
+                if mode == "send":
+                    data = await state.get_data()
+                    broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+                    if not broadcast_id:
+                        page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        await state.update_data(
+                            admin_ui_saved_broadcast_ids=saved_ids,
+                            admin_ui_saved_broadcast_page=page,
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
+                    buttons = _normalize_broadcast_buttons_state(broadcast.get("buttons"))
+                    media_kind = _saved_broadcast_media_kind(broadcast)
+                    await api_client.admin_send_broadcast_async(broadcast_id)
+                    text = await _wait_broadcast_progress_and_build_result(
+                        callback.message,
+                        broadcast_id,
+                        locale,
+                        buttons=buttons,
+                        media_kind=media_kind,
+                    )
+                    await state.clear()
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=_build_back_to_panel_keyboard(locale),
+                    )
+                    return
+
+                if mode == "edit":
+                    field = str(parts[4] if len(parts) > 4 else "").lower()
+                    data = await state.get_data()
+                    broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+                    if not broadcast_id:
+                        page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        await state.update_data(
+                            admin_ui_saved_broadcast_ids=saved_ids,
+                            admin_ui_saved_broadcast_page=page,
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    await _load_saved_broadcast_for_state(state, broadcast_id)
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(**panel_anchor)
+                    if field == "text":
+                        await state.update_data(admin_ui_action="broadcast_review_edit_text")
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "✏️ <b>Editar texto de difusión</b>\n\nEnvía solo el nuevo texto. "
+                                "Se mantendrán tus botones y multimedia actuales.",
+                                "✏️ <b>Edit broadcast text</b>\n\nSend only the new text. "
+                                "Your current buttons and media will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "buttons":
+                        await state.update_data(admin_ui_action="broadcast_review_edit_buttons")
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🔗 <b>Editar botones de difusión</b>\n\n"
+                                "Envía solo los botones nuevos.\n"
+                                "Se mantendrán tu texto y multimedia actuales.\n\n"
+                                + _build_broadcast_buttons_prompt_text(locale),
+                                "🔗 <b>Edit broadcast buttons</b>\n\n"
+                                "Send only the new buttons.\n"
+                                "Your current text and media will be preserved.\n\n"
+                                + _build_broadcast_buttons_prompt_text(locale),
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "media":
+                        await state.update_data(admin_ui_action="broadcast_review_edit_media")
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🖼 <b>Editar multimedia de difusión</b>\n\n"
+                                "Envía una imagen, GIF o video para reemplazarla.\n"
+                                "Escribe <code>sin</code> para quitarla.\n"
+                                "Escribe <code>saltar</code> para mantener la actual.\n"
+                                "Se mantendrán tu texto y botones actuales.",
+                                "🖼 <b>Edit broadcast media</b>\n\n"
+                                "Send an image, GIF or video to replace it.\n"
+                                "Type <code>none</code> to remove it.\n"
+                                "Type <code>skip</code> to keep current media.\n"
+                                "Your current text and buttons will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+
+                if mode == "delete":
+                    data = await state.get_data()
+                    broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+                    page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
+                    if broadcast_id:
+                        await api_client.admin_delete_broadcast(broadcast_id)
+                    text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                    await state.update_data(
+                        admin_ui_saved_broadcast_ids=saved_ids,
+                        admin_ui_saved_broadcast_page=page,
+                        admin_ui_selected_saved_broadcast_id="",
+                        admin_ui_saved_broadcast_signature="",
+                        **panel_anchor,
+                    )
+                    success_header = _tr(
+                        locale,
+                        "🗑 <b>Difusión eliminada.</b>\n\n",
+                        "🗑 <b>Broadcast deleted.</b>\n\n",
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        success_header + text,
+                        reply_markup=keyboard,
+                    )
+                    return
+
+                page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
+                text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                await state.update_data(
+                    admin_ui_saved_broadcast_ids=saved_ids,
+                    admin_ui_saved_broadcast_page=page,
+                    admin_ui_selected_saved_broadcast_id="",
+                    **panel_anchor,
+                )
+                await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                return
+
             if sub_action == "preview":
                 mode = str(parts[3] if len(parts) > 3 else "").lower()
                 if mode == "close":
@@ -2771,6 +3786,9 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 step = str(parts[3] if len(parts) > 3 else "").lower()
                 data = await state.get_data()
                 message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                message_plain_text = str(
+                    data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
+                ).strip()
                 if not message_text:
                     await state.set_state(AdminUiStates.awaiting_value)
                     await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
@@ -2835,6 +3853,9 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 buttons = _normalize_broadcast_buttons_state(
                     data.get("admin_ui_broadcast_buttons")
                 )
+                message_entities = _normalize_broadcast_message_entities(
+                    data.get("admin_ui_broadcast_entities")
+                )
                 media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
                 media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
                 if mode == "preview":
@@ -2844,24 +3865,42 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         buttons,
                         media_file_id or None,
                         media_kind or None,
+                        message_entities,
                         locale=locale,
                     )
                     await callback.answer(_tr(locale, "Vista previa enviada.", "Preview sent."))
                     return
 
                 if mode == "send":
-                    text = await _build_broadcast_result_text(
-                        message_text,
+                    text = await _send_broadcast_with_progress(
+                        callback.message,
+                        message_plain_text,
                         locale=locale,
                         buttons=buttons,
                         media_file_id=media_file_id or None,
                         media_kind=media_kind or None,
+                        message_entities=message_entities,
                     )
                     await state.clear()
                     await _edit_panel_message(
                         callback.message,
                         text,
                         reply_markup=_build_back_to_panel_keyboard(locale),
+                    )
+                    return
+
+                if mode == "save":
+                    saved_text = await _save_current_broadcast_draft(state, locale)
+                    review_text = _build_broadcast_review_text(
+                        message_text,
+                        buttons,
+                        media_kind or None,
+                        locale,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        f"{saved_text}\n\n{review_text}",
+                        reply_markup=_build_broadcast_review_keyboard(locale),
                     )
                     return
 
@@ -2921,12 +3960,10 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         )
                         return
 
-            await state.set_state(AdminUiStates.awaiting_value)
-            await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
             await _edit_panel_message(
                 callback.message,
-                _guide_text("broadcast", locale),
-                reply_markup=_build_back_to_panel_keyboard(locale),
+                _build_broadcast_menu_text(locale),
+                reply_markup=_build_broadcast_menu_keyboard(locale),
             )
             return
 
@@ -3152,7 +4189,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 await _edit_panel_message(
                     callback.message,
                     _guide_text("product_add", locale),
-                    reply_markup=_build_back_to_panel_keyboard(locale),
+                    reply_markup=None,
                 )
                 return
             if sub_action == "delete":
@@ -3169,6 +4206,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     await state.clear()
                     await state.update_data(
                         admin_ui_delete_category=category_key,
+                        admin_ui_delete_product_id="",
                         **panel_anchor,
                     )
                     text, keyboard = await _build_product_delete_view(
@@ -3188,13 +4226,102 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                             reply_markup=await _build_delete_categories_keyboard(locale),
                         )
                         return
-                    await api_client.admin_deactivate_product(product_id)
+                    product = await _find_active_product_by_id(product_id, category_key)
+                    if not product:
+                        text, keyboard = await _build_product_delete_view(
+                            category_key=category_key,
+                            header=_tr(
+                                locale,
+                                "⚠️ <b>Ese producto ya no está disponible.</b>",
+                                "⚠️ <b>That product is no longer available.</b>",
+                            ),
+                            locale=locale,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    product_name = _escape_html(product.get("name") or "Producto")
+                    await state.update_data(
+                        admin_ui_delete_category=category_key,
+                        admin_ui_delete_product_id=product_id,
+                        **panel_anchor,
+                    )
+                    confirm_text = _tr(
+                        locale,
+                        "⚠️ <b>Confirmar eliminación</b>\n\n"
+                        f"¿Seguro que quieres eliminar <b>{product_name}</b>?\n\n"
+                        "Si el producto no tiene órdenes, se borrará de la base de datos.\n"
+                        "Si ya tuvo órdenes, se desactivará.",
+                        "⚠️ <b>Confirm deletion</b>\n\n"
+                        f"Are you sure you want to delete <b>{product_name}</b>?\n\n"
+                        "If the product has no orders, it will be deleted from the database.\n"
+                        "If it already has orders, it will be deactivated.",
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        confirm_text,
+                        reply_markup=_build_delete_confirm_keyboard(locale),
+                    )
+                    return
+                if mode == "confirm":
+                    data = await state.get_data()
+                    product_id = str(data.get("admin_ui_delete_product_id") or "").strip()
+                    category_key = _normalize_category_key(data.get("admin_ui_delete_category")) or "TIENDA"
+                    if not product_id:
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(locale, "❌ <b>Producto inválido.</b>", "❌ <b>Invalid product.</b>"),
+                            reply_markup=await _build_delete_categories_keyboard(locale),
+                        )
+                        return
+                    result = await api_client.admin_deactivate_product(product_id)
+                    await state.update_data(
+                        admin_ui_delete_product_id="",
+                        admin_ui_delete_category=category_key,
+                        **panel_anchor,
+                    )
+                    result_action = str(result.get("action") or "").strip().lower()
+                    if result_action == "deleted":
+                        header_text = _tr(
+                            locale,
+                            "✅ <b>Producto eliminado definitivamente.</b>",
+                            "✅ <b>Product permanently deleted.</b>",
+                        )
+                    elif result_action == "deactivated":
+                        header_text = _tr(
+                            locale,
+                            "✅ <b>Producto desactivado porque ya tenía órdenes.</b>",
+                            "✅ <b>Product deactivated because it already had orders.</b>",
+                        )
+                    else:
+                        header_text = _tr(
+                            locale,
+                            "✅ <b>Producto procesado correctamente.</b>",
+                            "✅ <b>Product processed successfully.</b>",
+                        )
+                    text, keyboard = await _build_product_delete_view(
+                        category_key=category_key,
+                        header=header_text,
+                        locale=locale,
+                    )
+                    await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                    return
+                if mode == "cancel":
+                    category_key = _normalize_category_key(parts[4] if len(parts) > 4 else "")
+                    if not category_key:
+                        category_key = _normalize_category_key(
+                            (await state.get_data()).get("admin_ui_delete_category")
+                        ) or "TIENDA"
+                    await state.update_data(
+                        admin_ui_delete_product_id="",
+                        admin_ui_delete_category=category_key,
+                        **panel_anchor,
+                    )
                     text, keyboard = await _build_product_delete_view(
                         category_key=category_key,
                         header=_tr(
                             locale,
-                            "✅ <b>Producto eliminado correctamente.</b>",
-                            "✅ <b>Product deleted successfully.</b>",
+                            "👌 <b>Eliminación cancelada.</b>",
+                            "👌 <b>Deletion cancelled.</b>",
                         ),
                         locale=locale,
                     )
@@ -3261,12 +4388,16 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
     if not await _ensure_admin_http(message):
         return
 
-    raw_text = (message.text or message.caption or "").strip()
+    plain_text = (message.text or message.caption or "").strip()
+    raw_text = _extract_message_html_text(message)
+    message_entities = _extract_message_entities(message)
     photo_file_id = message.photo[-1].file_id if message.photo else ""
     animation_file_id = message.animation.file_id if message.animation else ""
     video_file_id = message.video.file_id if message.video else ""
     data = await state.get_data()
     action = str(data.get("admin_ui_action") or "").strip()
+    if action in {"broadcast_buttons", "broadcast_review_edit_buttons"}:
+        raw_text = plain_text
     panel_resume: Dict[str, Any] = {}
     panel_chat_id = data.get("admin_ui_panel_chat_id")
     panel_message_id = data.get("admin_ui_panel_message_id")
@@ -3288,6 +4419,11 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             "broadcast_review_edit_media",
         }
         if not allows_media_input and not raw_text:
+            is_product_create_flow = action in {
+                "product_create_base",
+                "product_create_description",
+                "product_create_delivery_text",
+            }
             await _edit_state_panel_message(
                 message,
                 state,
@@ -3298,7 +4434,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "⚠️ <b>Invalid input</b>\n\n"
                     "Send a valid value or write <code>/cancel</code>.",
                 ),
-                reply_markup=_build_back_to_panel_keyboard(locale),
+                reply_markup=None if is_product_create_flow else _build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -3968,7 +5104,9 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
         if action == "broadcast_text":
             await state.update_data(
                 admin_ui_action="broadcast_buttons",
-                admin_ui_broadcast_text=raw_text,
+                admin_ui_broadcast_text=plain_text,
+                admin_ui_broadcast_plain_text=plain_text,
+                admin_ui_broadcast_entities=message_entities,
             )
             await _edit_state_panel_message(
                 message,
@@ -4092,12 +5230,14 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
             await state.update_data(
                 admin_ui_action="broadcast_review",
-                admin_ui_broadcast_text=raw_text,
+                admin_ui_broadcast_text=plain_text,
+                admin_ui_broadcast_plain_text=plain_text,
+                admin_ui_broadcast_entities=message_entities,
             )
             await _edit_state_panel_message(
                 message,
                 state,
-                _build_broadcast_review_text(raw_text, buttons, media_kind, locale),
+                _build_broadcast_review_text(plain_text, buttons, media_kind, locale),
                 reply_markup=_build_broadcast_review_keyboard(locale),
             )
             return
@@ -4221,7 +5361,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                         f"{_escape_html(exc)}\n\n"
                         "Format: <code>name | price | category</code>",
                     ),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=None,
                 )
                 return
             await state.update_data(
@@ -4233,14 +5373,14 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(
                     locale,
-                    "📝 <b>Paso 2/3 · Descripción</b>\n\n"
+                    "📝 <b>Paso 2/4 · Descripción</b>\n\n"
                     "Envía la descripción del producto en máximo <b>8 líneas</b>.\n"
                     "Cada salto de línea cuenta.",
-                    "📝 <b>Step 2/3 · Description</b>\n\n"
+                    "📝 <b>Step 2/4 · Description</b>\n\n"
                     "Send the product description with a maximum of <b>8 lines</b>.\n"
                     "Each line break counts.",
                 ),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=None,
             )
             return
 
@@ -4258,7 +5398,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                         f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
                         "Please send the description again (max 8 lines).",
                     ),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=None,
                 )
                 return
             payload = dict(data.get("admin_ui_product_payload") or {})
@@ -4277,6 +5417,58 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 return
             payload["description"] = description
             await state.update_data(
+                admin_ui_action="product_create_delivery_text",
+                admin_ui_product_payload=payload,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "💬 <b>Paso 3/4 · Texto para el cliente</b>\n\n"
+                    "Envía el texto que el cliente recibirá automáticamente después de comprar.\n"
+                    "Puedes usar varias líneas.",
+                    "💬 <b>Step 3/4 · Customer text</b>\n\n"
+                    "Send the text the customer will receive automatically after purchase.\n"
+                    "You can use multiple lines.",
+                ),
+                reply_markup=None,
+            )
+            return
+
+        if action == "product_create_delivery_text":
+            try:
+                delivery_text = _build_product_delivery_text(raw_text, locale)
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Vuelve a enviar el texto que recibirá el cliente.",
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Please send the text the customer will receive again.",
+                    ),
+                    reply_markup=None,
+                )
+                return
+            payload = dict(data.get("admin_ui_product_payload") or {})
+            if not payload:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Se perdió el contexto de creación.</b>\n\nInicia de nuevo con el botón de agregar producto.",
+                        "⚠️ <b>The create context was lost.</b>\n\nStart again using the add-product button.",
+                    ),
+                    reply_markup=_build_admin_panel_keyboard(locale),
+                )
+                await state.clear()
+                return
+            payload["delivery_payload"] = {"text": delivery_text}
+            await state.update_data(
                 admin_ui_action="product_create_image",
                 admin_ui_product_payload=payload,
             )
@@ -4285,16 +5477,16 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(
                     locale,
-                    "🖼️ <b>Paso 3/3 · Imagen</b>\n\n"
+                    "🖼️ <b>Paso 4/4 · Imagen</b>\n\n"
                     "Envía una <b>foto</b> del producto.\n"
                     "También puedes enviar una URL (<code>https://...</code>)\n"
                     "o escribir <code>sin imagen</code>.",
-                    "🖼️ <b>Step 3/3 · Image</b>\n\n"
+                    "🖼️ <b>Step 4/4 · Image</b>\n\n"
                     "Send a product <b>photo</b>.\n"
                     "You can also send a URL (<code>https://...</code>)\n"
                     "or type <code>no image</code>.",
                 ),
-                reply_markup=_build_admin_panel_keyboard(locale),
+                reply_markup=None,
             )
             return
 
@@ -4334,7 +5526,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                             "⚠️ <b>Invalid image.</b>\n\n"
                             "Send a photo, a valid URL, or type <code>no image</code>.",
                         ),
-                        reply_markup=_build_admin_panel_keyboard(locale),
+                        reply_markup=None,
                     )
                     return
             else:
@@ -4348,7 +5540,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                         "⚠️ <b>Image is required.</b>\n\n"
                         "Send a photo, a valid URL, or type <code>no image</code>.",
                     ),
-                    reply_markup=_build_admin_panel_keyboard(locale),
+                    reply_markup=None,
                 )
                 return
 
@@ -4418,36 +5610,37 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
         await _delete_message_safe(message)
 
 
-@router.message(Command("astatus"))
-async def cmd_astatus(message: Message) -> None:
-    locale = await _admin_guard(message)
+async def _send_admin_status_message(message: Message, locale: str | None) -> None:
     if not locale:
         return
     if not _admin_http_configured():
         await message.answer("⚠️ Falta API_TOKEN o ADMIN_API_KEY en `telegram-sales-bot/.env`.")
         return
     try:
-        health, maintenance, counts = await asyncio.gather(
+        health, maintenance, counts, summary = await asyncio.gather(
             api_client.ping_health(),
             api_client.admin_get_maintenance(),
             api_client.admin_get_order_status_counts(),
+            api_client.admin_get_summary(),
         )
-        waiting = counts.get("counts", {}).get("WAITING_PAYMENT", 0)
-        paid = counts.get("counts", {}).get("PAID", 0)
-        delivered = counts.get("counts", {}).get("DELIVERED", 0)
-        cancelled = counts.get("counts", {}).get("CANCELLED", 0)
-        text = (
-            "📊 Estado del sistema\n\n"
-            f"API: {'OK' if health.get('ok') else 'ERROR'}\n"
-            f"Mantenimiento: {'ON' if maintenance.get('active') else 'OFF'}\n"
-            f"Pendientes pago: {waiting}\n"
-            f"Pagadas: {paid}\n"
-            f"Entregadas: {delivered}\n"
-            f"Canceladas: {cancelled}"
+        await message.answer(
+            _build_status_text(health, maintenance, counts, summary, locale),
+            parse_mode="HTML",
         )
-        await message.answer(text)
     except Exception as exc:
         await message.answer(f"❌ No pude obtener estado admin: {exc}")
+
+
+@router.message(Command("astatus"))
+async def cmd_astatus(message: Message) -> None:
+    locale = await _admin_guard(message)
+    await _send_admin_status_message(message, locale)
+
+
+@router.message(F.text.regexp(r"^\.info(?:\s+.*)?$"))
+async def cmd_info_alias(message: Message) -> None:
+    locale = await _admin_guard(message)
+    await _send_admin_status_message(message, locale)
 
 
 @router.message(Command("orders"))
