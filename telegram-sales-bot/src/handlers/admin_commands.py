@@ -1094,6 +1094,44 @@ def _build_broadcast_progress_keyboard(
     )
 
 
+def _build_broadcast_reconnecting_text(
+    broadcast_id: str,
+    locale: str | None = "es",
+    *,
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_kind: str | None = None,
+    target_count: int = 0,
+    sent_count: int = 0,
+    failed_count: int = 0,
+    percent: int = 0,
+) -> str:
+    processed_count = max(sent_count + failed_count, 0)
+    pending_count = max(target_count - processed_count, 0) if target_count > 0 else 0
+    target_label = str(target_count) if target_count > 0 else "..."
+    pending_label = str(pending_count) if target_count > 0 else "..."
+    return (
+        _tr(
+            locale,
+            "🔄 <b>Reconectando seguimiento de difusión...</b>\n\n",
+            "🔄 <b>Reconnecting broadcast tracker...</b>\n\n",
+        )
+        + f"🆔 ID: <code>{_escape_html(broadcast_id)}</code>\n"
+        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_tr(locale, 'Reconectando', 'Reconnecting')}</b>\n"
+        + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons or [])}</b>\n"
+        + f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n"
+        + f"🎯 {_tr(locale, 'Objetivo', 'Target')}: <b>{target_label}</b>\n"
+        + f"✅ {_tr(locale, 'Enviados', 'Sent')}: <b>{sent_count}</b>\n"
+        + f"❌ {_tr(locale, 'Rechazados', 'Rejected')}: <b>{failed_count}</b>\n"
+        + f"⏳ {_tr(locale, 'Pendientes', 'Pending')}: <b>{pending_label}</b>\n\n"
+        + f"<code>{_build_progress_bar(percent)}</code>\n\n"
+        + _tr(
+            locale,
+            "La difusión puede seguir activa. Reintentando consultar el progreso...",
+            "The broadcast may still be active. Retrying progress checks...",
+        )
+    )
+
+
 def _build_broadcast_progress_text(
     broadcast_id: str,
     locale: str | None = "es",
@@ -1202,46 +1240,74 @@ async def _wait_broadcast_progress_and_build_result(
     target_count = 0
     sent_count = 0
     failed_count = 0
+    percent = 0
+    consecutive_progress_errors = 0
 
     await state.update_data(admin_ui_active_broadcast_id=broadcast_id)
 
     try:
         while True:
-            progress_res = await api_client.admin_get_broadcast_progress(broadcast_id)
-            progress = progress_res.get("progress") or {}
-            progress_status = str(progress.get("status") or progress_status).upper().strip()
-            target_count = _safe_int(progress.get("target_count"), target_count, 0, 10**9)
-            sent_count = _safe_int(progress.get("sent_count"), sent_count, 0, 10**9)
-            failed_count = _safe_int(progress.get("failed_count"), failed_count, 0, 10**9)
-            if target_count > 0:
-                percent = _safe_int(progress.get("percent"), 0, 0, 100)
-            else:
-                percent = warmup_steps[warmup_index]
-                if warmup_index < len(warmup_steps) - 1:
-                    warmup_index += 1
-            progress_text = _build_broadcast_progress_text(
-                broadcast_id,
-                locale,
-                buttons=buttons,
-                media_kind=media_kind,
-                target_count=target_count,
-                sent_count=sent_count,
-                failed_count=failed_count,
-                percent=percent,
-                status=progress_status,
-            )
-            progress_keyboard = _build_broadcast_progress_keyboard(progress_status, locale)
-            if progress_text != last_progress_text or progress_status != last_progress_status:
-                await _edit_panel_message(
-                    panel_message,
-                    progress_text,
-                    reply_markup=progress_keyboard,
+            try:
+                progress_res = await api_client.admin_get_broadcast_progress(broadcast_id)
+                progress = progress_res.get("progress") or {}
+                progress_status = str(progress.get("status") or progress_status).upper().strip()
+                target_count = _safe_int(progress.get("target_count"), target_count, 0, 10**9)
+                sent_count = _safe_int(progress.get("sent_count"), sent_count, 0, 10**9)
+                failed_count = _safe_int(progress.get("failed_count"), failed_count, 0, 10**9)
+                if target_count > 0:
+                    percent = _safe_int(progress.get("percent"), percent, 0, 100)
+                else:
+                    percent = warmup_steps[warmup_index]
+                    if warmup_index < len(warmup_steps) - 1:
+                        warmup_index += 1
+                consecutive_progress_errors = 0
+                progress_text = _build_broadcast_progress_text(
+                    broadcast_id,
+                    locale,
+                    buttons=buttons,
+                    media_kind=media_kind,
+                    target_count=target_count,
+                    sent_count=sent_count,
+                    failed_count=failed_count,
+                    percent=percent,
+                    status=progress_status,
                 )
-                last_progress_text = progress_text
-                last_progress_status = progress_status
-            if bool(progress.get("is_done")) or progress_status in {"SENT", "FAILED", "STOPPED"}:
-                break
-            await asyncio.sleep(0.8 if progress_status == "PAUSED" else 0.2)
+                progress_keyboard = _build_broadcast_progress_keyboard(progress_status, locale)
+                if progress_text != last_progress_text or progress_status != last_progress_status:
+                    await _edit_panel_message(
+                        panel_message,
+                        progress_text,
+                        reply_markup=progress_keyboard,
+                    )
+                    last_progress_text = progress_text
+                    last_progress_status = progress_status
+                if bool(progress.get("is_done")) or progress_status in {"SENT", "FAILED", "STOPPED"}:
+                    break
+                await asyncio.sleep(0.8 if progress_status == "PAUSED" else 0.2)
+            except Exception:
+                consecutive_progress_errors += 1
+                reconnect_text = _build_broadcast_reconnecting_text(
+                    broadcast_id,
+                    locale,
+                    buttons=buttons,
+                    media_kind=media_kind,
+                    target_count=target_count,
+                    sent_count=sent_count,
+                    failed_count=failed_count,
+                    percent=percent,
+                )
+                if (
+                    reconnect_text != last_progress_text
+                    or last_progress_status != "RECONNECTING"
+                ):
+                    await _edit_panel_message(
+                        panel_message,
+                        reconnect_text,
+                        reply_markup=_build_broadcast_progress_keyboard(progress_status, locale),
+                    )
+                    last_progress_text = reconnect_text
+                    last_progress_status = "RECONNECTING"
+                await asyncio.sleep(1.0 if consecutive_progress_errors < 5 else 2.0)
     finally:
         await state.update_data(admin_ui_active_broadcast_id="")
 
@@ -2240,9 +2306,15 @@ async def _edit_panel_message(
         detail = str(exc).lower()
         if "message is not modified" in detail:
             return
-        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+        try:
+            await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception:
+            return
     except Exception:
-        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+        try:
+            await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+        except Exception:
+            return
 
 
 async def _edit_state_panel_message(
@@ -2269,7 +2341,10 @@ async def _edit_state_panel_message(
                 return
         except Exception:
             pass
-    await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+    try:
+        await message.answer(text, reply_markup=reply_markup, parse_mode="HTML")
+    except Exception:
+        return
 
 
 async def _answer_callback_safe(callback: CallbackQuery, *args: Any, **kwargs: Any) -> bool:
