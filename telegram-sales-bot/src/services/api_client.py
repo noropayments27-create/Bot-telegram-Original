@@ -249,6 +249,25 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_cancel_order(
+        self, order_id: str, reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        return await self.admin_reject_order(order_id, mode="cancel", reason=reason)
+
+    async def admin_mark_order_scam(
+        self, order_id: str, reason: Optional[str] = None
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/{order_id}/scam"
+        payload: Dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def admin_refund_order(
         self, order_id: str, reason: Optional[str] = None, amount: Optional[float] = None
     ) -> Dict[str, Any]:

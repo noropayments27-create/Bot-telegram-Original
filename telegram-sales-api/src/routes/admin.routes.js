@@ -62,6 +62,11 @@ const {
   formatFreeOrderLabel,
 } = require("../services/freeOrders");
 const {
+  ensureOrderNumberSchema,
+  ensureOrderNumberForOrder,
+  releaseOrderNumber,
+} = require("../services/orderNumbers");
+const {
   validateAdminStartCredentials,
   validateAdminDirectCredentials,
   ensureAdminCredentialsSchema,
@@ -1215,6 +1220,30 @@ function startBroadcastRecoveryLoop() {
              OR progress_lease_expires_at <= now()
            )`
       );
+      await pool.query(
+        `UPDATE broadcasts
+         SET status = CASE
+               WHEN COALESCE(progress_sent_count, 0) > 0 THEN 'SENT'
+               ELSE 'FAILED'
+             END,
+             sent_at = COALESCE(sent_at, now()),
+             progress_status = CASE
+               WHEN COALESCE(progress_sent_count, 0) > 0 THEN 'SENT'
+               ELSE 'FAILED'
+             END,
+             progress_cursor = jsonb_array_length(progress_recipients),
+             progress_lease_token = NULL,
+             progress_lease_expires_at = NULL,
+             progress_updated_at = now()
+         WHERE progress_status IN ('QUEUED', 'SENDING')
+           AND progress_recipients IS NOT NULL
+           AND jsonb_typeof(progress_recipients) = 'array'
+           AND COALESCE(progress_cursor, 0) >= jsonb_array_length(progress_recipients)
+           AND (
+             progress_lease_expires_at IS NULL
+             OR progress_lease_expires_at <= now()
+           )`
+      );
       const pendingRes = await pool.query(
         `SELECT id
          FROM broadcasts
@@ -1249,7 +1278,7 @@ function startBroadcastRecoveryLoop() {
 }
 
 function buildBroadcastProgressPayload(row, fallbackResult = null) {
-  const progressStatus = String(
+  const rawProgressStatus = String(
     row?.progress_status
       || (row?.status === "SENT" || row?.status === "FAILED" ? row.status : "IDLE")
   ).toUpperCase();
@@ -1278,6 +1307,13 @@ function buildBroadcastProgressPayload(row, fallbackResult = null) {
   const percent = targetCount > 0
     ? Math.max(0, Math.min(100, Math.round((processedCount / targetCount) * 100)))
     : 0;
+  const progressStatus = (
+    targetCount > 0
+    && pendingCount === 0
+    && ["QUEUED", "SENDING", "PAUSING"].includes(rawProgressStatus)
+  )
+    ? (sentCount > 0 ? "SENT" : "FAILED")
+    : rawProgressStatus;
   const isDone = ["SENT", "FAILED", "STOPPED"].includes(progressStatus);
 
   return {
@@ -1956,6 +1992,12 @@ function formatOrderNumberForAdmin(order) {
   if (!order || typeof order !== "object") {
     return "-";
   }
+  if (order.is_scam) {
+    if (order.released_order_number) {
+      return `Estafa: ${String(order.released_order_number).padStart(5, "0")}`;
+    }
+    return "Estafa";
+  }
   if (order.free_order_number) {
     return formatFreeOrderLabel(order.free_order_number) || "-";
   }
@@ -2065,6 +2107,20 @@ async function sendOrderNotFound(res, pool, orderLookupNumber) {
     };
   }
   return res.status(404).json(payload);
+}
+
+function buildScamCustomerNotification(order) {
+  const telegramId = String(order?.telegram_id || "-").trim() || "-";
+  const username = String(order?.telegram_username || "").trim();
+  const usernameLine = username ? `@${username.replace(/^@+/, "")}` : "-";
+  return (
+    `ID: ${telegramId}\n`
+    + `Username: ${usernameLine}\n\n`
+    + "⚠️ Tu última orden ha sido marcada como “Estafa” 🚫💰.\n"
+    + "A partir de este momento, los administradores del bot te publicarán en su canal de “Ratas” 🐀 y serás expuesto como estafador en más de 400 grupos en Telegram y WhatsApp 📢🔥.\n\n"
+    + "❗ Si crees que se trata de un error, comunícate lo antes posible con: @Noropayments 📩\n"
+    + "Explícales tu caso antes de que seas reportado públicamente 🚨."
+  );
 }
 
 async function recalcSkuKeys(client) {
@@ -4540,6 +4596,7 @@ router.post("/stock/holds/:id/release", async (req, res, next) => {
 
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -4596,12 +4653,25 @@ router.post("/stock/holds/:id/release", async (req, res, next) => {
         ]
       );
 
-    const cancelRes = await client.query(
+      const orderNumberCandidateRes = await client.query(
+        `SELECT unit_price_at_purchase
+         FROM orders
+         WHERE id = $1`,
+        [orderId]
+      );
+      if (
+        orderNumberCandidateRes.rowCount > 0
+        && Number(orderNumberCandidateRes.rows[0].unit_price_at_purchase || 0) > 0
+      ) {
+        await ensureOrderNumberForOrder(client, orderId);
+      }
+
+      const cancelRes = await client.query(
         `UPDATE orders
          SET status = 'CANCELLED',
              cancelled_at = now(),
              cancel_source = 'ADMIN',
-             order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
+             order_number = order_number
          WHERE id = $1 AND status = 'WAITING_PAYMENT'`,
         [orderId]
       );
@@ -4702,12 +4772,24 @@ router.post("/stock/holds/:id/release", async (req, res, next) => {
 
     let orderCancelled = false;
     if (hold.order_id) {
+      const orderNumberCandidateRes = await client.query(
+        `SELECT unit_price_at_purchase
+         FROM orders
+         WHERE id = $1`,
+        [hold.order_id]
+      );
+      if (
+        orderNumberCandidateRes.rowCount > 0
+        && Number(orderNumberCandidateRes.rows[0].unit_price_at_purchase || 0) > 0
+      ) {
+        await ensureOrderNumberForOrder(client, hold.order_id);
+      }
       const cancelRes = await client.query(
         `UPDATE orders
          SET status = 'CANCELLED',
              cancelled_at = now(),
              cancel_source = 'ADMIN',
-             order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
+             order_number = order_number
          WHERE id = $1 AND status = 'WAITING_PAYMENT'`,
         [hold.order_id]
       );
@@ -5117,6 +5199,7 @@ router.get("/orders", async (req, res, next) => {
   const { page, pageSize, offset } = parsePagination(req.query);
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
 
   const filters = [];
   const values = [];
@@ -5185,11 +5268,16 @@ router.get("/orders", async (req, res, next) => {
 
     const baseQuery = `SELECT o.id, o.status, o.created_at,
                               o.order_number,
+                              o.released_order_number,
                               o.free_order_number,
+                              o.is_scam,
+                              o.scam_flagged_at,
+                              o.scam_reason,
                               o.unit_price_at_purchase,
                               u.telegram_id, u.telegram_username,
                               p.id AS product_id, p.code AS product_code, p.name AS product_name,
                               (op.id IS NOT NULL) AS has_payment_proof,
+                              op.review_status AS payment_review_status,
                               (
                                 o.free_order_number IS NOT NULL
                                 OR COALESCE(o.unit_price_at_purchase, 0) <= 0
@@ -5547,9 +5635,13 @@ router.get("/orders/:id", async (req, res, next) => {
       order: {
         id: order.id,
         order_number: order.order_number,
+        released_order_number: order.released_order_number || null,
         free_order_number: order.free_order_number || null,
         free_order_label: formatFreeOrderLabel(order.free_order_number),
         is_free_order: orderIsFree,
+        is_scam: Boolean(order.is_scam),
+        scam_flagged_at: order.scam_flagged_at,
+        scam_reason: order.scam_reason,
         status: order.status,
         unit_price_at_purchase: order.unit_price_at_purchase,
         created_at: order.created_at,
@@ -6752,6 +6844,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
   }
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
   const client = await pool.connect();
   let affiliateLevelBefore = null;
   let commissionInserted = false;
@@ -6850,17 +6943,18 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
     }
     console.log("[admin/approve] consumed_stock", { order_id: orderId });
 
+    if (!isFreeOrder) {
+      await ensureOrderNumberForOrder(client, orderId);
+    }
+
     const updatedOrderRes = await client.query(
       `UPDATE orders
        SET status = 'PAID',
            paid_at = now(),
-           order_number = CASE
-             WHEN $2::boolean THEN order_number
-             ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
-           END
+           order_number = order_number
        WHERE id = $1
        RETURNING *`,
-      [orderId, isFreeOrder]
+      [orderId]
     );
 
     if (paymentRes.rowCount > 0) {
@@ -7551,6 +7645,7 @@ router.post("/orders/:id/reject", async (req, res, next) => {
   const { mode, reason } = req.body || {};
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
   const client = await pool.connect();
 
   if (!mode || (mode !== "retry" && mode !== "cancel")) {
@@ -7598,22 +7693,19 @@ router.post("/orders/:id/reject", async (req, res, next) => {
 
     const nextStatus = mode === "retry" ? "CREATED" : "CANCELLED";
 
+    if (!isFreeOrder && nextStatus === "CANCELLED") {
+      await ensureOrderNumberForOrder(client, orderId);
+    }
+
     const updatedOrderRes = await client.query(
       `UPDATE orders
        SET status = $2::order_status,
            cancelled_at = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN now() ELSE cancelled_at END,
            cancel_source = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN 'ADMIN' ELSE cancel_source END,
-           order_number = CASE
-             WHEN $2::order_status = 'CANCELLED'::order_status
-             THEN CASE
-               WHEN $3::boolean THEN order_number
-               ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
-             END
-             ELSE order_number
-           END
+           order_number = order_number
        WHERE id = $1
        RETURNING *`,
-      [orderId, nextStatus, isFreeOrder]
+      [orderId, nextStatus]
     );
 
     await releaseStockForOrder(client, orderId);
@@ -7660,6 +7752,150 @@ router.post("/orders/:id/reject", async (req, res, next) => {
       await sendMessage(telegramId, message);
     } catch (err) {
       console.error("Telegram notification failed", err);
+    }
+
+    return res.json({ order: updatedOrderRes.rows[0] });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/orders/:id/scam", async (req, res, next) => {
+  const { ref: orderLookupRef, orderNumber: orderLookupNumber } =
+    parseOrderLookupRef(req.params.id);
+  if (!orderLookupRef) {
+    return res.status(400).json({ error: "ORDER_ID_REQUIRED" });
+  }
+  const { reason } = req.body || {};
+  const pool = getPool();
+  await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+    const resolvedOrderId = await resolveOrderLookupId(
+      client,
+      orderLookupRef,
+      orderLookupNumber
+    );
+    if (!resolvedOrderId) {
+      await client.query("ROLLBACK");
+      return sendOrderNotFound(res, pool, orderLookupNumber);
+    }
+
+    const orderRes = await client.query(
+      `SELECT o.*, u.telegram_id, u.telegram_username, u.locale
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       WHERE o.id = $1
+       FOR UPDATE OF o`,
+      [resolvedOrderId]
+    );
+
+    if (orderRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return sendOrderNotFound(res, pool, orderLookupNumber);
+    }
+
+    const order = orderRes.rows[0];
+    const orderId = order.id;
+    if (isFreeOrderRow(order)) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "ORDER_SCAM_FREE_NOT_ALLOWED" });
+    }
+    if (order.is_scam) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "ORDER_ALREADY_SCAM" });
+    }
+    if (["PAID", "DELIVERED", "REFUNDED"].includes(String(order.status || "").toUpperCase())) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "ORDER_SCAM_NOT_ALLOWED" });
+    }
+
+    const paymentRes = await client.query(
+      `SELECT *
+       FROM order_payments
+       WHERE order_id = $1
+       FOR UPDATE`,
+      [orderId]
+    );
+    const paymentReviewStatus = String(paymentRes.rows[0]?.review_status || "").toUpperCase();
+    if (paymentReviewStatus === "APPROVED") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "ORDER_SCAM_NOT_ALLOWED" });
+    }
+
+    await releaseStockForOrder(client, orderId);
+
+    const releasedOrderNumber = Number(order.order_number || 0) || null;
+    if (releasedOrderNumber) {
+      await releaseOrderNumber(client, releasedOrderNumber, orderId, "SCAM");
+    }
+
+    const updatedOrderRes = await client.query(
+      `UPDATE orders
+       SET status = 'CANCELLED',
+           cancelled_at = COALESCE(cancelled_at, now()),
+           cancel_source = 'ADMIN',
+           is_scam = true,
+           scam_flagged_at = now(),
+           scam_reason = $2,
+           released_order_number = COALESCE(released_order_number, $3),
+           order_number = NULL
+       WHERE id = $1
+       RETURNING *`,
+      [
+        orderId,
+        reason || "Marcada como estafa por admin.",
+        releasedOrderNumber,
+      ]
+    );
+
+    if (paymentRes.rowCount > 0) {
+      await client.query(
+        `UPDATE order_payments
+         SET review_status = 'REJECTED',
+             reviewed_by_admin_at = now()
+         WHERE order_id = $1`,
+        [orderId]
+      );
+    }
+
+    await client.query(
+      `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
+       VALUES ($1, $2, $3, $4::jsonb)`,
+      [
+        "ORDER_SCAM",
+        "order",
+        orderId,
+        JSON.stringify({
+          admin: req.admin?.sub || null,
+          reason: reason || null,
+          released_order_number: releasedOrderNumber,
+        }),
+      ]
+    );
+
+    await client.query("COMMIT");
+
+    await updateAdminOrderNotifications(pool, orderId);
+
+    try {
+      await sendPhoto(order.telegram_id, {
+        url: "https://i.ibb.co/ZDbLWHM/images.jpg",
+        caption: buildScamCustomerNotification(order),
+      });
+    } catch (err) {
+      console.error("Telegram scam notification failed", err);
+      try {
+        await sendMessage(order.telegram_id, buildScamCustomerNotification(order));
+      } catch (fallbackErr) {
+        console.error("Telegram scam notification fallback failed", fallbackErr);
+      }
     }
 
     return res.json({ order: updatedOrderRes.rows[0] });

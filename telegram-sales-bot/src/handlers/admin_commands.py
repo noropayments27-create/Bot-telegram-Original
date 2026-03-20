@@ -115,6 +115,7 @@ _ORDER_STATUS_LABELS = {
     "CANCELLED": ("Cancelada", "Cancelled"),
     "REFUNDED": ("Reembolsada", "Refunded"),
     "EXPIRED": ("Expirada", "Expired"),
+    "SCAM": ("Estafa", "Scam"),
 }
 
 _PAYMENT_REVIEW_LABELS = {
@@ -149,6 +150,18 @@ def _payment_review_text(value: Any, locale: str | None) -> str:
 
 def _refund_type_text(value: Any, locale: str | None) -> str:
     return _map_enum_label(value, locale, _REFUND_TYPE_LABELS)
+
+
+def _is_scam_order(order: Dict[str, Any] | None) -> bool:
+    if not isinstance(order, dict):
+        return False
+    return bool(order.get("is_scam"))
+
+
+def _order_status_display(order: Dict[str, Any] | None, locale: str | None) -> str:
+    if _is_scam_order(order):
+        return _order_status_text("SCAM", locale)
+    return _order_status_text((order or {}).get("status"), locale)
 
 
 def _build_order_not_found_text(payload: Dict[str, Any], locale: str | None) -> str:
@@ -189,6 +202,27 @@ def _build_order_not_found_text(payload: Dict[str, Any], locale: str | None) -> 
         "❌ <b>Order does not exist.</b>\n\n"
         "Only orders from "
         f"<code>{_escape_html(min_label)}</code> to <code>{_escape_html(max_label)}</code> are available.",
+    )
+
+
+def _build_order_scam_error_text(error_code: str, locale: str | None) -> str:
+    code = str(error_code or "").upper().strip()
+    if code == "ORDER_ALREADY_SCAM":
+        return _tr(
+            locale,
+            "⚠️ <b>Esa orden ya estaba marcada como Estafa.</b>",
+            "⚠️ <b>That order was already marked as Scam.</b>",
+        )
+    if code == "ORDER_SCAM_FREE_NOT_ALLOWED":
+        return _tr(
+            locale,
+            "⚠️ <b>Las órdenes gratis no se pueden marcar como Estafa.</b>",
+            "⚠️ <b>Free orders cannot be marked as Scam.</b>",
+        )
+    return _tr(
+        locale,
+        "⚠️ <b>Solo puedes marcar como Estafa órdenes no aprobadas, no entregadas y no reembolsadas.</b>",
+        "⚠️ <b>You can only mark as Scam orders that were not approved, delivered or refunded.</b>",
     )
 
 
@@ -798,27 +832,11 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_tr(locale, "📋 Pendientes", "📋 Pending"),
-                    callback_data="adminui:orders",
-                ),
-                InlineKeyboardButton(
-                    text=_tr(locale, "🔎 Ver orden", "🔎 View order"),
-                    callback_data="adminui:order",
-                ),
-                InlineKeyboardButton(
-                    text=_tr(locale, "✅ Aprobar", "✅ Approve"),
-                    callback_data="adminui:approve",
+                    text=_tr(locale, "📦 Ordenes", "📦 Orders"),
+                    callback_data="adminui:ordersmenu",
                 ),
             ],
             [
-                InlineKeyboardButton(
-                    text=_tr(locale, "❌ Rechazar", "❌ Reject"),
-                    callback_data="adminui:reject",
-                ),
-                InlineKeyboardButton(
-                    text=_tr(locale, "💸 Reembolso", "💸 Refund"),
-                    callback_data="adminui:refund",
-                ),
                 InlineKeyboardButton(
                     text=_tr(locale, "🚫 Banear", "🚫 Ban"),
                     callback_data="adminui:ban",
@@ -879,6 +897,55 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                 InlineKeyboardButton(
                     text=_tr(locale, "🔐 Login", "🔐 Login"),
                     callback_data="admin_panel:login",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_orders_menu_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📋 Pendientes", "📋 Pending"),
+                    callback_data="adminui:orders",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔎 Ver orden", "🔎 View order"),
+                    callback_data="adminui:order",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "✅ Aprobar", "✅ Approve"),
+                    callback_data="adminui:approve",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "❌ Rechazar", "❌ Reject"),
+                    callback_data="adminui:reject",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💸 Reembolso", "💸 Refund"),
+                    callback_data="adminui:refund",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🛑 Cancelar", "🛑 Cancel"),
+                    callback_data="adminui:cancel",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🚨 Estafa", "🚨 Scam"),
+                    callback_data="adminui:scam",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
                 ),
             ],
         ]
@@ -1254,12 +1321,20 @@ async def _wait_broadcast_progress_and_build_result(
                 target_count = _safe_int(progress.get("target_count"), target_count, 0, 10**9)
                 sent_count = _safe_int(progress.get("sent_count"), sent_count, 0, 10**9)
                 failed_count = _safe_int(progress.get("failed_count"), failed_count, 0, 10**9)
+                processed_count = max(sent_count + failed_count, 0)
                 if target_count > 0:
                     percent = _safe_int(progress.get("percent"), percent, 0, 100)
                 else:
                     percent = warmup_steps[warmup_index]
                     if warmup_index < len(warmup_steps) - 1:
                         warmup_index += 1
+                if (
+                    target_count > 0
+                    and processed_count >= target_count
+                    and progress_status in {"QUEUED", "SENDING", "PAUSING"}
+                ):
+                    progress_status = "SENT" if sent_count > 0 else "FAILED"
+                    percent = 100
                 consecutive_progress_errors = 0
                 progress_text = _build_broadcast_progress_text(
                     broadcast_id,
@@ -1286,6 +1361,10 @@ async def _wait_broadcast_progress_and_build_result(
                 await asyncio.sleep(0.8 if progress_status == "PAUSED" else 0.2)
             except Exception:
                 consecutive_progress_errors += 1
+                if target_count > 0 and (sent_count + failed_count) >= target_count:
+                    progress_status = "SENT" if sent_count > 0 else "FAILED"
+                    percent = 100
+                    break
                 reconnect_text = _build_broadcast_reconnecting_text(
                     broadcast_id,
                     locale,
@@ -2037,6 +2116,18 @@ def _build_admin_panel_text(locale: str | None = "es") -> str:
     )
 
 
+def _build_orders_menu_text(locale: str | None = "es") -> str:
+    return _tr(
+        locale,
+        "📦 <b>Órdenes</b>\n\n"
+        "Desde aquí puedes revisar, aprobar, rechazar, cancelar, marcar estafa o ver reembolsos.\n\n"
+        "Selecciona la acción que quieres realizar.",
+        "📦 <b>Orders</b>\n\n"
+        "From here you can review, approve, reject, cancel, mark scam or handle refunds.\n\n"
+        "Choose the action you want to perform.",
+    )
+
+
 def _build_orders_limit_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -2185,6 +2276,34 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
                 "<code>00004</code>",
                 "💸 <b>Refund</b>\n"
                 "Send the order number or UUID to start the refund.\n\n"
+                "✍️ Example:\n"
+                "<code>00004</code>",
+            )
+        ),
+        "cancel": (
+            _tr(
+                locale,
+                "🛑 <b>Cancelar Orden</b>\n"
+                "Envía ahora el número de orden o UUID para cancelar la orden definitivamente.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>00004</code>",
+                "🛑 <b>Cancel Order</b>\n"
+                "Send the order number or UUID to cancel the order permanently.\n\n"
+                "✍️ Example:\n"
+                "<code>00004</code>",
+            )
+        ),
+        "scam": (
+            _tr(
+                locale,
+                "🚨 <b>Marcar como Estafa</b>\n"
+                "Envía ahora el número de orden o UUID para marcar la orden como estafa.\n\n"
+                "La orden quedará marcada en el bot y panel web, y su número visible se liberará.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>00004</code>",
+                "🚨 <b>Mark as Scam</b>\n"
+                "Send the order number or UUID to mark the order as scam.\n\n"
+                "The order will be marked in bot and web admin, and its visible number will be released.\n\n"
                 "✍️ Example:\n"
                 "<code>00004</code>",
             )
@@ -2976,15 +3095,27 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
     items_block = "\n".join(item_lines) if item_lines else _tr(locale, "- Sin items", "- No items")
 
     order_number = order.get("order_number")
-    order_number_text = str(order_number).zfill(5) if order_number is not None else "-"
+    released_order_number = order.get("released_order_number")
+    if _is_scam_order(order) and released_order_number is not None:
+        order_number_text = str(released_order_number).zfill(5)
+        order_number_label = _tr(locale, "Número liberado", "Released number")
+    else:
+        order_number_text = str(order_number).zfill(5) if order_number is not None else "-"
+        order_number_label = _tr(locale, "Número", "Number")
     markup_percent = totals.get("markup_percent")
     markup_text = f"{markup_percent}%" if markup_percent is not None else "-"
+    scam_reason = str(order.get("scam_reason") or "").strip()
+    scam_block = (
+        f"\n⚠️ {_tr(locale, 'Motivo estafa', 'Scam reason')}: <b>{_escape_html(scam_reason or '-')}</b>"
+        if _is_scam_order(order)
+        else ""
+    )
 
     return (
         _tr(locale, "🧾 <b>Detalle de la Orden</b>\n\n", "🧾 <b>Order Detail</b>\n\n")
         + f"🆔 ID: <code>{_escape_html(order.get('id'))}</code>\n"
-        + f"🏷 {_tr(locale, 'Número', 'Number')}: <code>{_escape_html(order_number_text)}</code>\n"
-        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_text(order.get('status'), locale))}</b>\n\n"
+        + f"🏷 {order_number_label}: <code>{_escape_html(order_number_text)}</code>\n"
+        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_display(order, locale))}</b>{scam_block}\n\n"
         + _tr(locale, "👤 <b>Usuario</b>\n", "👤 <b>User</b>\n")
         + f"• ID: <code>{_escape_html(user.get('telegram_id'))}</code>\n"
         + f"• Username: @{_escape_html(user.get('telegram_username') or '-')}\n\n"
@@ -3017,7 +3148,11 @@ async def _build_approve_order_text(order_ref: str, locale: str | None = "es") -
             data = await api_client.admin_get_order(order_ref)
             order = data.get("order", {})
             status = order.get("status") or "OK"
-            order_number = order.get("order_number")
+            order_number = (
+                order.get("released_order_number")
+                if _is_scam_order(order)
+                else order.get("order_number")
+            )
             order_number_text = (
                 str(order_number).zfill(5) if order_number is not None else "-"
             )
@@ -3030,7 +3165,7 @@ async def _build_approve_order_text(order_ref: str, locale: str | None = "es") -
                 + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
                 + f"🏷 {_tr(locale, 'Número', 'Number')}: <b>#{order_number_text}</b>\n"
                 + f"📌 {_tr(locale, 'Estado actual', 'Current status')}: "
-                + f"<b>{_escape_html(_order_status_text(status, locale))}</b>\n\n"
+                + f"<b>{_escape_html(_order_status_display(order, locale))}</b>\n\n"
                 + _tr(
                     locale,
                     "No se aprobó de nuevo porque solo se pueden aprobar órdenes en espera de pago.",
@@ -3052,6 +3187,54 @@ async def _build_reject_order_text(order_ref: str, reason: str, locale: str | No
         _tr(locale, "❌ <b>Orden rechazada (modo reintento)</b>\n\n", "❌ <b>Order rejected (retry mode)</b>\n\n")
         + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
         f"📝 {_tr(locale, 'Motivo', 'Reason')}: {_escape_html(reason)}"
+    )
+
+
+async def _build_cancel_order_text(order_ref: str, locale: str | None = "es") -> str:
+    await api_client.admin_cancel_order(
+        order_ref,
+        reason=_tr(
+            locale,
+            "Orden cancelada por admin desde el panel del bot.",
+            "Order cancelled by admin from the bot admin panel.",
+        ),
+    )
+    return (
+        _tr(locale, "🛑 <b>Orden cancelada</b>\n\n", "🛑 <b>Order cancelled</b>\n\n")
+        + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
+        + _tr(
+            locale,
+            "La orden fue cancelada definitivamente y ya no quedará en reintento.",
+            "The order was cancelled permanently and will no longer stay in retry mode.",
+        )
+    )
+
+
+async def _build_scam_order_text(order_ref: str, locale: str | None = "es") -> str:
+    response = await api_client.admin_mark_order_scam(
+        order_ref,
+        reason=_tr(
+            locale,
+            "Marcada como estafa por admin desde el panel del bot.",
+            "Marked as scam by admin from the bot admin panel.",
+        ),
+    )
+    order = response.get("order") or {}
+    released_order_number = order.get("released_order_number")
+    released_text = (
+        str(released_order_number).zfill(5)
+        if released_order_number is not None
+        else "-"
+    )
+    return (
+        _tr(locale, "🚨 <b>Orden marcada como Estafa</b>\n\n", "🚨 <b>Order marked as Scam</b>\n\n")
+        + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
+        + f"🏷 {_tr(locale, 'Número liberado', 'Released number')}: <code>{_escape_html(released_text)}</code>\n"
+        + _tr(
+            locale,
+            "La orden quedó marcada en el bot y el panel web. Ese número podrá reutilizarse en una próxima orden real.",
+            "The order was marked in bot and web admin. That number can now be reused by a future real order.",
+        )
     )
 
 
@@ -3603,6 +3786,15 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             )
             return
 
+        if action == "ordersmenu":
+            await state.clear()
+            await _edit_panel_message(
+                callback.message,
+                _build_orders_menu_text(locale),
+                reply_markup=_build_orders_menu_keyboard(locale),
+            )
+            return
+
         if action == "orders":
             if len(parts) >= 4 and parts[2] == "list":
                 limit = _safe_int(parts[3], 10, 1, 30)
@@ -3657,6 +3849,26 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 _guide_text("refund", locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
+        if action == "cancel":
+            await state.set_state(AdminUiStates.awaiting_value)
+            await state.update_data(admin_ui_action="order_ref_cancel", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("cancel", locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
+        if action == "scam":
+            await state.set_state(AdminUiStates.awaiting_value)
+            await state.update_data(admin_ui_action="order_ref_scam", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("scam", locale),
                 reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
@@ -4613,6 +4825,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
         error_code = payload.get("error") if isinstance(payload, dict) else None
         if error_code == "ORDER_NOT_FOUND":
             text = _build_order_not_found_text(payload, locale)
+        elif str(error_code or "").upper().strip().startswith("ORDER_SCAM_") or error_code == "ORDER_ALREADY_SCAM":
+            text = _build_order_scam_error_text(str(error_code or ""), locale)
         elif error_code == "BROADCAST_ALREADY_SENDING":
             data = await state.get_data()
             active_broadcast_id = str(
@@ -5289,6 +5503,28 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             )
             return
 
+        if action == "order_ref_cancel":
+            text = await _build_cancel_order_text(raw_text, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            await state.clear()
+            return
+
+        if action == "order_ref_scam":
+            text = await _build_scam_order_text(raw_text, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            await state.clear()
+            return
+
         if action == "refund_reason":
             order_ref = str(data.get("admin_ui_order_ref") or "").strip()
             reason = raw_text or _tr(locale, "Reembolso procesado por admin.", "Refund processed by admin.")
@@ -5850,6 +6086,8 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
         error_code = payload.get("error") if isinstance(payload, dict) else None
         if error_code == "ORDER_NOT_FOUND":
             text = _build_order_not_found_text(payload, locale)
+        elif str(error_code or "").upper().strip().startswith("ORDER_SCAM_") or error_code == "ORDER_ALREADY_SCAM":
+            text = _build_order_scam_error_text(str(error_code or ""), locale)
         else:
             text = _tr(
                 locale,
@@ -5984,9 +6222,11 @@ async def cmd_order(message: Message) -> None:
             total = item.get("line_total_usd") or item.get("unit_price_usd") or 0
             item_lines.append(f"- {name} x{qty} (${total})")
         items_block = "\n".join(item_lines) if item_lines else "- Sin items"
+        visible_number = order.get("released_order_number") if _is_scam_order(order) else order.get("order_number")
         text = (
             f"🧾 Orden: {order.get('id')}\n"
-            f"Estado: {order.get('status')}\n"
+            f"Número: {str(visible_number).zfill(5) if visible_number is not None else '-'}\n"
+            f"Estado: {_order_status_display(order, locale)}\n"
             f"Usuario: {user.get('telegram_id')} (@{user.get('telegram_username') or '-'})\n"
             f"Método: {payment.get('payment_method') or '-'}\n"
             f"Revisión pago: {payment.get('review_status') or '-'}\n"

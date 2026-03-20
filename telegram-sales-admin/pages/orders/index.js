@@ -62,12 +62,23 @@ function isFreeOrderData(order, detail = null) {
   return Number.isFinite(subtotal) && subtotal <= 0;
 }
 
+function isScamOrder(order) {
+  return order?.is_scam === true;
+}
+
 function formatOrderStatusForOrder(order, detail = null) {
   if (!order) {
     return "-";
   }
+  if (isScamOrder(order)) {
+    return "ESTAFA";
+  }
   if (isFreeOrderData(order, detail)) {
     return "GRATIS";
+  }
+  const reviewStatus = detail?.payment?.review_status || order.payment_review_status;
+  if (reviewStatus === "REJECTED") {
+    return formatOrderStatus(reviewStatus);
   }
   return formatOrderStatus(order.status);
 }
@@ -75,6 +86,13 @@ function formatOrderStatusForOrder(order, detail = null) {
 function formatOrderNumberLabel(order) {
   if (!order) {
     return "-";
+  }
+  if (isScamOrder(order)) {
+    const releasedNumber = Number(order.released_order_number || 0);
+    if (Number.isFinite(releasedNumber) && releasedNumber > 0) {
+      return `Estafa: ${String(releasedNumber).padStart(5, "0")}`;
+    }
+    return "Estafa";
   }
   const freeOrderNumber = Number(order.free_order_number || 0);
   if (Number.isFinite(freeOrderNumber) && freeOrderNumber > 0) {
@@ -223,6 +241,9 @@ export default function OrdersPage() {
 
   const filterRecent = (orders) => {
     return orders.filter((order) => {
+      if (order.payment_review_status === "REJECTED" || isScamOrder(order)) {
+        return false;
+      }
       return order.status === "WAITING_PAYMENT" || order.status === "CREATED";
     });
   };
@@ -254,6 +275,23 @@ export default function OrdersPage() {
         apiFetch("/admin/orders/status-counts?include_all=1"),
       ]);
       const fetchedItems = data.items || [];
+      const adjustedCounts = {
+        ...(countsRes?.counts || {}),
+        CREATED: fetchedItems.filter(
+          (order) =>
+            order.status === "CREATED"
+            && order.payment_review_status !== "REJECTED"
+            && !isScamOrder(order)
+            && !isFreeOrderData(order)
+        ).length,
+        WAITING_PAYMENT: fetchedItems.filter(
+          (order) =>
+            order.status === "WAITING_PAYMENT"
+            && order.payment_review_status !== "REJECTED"
+            && !isScamOrder(order)
+            && !isFreeOrderData(order)
+        ).length,
+      };
       const nextItems = isRecent
         ? filterRecent(fetchedItems)
         : status === ""
@@ -261,7 +299,7 @@ export default function OrdersPage() {
         : fetchedItems;
       setItems(nextItems);
       setError("");
-      setOrderCounts(countsRes?.counts || {});
+      setOrderCounts(adjustedCounts);
     } catch (err) {
       setError("No se pudo cargar las ordenes.");
     }

@@ -49,6 +49,13 @@ function formatOrderNumberLabel(order) {
   if (!order) {
     return "-";
   }
+  if (order.is_scam === true) {
+    const releasedNumber = Number(order.released_order_number || 0);
+    if (Number.isFinite(releasedNumber) && releasedNumber > 0) {
+      return `Estafa: ${String(releasedNumber).padStart(5, "0")}`;
+    }
+    return "Estafa";
+  }
   const freeOrderNumber = Number(order.free_order_number || 0);
   if (Number.isFinite(freeOrderNumber) && freeOrderNumber > 0) {
     return `Orden Gratis: ${String(freeOrderNumber).padStart(5, "0")}`;
@@ -86,8 +93,15 @@ function formatOrderStatusForOrder(order, detail = null) {
   if (!order) {
     return "-";
   }
+  if (order.is_scam === true) {
+    return "ESTAFA";
+  }
   if (isFreeOrderData(order, detail)) {
     return "GRATIS";
+  }
+  const reviewStatus = detail?.payment?.review_status || order.payment_review_status;
+  if (reviewStatus === "REJECTED") {
+    return formatOrderStatus(reviewStatus);
   }
   return formatOrderStatus(order.status);
 }
@@ -306,7 +320,8 @@ export default function OrderDetail() {
   const isFreeOrder = isFreeOrderData(order, detail);
   const canModerate = hasProof || isFreeOrder;
   const isAlreadyProcessed =
-    order.status === "PAID"
+    order.is_scam === true
+    || order.status === "PAID"
     || order.status === "DELIVERED"
     || order.status === "CANCELLED"
     || order.status === "EXPIRED"
@@ -326,6 +341,9 @@ export default function OrderDetail() {
         <div className="detail-section">
           <h3 className="icon-inline"><IconOrders className="panel-icon" /> Detalle</h3>
           <p>Estado: {formatOrderStatusForOrder(order, detail)}</p>
+          {order.is_scam === true && (
+            <p>Motivo estafa: {order.scam_reason || "-"}</p>
+          )}
           <p>Subtotal (USD): {formatUsdValue(subtotalUsd)}</p>
           {markupPercent !== undefined && markupPercent !== null && (
             <p>Markup aplicado: {markupPercent}%</p>

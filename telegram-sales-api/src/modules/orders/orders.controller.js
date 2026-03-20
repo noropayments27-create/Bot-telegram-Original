@@ -13,6 +13,10 @@ const {
   formatFreeOrderLabel,
 } = require("../../services/freeOrders");
 const {
+  ensureOrderNumberSchema,
+  ensureOrderNumberForOrder,
+} = require("../../services/orderNumbers");
+const {
   recordAdminOrderNotification,
   buildOrderNotificationCaption,
   buildOrderNotificationKeyboard,
@@ -148,6 +152,7 @@ async function createOrder(req, res, next) {
   const pool = getPool();
   await ensureProductCategorySchema(pool);
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -657,10 +662,14 @@ async function submitPaymentProof(req, res, next) {
       [orderId, screenshotFileId, screenshotUniqueId, paymentMethod]
     );
 
+    if (!isFreeOrderRow(orderRes.rows[0])) {
+      await ensureOrderNumberForOrder(client, orderId);
+    }
+
     const updatedOrderRes = await client.query(
       `UPDATE orders
        SET status = $2,
-           order_number = COALESCE(order_number, nextval('orders_order_number_seq'))
+           order_number = order_number
        WHERE id = $1
        RETURNING *`,
       [orderId, ORDER_STATUS_WAITING_CONFIRMATION]
@@ -781,6 +790,7 @@ async function markOrderPaid(req, res, next) {
   const orderId = req.params.id;
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -823,17 +833,18 @@ async function markOrderPaid(req, res, next) {
       throw error;
     }
 
+    if (!isFreeOrder) {
+      await ensureOrderNumberForOrder(client, orderId);
+    }
+
     const updatedOrderRes = await client.query(
       `UPDATE orders
        SET status = $2,
            paid_at = now(),
-           order_number = CASE
-             WHEN $3::boolean THEN order_number
-             ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
-           END
+           order_number = order_number
        WHERE id = $1
        RETURNING *`,
-      [orderId, ORDER_STATUS_PAID, isFreeOrder]
+      [orderId, ORDER_STATUS_PAID]
     );
 
     await client.query(
@@ -940,6 +951,7 @@ async function rejectPayment(req, res, next) {
   const orderId = req.params.id;
   const pool = getPool();
   await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
   const client = await pool.connect();
 
   try {
@@ -956,18 +968,19 @@ async function rejectPayment(req, res, next) {
     }
     const isFreeOrder = isFreeOrderRow(orderRes.rows[0]);
 
+    if (!isFreeOrder) {
+      await ensureOrderNumberForOrder(client, orderId);
+    }
+
     const updatedOrderRes = await client.query(
       `UPDATE orders
        SET status = $2,
            cancelled_at = now(),
            cancel_source = 'ADMIN',
-           order_number = CASE
-             WHEN $3::boolean THEN order_number
-             ELSE COALESCE(order_number, nextval('orders_order_number_seq'))
-           END
+           order_number = order_number
        WHERE id = $1
        RETURNING *`,
-      [orderId, ORDER_STATUS_REJECTED, isFreeOrder]
+      [orderId, ORDER_STATUS_REJECTED]
     );
 
     await releaseStockForOrder(client, orderId);

@@ -205,7 +205,13 @@ function buildOrderNotificationCaption({
   localTotal,
   markupPercent,
 }) {
-  const orderNumberText = formatOrderNumber(order?.order_number);
+  const orderNumberText = order?.is_scam
+    ? (
+      order?.released_order_number
+        ? `Estafa: ${formatOrderNumber(order?.released_order_number)}`
+        : "Estafa"
+    )
+    : formatOrderNumber(order?.order_number);
   const telegramId = user?.telegram_id ?? order?.telegram_id ?? "-";
   const usernameRaw = user?.telegram_username ?? order?.telegram_username;
   const username = usernameRaw
@@ -226,6 +232,7 @@ function buildOrderNotificationCaption({
   const lines = [
     "🧾 Detalle de la Orden",
     `🆔 Orden: <code>${escapeHtml(orderNumberText)}</code>`,
+    `📌 Estado: ${order?.is_scam ? "🚨 Estafa" : escapeHtml(order?.status || "-")}`,
     "",
     "👤 Usuario",
     `🆔 Telegram ID: ${escapeHtml(telegramId)}`,

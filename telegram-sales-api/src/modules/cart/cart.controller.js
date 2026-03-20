@@ -4,6 +4,7 @@ const {
   ensureFreeOrderSchema,
   formatFreeOrderLabel,
 } = require("../../services/freeOrders");
+const { syncOrderNumberSequence } = require("../../services/orderNumbers");
 
 function normalizeTelegramId(value) {
   if (value === undefined || value === null) {
@@ -628,13 +629,7 @@ async function checkoutCart(req, res, next) {
       ? Math.max(expirySeconds, 365 * 24 * 60 * 60)
       : expirySeconds;
 
-    await client.query(
-      `SELECT setval(
-         'orders_order_number_seq',
-         COALESCE((SELECT MAX(order_number) FROM orders), 1),
-         true
-       )`
-    );
+    await syncOrderNumberSequence(client);
 
     let affiliateId = user.referred_by_affiliate_id;
     if (affiliateId) {
