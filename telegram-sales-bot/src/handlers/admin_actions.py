@@ -1,3 +1,4 @@
+import asyncio
 from html import escape as html_escape
 from urllib.parse import quote
 from urllib.parse import urlparse
@@ -91,6 +92,17 @@ def _is_local_url(url: str) -> bool:
         return False
     host = (parsed.hostname or "").strip().lower()
     return host in {"localhost", "127.0.0.1", "::1"}
+
+
+def _schedule_message_delete(bot, chat_id: int, message_id: int, delay_seconds: float = 60.0) -> None:
+    async def _delete_later() -> None:
+        await asyncio.sleep(max(float(delay_seconds), 0.0))
+        try:
+            await bot.delete_message(chat_id=chat_id, message_id=message_id)
+        except Exception:
+            pass
+
+    asyncio.create_task(_delete_later())
 
 
 @router.callback_query(F.data.startswith("admin_panel:"))
@@ -239,12 +251,17 @@ async def _process_admin_panel_password(
     if _is_local_url(access_url):
         # Telegram no acepta localhost en botones inline URL.
         safe_url = html_escape(access_url, quote=True)
-        await message.answer(
+        sent_message = await message.answer(
             f"{t(locale, 'admin_panel_access_ready')}\n\n"
             "⚠️ Telegram no permite botón con URL local.\n"
             "Copia este enlace y ábrelo en tu navegador local:\n"
             f"<code>{safe_url}</code>",
             parse_mode="HTML",
+        )
+        _schedule_message_delete(
+            message.bot,
+            sent_message.chat.id,
+            sent_message.message_id,
         )
         return
 
@@ -259,19 +276,29 @@ async def _process_admin_panel_password(
         ]
     )
     try:
-        await message.answer(
+        sent_message = await message.answer(
             t(locale, "admin_panel_access_ready"),
             parse_mode="HTML",
             reply_markup=keyboard,
         )
+        _schedule_message_delete(
+            message.bot,
+            sent_message.chat.id,
+            sent_message.message_id,
+        )
     except TelegramBadRequest:
         safe_url = html_escape(access_url, quote=True)
-        await message.answer(
+        sent_message = await message.answer(
             f"{t(locale, 'admin_panel_access_ready')}\n\n"
             "⚠️ Telegram rechazó el botón URL.\n"
             "Copia y abre este enlace manualmente:\n"
             f"<code>{safe_url}</code>",
             parse_mode="HTML",
+        )
+        _schedule_message_delete(
+            message.bot,
+            sent_message.chat.id,
+            sent_message.message_id,
         )
 
 

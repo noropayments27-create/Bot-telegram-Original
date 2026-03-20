@@ -89,6 +89,30 @@ async function sendMessage(telegramId, text, options = {}) {
   return data.result;
 }
 
+async function deleteMessage(telegramId, messageId) {
+  const token = getToken();
+  const url = `${TELEGRAM_API_BASE}/bot${token}/deleteMessage`;
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ chat_id: telegramId, message_id: messageId }),
+  });
+
+  if (!response.ok) {
+    throw new Error("TELEGRAM_DELETE_FAILED");
+  }
+
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error("TELEGRAM_DELETE_FAILED");
+  }
+
+  return true;
+}
+
 async function sendMultipart(
   telegramId,
   endpoint,
@@ -280,6 +304,7 @@ async function editMessageCaption(telegramId, messageId, caption, options = {}) 
 module.exports = {
   getFilePath,
   downloadFile,
+  deleteMessage,
   sendMessage,
   sendDocument,
   sendPhoto,

@@ -20,6 +20,7 @@ const {
 const {
   getFilePath,
   downloadFile,
+  deleteMessage,
   sendMessage,
   sendPhoto,
   sendVideo,
@@ -2878,9 +2879,21 @@ router.post("/auth/start", async (req, res, next) => {
             adminId,
             "¿Estas intentando Ingresar en el panel del Bot?",
             { reply_markup: replyMarkup }
-          ).catch((error) => {
-            console.error("Telegram 2FA notification failed", error);
-          })
+          )
+            .then((sentMessage) => {
+              const messageId = Number(sentMessage?.message_id || 0);
+              if (messageId <= 0) {
+                return;
+              }
+              setTimeout(() => {
+                deleteMessage(adminId, messageId).catch(() => {
+                  // ignore delete errors if message was already removed
+                });
+              }, 60 * 1000);
+            })
+            .catch((error) => {
+              console.error("Telegram 2FA notification failed", error);
+            })
         )
       );
     };

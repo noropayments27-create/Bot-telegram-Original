@@ -61,7 +61,7 @@ async def handle_admin_auth_decision(callback: CallbackQuery) -> None:
             {"request_id": request_id, "decision": decision}, BOT_TO_API_SECRET
         )
         try:
-            await callback.message.edit_reply_markup(reply_markup=None)
+            await callback.message.delete()
         except Exception:
             pass
         await callback.answer(t(locale, "admin_confirm_sent"))
