@@ -2208,6 +2208,20 @@ def _build_logs_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
         inline_keyboard=[
             [
                 InlineKeyboardButton(
+                    text=_tr(locale, "API 10", "API 10"),
+                    callback_data="adminui:logs:list:api:10",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "Bot 10", "Bot 10"),
+                    callback_data="adminui:logs:list:bot:10",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "Admin 10", "Admin 10"),
+                    callback_data="adminui:logs:list:admin:10",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=_tr(locale, "Pagos 10", "Payments 10"),
                     callback_data="adminui:logs:list:payments:10",
                 ),
@@ -2218,6 +2232,20 @@ def _build_logs_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
                 InlineKeyboardButton(
                     text=_tr(locale, "Soporte 10", "Support 10"),
                     callback_data="adminui:logs:list:support:10",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "API 20", "API 20"),
+                    callback_data="adminui:logs:list:api:20",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "Bot 20", "Bot 20"),
+                    callback_data="adminui:logs:list:bot:20",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "Admin 20", "Admin 20"),
+                    callback_data="adminui:logs:list:admin:20",
                 ),
             ],
             [
@@ -2408,9 +2436,11 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
                 locale,
                 "📜 <b>Logs</b>\n"
                 "Consulta eventos recientes por categoría.\n\n"
+                "Incluye errores reales de <b>API</b>, <b>Bot</b> y <b>Admin</b> guardados en la base de datos.\n\n"
                 "🎯 Selecciona categoría y cantidad:",
                 "📜 <b>Logs</b>\n"
                 "Check recent events by category.\n\n"
+                "Includes real <b>API</b>, <b>Bot</b> and <b>Admin</b> errors stored in the database.\n\n"
                 "🎯 Choose category and amount:",
             )
         ),
@@ -6702,8 +6732,8 @@ async def cmd_logs(message: Message) -> None:
         return
     args = _extract_args(message.text).split()
     category = args[0].lower() if args else "payments"
-    if category not in {"errors", "payments", "support"}:
-        await message.answer("Uso: /logs [errors|payments|support] [n]")
+    if category not in {"api", "bot", "admin", "errors", "payments", "support"}:
+        await message.answer("Uso: /logs [api|bot|admin|errors|payments|support] [n]")
         return
     limit = _safe_int(args[1], 10, 1, 25) if len(args) > 1 else 10
     try:

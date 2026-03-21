@@ -71,6 +71,11 @@ const {
   validateAdminDirectCredentials,
   ensureAdminCredentialsSchema,
 } = require("../services/adminCredentials");
+const {
+  ensureAppErrorLogSchema,
+  recordAppError,
+  listAppErrors,
+} = require("../services/appErrorLogs");
 const { sendMail, isMailConfigured } = require("../services/mailer");
 const { buildPasswordRecoveryEmailTemplate } = require("../services/emailTemplates");
 const {
@@ -3585,6 +3590,27 @@ router.post("/auth/decision", (req, res) => {
 
 router.use(requireAdmin);
 
+router.post("/app-errors", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensureAppErrorLogSchema(pool);
+    const { source, level, code, route, message, stack, context } = req.body || {};
+    if (!["api", "bot", "admin"].includes(String(source || "").trim().toLowerCase())) {
+      return res.status(400).json({ error: "SOURCE_INVALID" });
+    }
+    if (!String(message || "").trim()) {
+      return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+    }
+    await recordAppError(
+      { source, level, code, route, message, stack, context },
+      pool
+    );
+    return res.json({ ok: true });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/auth/recovery-profile", async (req, res, next) => {
   const pool = getPool();
   try {
@@ -5561,6 +5587,22 @@ router.get("/logs", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    if (["api", "bot", "admin"].includes(category)) {
+      const rows = await listAppErrors(category, limit, pool);
+      const items = rows.map((row) => ({
+        created_at: row.created_at,
+        action: `${String(row.source || category).toUpperCase()}_${String(row.level || "error").toUpperCase()}`,
+        ref_id: row.code || "-",
+        message: [
+          row.route ? `[${row.route}]` : "",
+          row.message || "",
+        ]
+          .filter(Boolean)
+          .join(" "),
+      }));
+      return res.json({ category, limit, items });
+    }
+
     if (category === "payments") {
       const actions = ["ORDER_MARK_PAID", "ORDER_REJECT", "ORDER_REFUND"];
       const logsRes = await pool.query(

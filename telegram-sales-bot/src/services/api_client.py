@@ -440,6 +440,41 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_report_app_error(
+        self,
+        source: str,
+        message: str,
+        *,
+        level: str = "error",
+        code: str | None = None,
+        route: str | None = None,
+        stack: str | None = None,
+        context: Dict[str, Any] | None = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/app-errors"
+        payload: Dict[str, Any] = {
+            "source": source,
+            "level": level,
+            "message": message,
+        }
+        if code:
+            payload["code"] = code
+        if route:
+            payload["route"] = route
+        if stack:
+            payload["stack"] = stack
+        if context:
+            payload["context"] = context
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def admin_get_sales_insights(
         self,
         month_offset: int = 0,

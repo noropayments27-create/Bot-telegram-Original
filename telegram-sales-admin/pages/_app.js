@@ -3,6 +3,7 @@ import { useRouter } from "next/router";
 import Head from "next/head";
 
 import Layout from "../components/Layout";
+import { reportAdminAppError } from "../lib/api";
 import "../styles/globals.css";
 import "react-grid-layout/css/styles.css";
 import "react-resizable/css/styles.css";
@@ -53,6 +54,47 @@ export default function App({ Component, pageProps }) {
       window.removeEventListener("beforeunload", saveScroll);
     };
   }, [router.asPath]);
+
+  useEffect(() => {
+    if (typeof window === "undefined") {
+      return undefined;
+    }
+
+    const handleWindowError = (event) => {
+      reportAdminAppError({
+        code: "WINDOW_ERROR",
+        route: window.location.pathname,
+        message: event?.message || "Unhandled window error",
+        stack: event?.error?.stack || undefined,
+        context: {
+          filename: event?.filename || null,
+          lineno: event?.lineno || null,
+          colno: event?.colno || null,
+        },
+      });
+    };
+
+    const handleUnhandledRejection = (event) => {
+      const reason = event?.reason;
+      reportAdminAppError({
+        code: "UNHANDLED_REJECTION",
+        route: window.location.pathname,
+        message:
+          (reason && typeof reason === "object" && reason.message)
+          || String(reason || "Unhandled promise rejection"),
+        stack:
+          (reason && typeof reason === "object" && reason.stack)
+          || undefined,
+      });
+    };
+
+    window.addEventListener("error", handleWindowError);
+    window.addEventListener("unhandledrejection", handleUnhandledRejection);
+    return () => {
+      window.removeEventListener("error", handleWindowError);
+      window.removeEventListener("unhandledrejection", handleUnhandledRejection);
+    };
+  }, []);
 
   useEffect(() => {
     if (typeof window === "undefined") {
