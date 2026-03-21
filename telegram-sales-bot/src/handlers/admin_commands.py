@@ -2265,14 +2265,16 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
             _tr(
                 locale,
                 "🔎 <b>Ver Orden</b>\n"
-                "Envía ahora el <b>número de orden</b> corto o el UUID.\n\n"
+                "Envía ahora el <b>número de orden</b> corto, el UUID o <code>prueba</code>.\n\n"
                 "✍️ Ejemplos:\n"
                 "<code>00004</code>\n"
+                "<code>prueba</code>\n"
                 "<code>47f78e05-7086-4504-afb4-04da86acc2d9</code>",
                 "🔎 <b>View Order</b>\n"
-                "Send the short <b>order number</b> or the UUID.\n\n"
+                "Send the short <b>order number</b>, the UUID or <code>test</code>.\n\n"
                 "✍️ Examples:\n"
                 "<code>00004</code>\n"
+                "<code>test</code>\n"
                 "<code>47f78e05-7086-4504-afb4-04da86acc2d9</code>",
             )
         ),
@@ -2280,26 +2282,30 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
             _tr(
                 locale,
                 "✅ <b>Aprobar Orden</b>\n"
-                "Envía ahora el número de orden o UUID para aprobar la orden.\n\n"
-                "✍️ Ejemplo:\n"
-                "<code>00004</code>",
+                "Envía ahora el número de orden, UUID o <code>prueba</code> para aprobar la orden.\n\n"
+                "✍️ Ejemplos:\n"
+                "<code>00004</code>\n"
+                "<code>prueba</code>",
                 "✅ <b>Approve Order</b>\n"
-                "Send the order number or UUID to approve the order.\n\n"
-                "✍️ Example:\n"
-                "<code>00004</code>",
+                "Send the order number, UUID or <code>test</code> to approve the order.\n\n"
+                "✍️ Examples:\n"
+                "<code>00004</code>\n"
+                "<code>test</code>",
             )
         ),
         "reject": (
             _tr(
                 locale,
                 "❌ <b>Rechazar Orden</b>\n"
-                "Envía ahora el número de orden o UUID para rechazar la orden.\n\n"
-                "✍️ Ejemplo:\n"
-                "<code>00004</code>",
+                "Envía ahora el número de orden, UUID o <code>prueba</code> para rechazar la orden.\n\n"
+                "✍️ Ejemplos:\n"
+                "<code>00004</code>\n"
+                "<code>prueba</code>",
                 "❌ <b>Reject Order</b>\n"
-                "Send the order number or UUID to reject the order.\n\n"
-                "✍️ Example:\n"
-                "<code>00004</code>",
+                "Send the order number, UUID or <code>test</code> to reject the order.\n\n"
+                "✍️ Examples:\n"
+                "<code>00004</code>\n"
+                "<code>test</code>",
             )
         ),
         "refund": (
@@ -2319,28 +2325,32 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
             _tr(
                 locale,
                 "🛑 <b>Cancelar Orden</b>\n"
-                "Envía ahora el número de orden o UUID para cancelar la orden definitivamente.\n\n"
-                "✍️ Ejemplo:\n"
-                "<code>00004</code>",
+                "Envía ahora el número de orden, UUID o <code>prueba</code> para cancelar la orden definitivamente.\n\n"
+                "✍️ Ejemplos:\n"
+                "<code>00004</code>\n"
+                "<code>prueba</code>",
                 "🛑 <b>Cancel Order</b>\n"
-                "Send the order number or UUID to cancel the order permanently.\n\n"
-                "✍️ Example:\n"
-                "<code>00004</code>",
+                "Send the order number, UUID or <code>test</code> to cancel the order permanently.\n\n"
+                "✍️ Examples:\n"
+                "<code>00004</code>\n"
+                "<code>test</code>",
             )
         ),
         "scam": (
             _tr(
                 locale,
                 "🚨 <b>Marcar como Estafa</b>\n"
-                "Envía ahora el número de orden o UUID para marcar la orden como estafa.\n\n"
+                "Envía ahora el número de orden, UUID o <code>prueba</code> para marcar la orden como estafa.\n\n"
                 "La orden quedará marcada en el bot y panel web, y su número visible se liberará.\n\n"
-                "✍️ Ejemplo:\n"
-                "<code>00004</code>",
+                "✍️ Ejemplos:\n"
+                "<code>00004</code>\n"
+                "<code>prueba</code>",
                 "🚨 <b>Mark as Scam</b>\n"
-                "Send the order number or UUID to mark the order as scam.\n\n"
+                "Send the order number, UUID or <code>test</code> to mark the order as scam.\n\n"
                 "The order will be marked in bot and web admin, and its visible number will be released.\n\n"
-                "✍️ Example:\n"
-                "<code>00004</code>",
+                "✍️ Examples:\n"
+                "<code>00004</code>\n"
+                "<code>test</code>",
             )
         ),
         "ban": (

@@ -2036,6 +2036,27 @@ function parseOrderLookupRef(rawValue) {
 
 async function resolveOrderLookupId(db, rawRef, orderNumber) {
   const ref = String(rawRef || "").trim();
+  const normalizedRef = ref.toLowerCase();
+  if (normalizedRef === "prueba" || normalizedRef === "test") {
+    const latestTestOrderRes = await db.query(
+      `SELECT id
+       FROM orders
+       WHERE COALESCE(is_test, false) = true
+       ORDER BY
+         CASE
+           WHEN COALESCE(is_scam, false) = false
+            AND status IN ('CREATED', 'WAITING_PAYMENT', 'PAID', 'DELIVERED') THEN 0
+           ELSE 1
+         END,
+         created_at DESC,
+         id DESC
+       LIMIT 1`
+    );
+    if (latestTestOrderRes.rowCount > 0) {
+      return latestTestOrderRes.rows[0].id;
+    }
+  }
+
   if (ref) {
     const exactIdRes = await db.query(
       `SELECT id

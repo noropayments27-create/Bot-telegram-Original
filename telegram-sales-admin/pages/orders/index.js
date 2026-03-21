@@ -659,6 +659,32 @@ export default function OrdersPage() {
     }
   };
 
+  const handleScam = async (orderId) => {
+    const detail = details[orderId];
+    if (!detail || !detail.order) {
+      return;
+    }
+    try {
+      await apiFetch(`/admin/orders/${detail.order.id}/scam`, {
+        method: "POST",
+        body: JSON.stringify({
+          reason: reasons[orderId] || undefined,
+        }),
+      });
+      setDetailMessages((prev) => ({
+        ...prev,
+        [orderId]: "Orden marcada como estafa.",
+      }));
+      await loadDetail(detail.order.id);
+      await loadOrders();
+    } catch (err) {
+      setDetailErrors((prev) => ({
+        ...prev,
+        [orderId]: "No se pudo marcar la orden como estafa.",
+      }));
+    }
+  };
+
   const handleRefund = async (orderId) => {
     const detail = details[orderId];
     if (!detail || !detail.order || isSubmittingRefund[orderId]) {
@@ -1296,13 +1322,22 @@ export default function OrdersPage() {
                           {isApproving ? "Aprobando..." : "Aprobar"}
                         </button>
                         {isFreeOrder ? (
-                          <button
-                            type="button"
-                            onClick={() => handleReject(orderId, "cancel")}
-                            disabled={!canModerate || isFinalized}
-                          >
-                            Rechazar
-                          </button>
+                          <>
+                            <button
+                              type="button"
+                              onClick={() => handleReject(orderId, "cancel")}
+                              disabled={!canModerate || isFinalized}
+                            >
+                              Rechazar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleScam(orderId)}
+                              disabled={!canModerate || isFinalized}
+                            >
+                              Estafa
+                            </button>
+                          </>
                         ) : (
                           <>
                             <button
@@ -1318,6 +1353,13 @@ export default function OrdersPage() {
                               disabled={!canModerate || isFinalized}
                             >
                               Cancelar
+                            </button>
+                            <button
+                              type="button"
+                              onClick={() => handleScam(orderId)}
+                              disabled={!canModerate || isFinalized}
+                            >
+                              Estafa
                             </button>
                           </>
                         )}

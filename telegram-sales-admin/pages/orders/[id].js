@@ -242,6 +242,19 @@ export default function OrderDetail() {
     }
   };
 
+  const handleScam = async () => {
+    try {
+      await apiFetch(`/admin/orders/${id}/scam`, {
+        method: "POST",
+        body: JSON.stringify({ reason: reason || undefined }),
+      });
+      setMessage("Orden marcada como estafa.");
+      await loadDetail();
+    } catch (err) {
+      setError("No se pudo marcar la orden como estafa.");
+    }
+  };
+
   const handleDownload = async () => {
     try {
       const result = await apiFetchBinary(
@@ -491,13 +504,22 @@ export default function OrderDetail() {
             {isSubmittingApprove ? "Aprobando..." : "Aprobar"}
           </button>
           {isFreeOrder ? (
-            <button
-              type="button"
-              onClick={() => handleReject("cancel")}
-              disabled={!canModerate || isAlreadyProcessed}
-            >
-              Rechazar
-            </button>
+            <>
+              <button
+                type="button"
+                onClick={() => handleReject("cancel")}
+                disabled={!canModerate || isAlreadyProcessed}
+              >
+                Rechazar
+              </button>
+              <button
+                type="button"
+                onClick={handleScam}
+                disabled={!canModerate || isAlreadyProcessed}
+              >
+                Estafa
+              </button>
+            </>
           ) : (
             <>
               <button
@@ -513,6 +535,13 @@ export default function OrderDetail() {
                 disabled={!canModerate || isAlreadyProcessed}
               >
                 Rechazar (cancelar)
+              </button>
+              <button
+                type="button"
+                onClick={handleScam}
+                disabled={!canModerate || isAlreadyProcessed}
+              >
+                Estafa
               </button>
             </>
           )}
