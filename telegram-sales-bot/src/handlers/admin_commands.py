@@ -3322,13 +3322,13 @@ async def _launch_test_order_flow(
     message: Message,
     state: FSMContext,
     locale: str | None,
+    *,
+    actor_telegram_id: int,
+    actor_username: str | None = None,
 ) -> None:
-    user = message.from_user
-    if not user:
-        return
     response = await api_client.admin_create_test_order(
-        user.id,
-        username=user.username,
+        actor_telegram_id,
+        username=actor_username,
     )
     order = response.get("order") or {}
     order_id = str(order.get("id") or "").strip()
@@ -3350,7 +3350,7 @@ async def _launch_test_order_flow(
     )
     await _render_payment_methods_prompt(
         message,
-        user.id,
+        actor_telegram_id,
         order_id,
         1,
         1,
@@ -3982,7 +3982,13 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             return
 
         if action == "testorder":
-            await _launch_test_order_flow(callback.message, state, locale)
+            await _launch_test_order_flow(
+                callback.message,
+                state,
+                locale,
+                actor_telegram_id=callback.from_user.id,
+                actor_username=callback.from_user.username,
+            )
             await _answer_callback_safe(
                 callback,
                 _tr(locale, "Orden de prueba creada.", "Test order created."),
