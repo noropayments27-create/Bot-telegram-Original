@@ -700,83 +700,89 @@ async function submitPaymentProof(req, res, next) {
         order_number: updatedOrderRes.rows[0]?.order_number || orderRow.order_number,
       };
       const paymentRow = paymentRes.rows[0];
-      const itemsRes = await pool.query(
-        `SELECT oi.qty, oi.unit_price_usd, oi.line_total_usd, p.name
-         FROM order_items oi
-         JOIN products p ON p.id = oi.product_id
-         WHERE oi.order_id = $1
-         ORDER BY oi.created_at ASC`,
-        [orderId]
-      );
-      const items = itemsRes.rows || [];
-      let subtotalUsd = 0;
-      if (items.length > 0) {
-        subtotalUsd = items.reduce((sum, item) => {
-          const lineTotal =
-            item.line_total_usd != null
-              ? Number(item.line_total_usd)
-              : Number(item.unit_price_usd || 0) * Number(item.qty || 0);
-          return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
-        }, 0);
-        subtotalUsd = Number(subtotalUsd.toFixed(2));
-      } else {
-        subtotalUsd = Number(updatedOrder.unit_price_at_purchase || updatedOrder.product_price || 0);
-      }
-
-      const paymentMethod =
-        paymentRow?.payment_method || updatedOrder.payment_method || null;
-      let localTotal = null;
-      if (paymentMethod) {
+      void (async () => {
         try {
-          localTotal = await calculateLocalAmount(subtotalUsd, paymentMethod);
-        } catch (error) {
-          console.error("Failed to calculate local total", error);
-        }
-      }
-      const totalsWithMarkup = await resolveTotalsWithMarkup(
-        pool,
-        subtotalUsd,
-        paymentMethod,
-        localTotal
-      );
+          const itemsRes = await pool.query(
+            `SELECT oi.qty, oi.unit_price_usd, oi.line_total_usd, p.name
+             FROM order_items oi
+             JOIN products p ON p.id = oi.product_id
+             WHERE oi.order_id = $1
+             ORDER BY oi.created_at ASC`,
+            [orderId]
+          );
+          const items = itemsRes.rows || [];
+          let subtotalUsd = 0;
+          if (items.length > 0) {
+            subtotalUsd = items.reduce((sum, item) => {
+              const lineTotal =
+                item.line_total_usd != null
+                  ? Number(item.line_total_usd)
+                  : Number(item.unit_price_usd || 0) * Number(item.qty || 0);
+              return sum + (Number.isFinite(lineTotal) ? lineTotal : 0);
+            }, 0);
+            subtotalUsd = Number(subtotalUsd.toFixed(2));
+          } else {
+            subtotalUsd = Number(updatedOrder.unit_price_at_purchase || updatedOrder.product_price || 0);
+          }
 
-      const caption = buildOrderNotificationCaption({
-        order: updatedOrder,
-        user: {
-          telegram_id: updatedOrder.owner_telegram_id,
-          telegram_username: updatedOrder.telegram_username,
-        },
-        items,
-        payment: paymentRow,
-        subtotalUsd: totalsWithMarkup.subtotalUsd,
-        localTotal: totalsWithMarkup.localTotal,
-        markupPercent: totalsWithMarkup.markupPercent,
-      });
-      const replyMarkup = buildOrderNotificationKeyboard({
-        id: updatedOrder.id,
-        telegram_id: updatedOrder.owner_telegram_id,
-      });
+          const paymentMethod =
+            paymentRow?.payment_method || updatedOrder.payment_method || null;
+          let localTotal = null;
+          if (paymentMethod) {
+            try {
+              localTotal = await calculateLocalAmount(subtotalUsd, paymentMethod);
+            } catch (error) {
+              console.error("Failed to calculate local total", error);
+            }
+          }
+          const totalsWithMarkup = await resolveTotalsWithMarkup(
+            pool,
+            subtotalUsd,
+            paymentMethod,
+            localTotal
+          );
 
-      for (const adminId of adminIds) {
-        try {
-          const result = await sendPhoto(adminId, {
-            file_id: paymentRow.screenshot_file_id,
-            caption,
-            parse_mode: "HTML",
-            reply_markup: replyMarkup,
+          const caption = buildOrderNotificationCaption({
+            order: updatedOrder,
+            user: {
+              telegram_id: updatedOrder.owner_telegram_id,
+              telegram_username: updatedOrder.telegram_username,
+            },
+            items,
+            payment: paymentRow,
+            subtotalUsd: totalsWithMarkup.subtotalUsd,
+            localTotal: totalsWithMarkup.localTotal,
+            markupPercent: totalsWithMarkup.markupPercent,
           });
-          if (result?.message_id) {
-            await recordAdminOrderNotification(
-              pool,
-              updatedOrder.id,
-              adminId,
-              result.message_id
-            );
+          const replyMarkup = buildOrderNotificationKeyboard({
+            id: updatedOrder.id,
+            telegram_id: updatedOrder.owner_telegram_id,
+          });
+
+          for (const adminId of adminIds) {
+            try {
+              const result = await sendPhoto(adminId, {
+                file_id: paymentRow.screenshot_file_id,
+                caption,
+                parse_mode: "HTML",
+                reply_markup: replyMarkup,
+              });
+              if (result?.message_id) {
+                await recordAdminOrderNotification(
+                  pool,
+                  updatedOrder.id,
+                  adminId,
+                  result.message_id
+                );
+              }
+            } catch (error) {
+              console.error("Admin payment proof notify failed", error);
+            }
           }
         } catch (error) {
-          console.error("Admin payment proof notify failed", error);
+          console.error("Admin payment proof notify job failed", error);
         }
-      }
+      })();
     }
 
     return res.json({

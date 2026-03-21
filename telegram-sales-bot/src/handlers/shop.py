@@ -2811,13 +2811,14 @@ async def _process_payment_proof(
         await message.answer(t(locale, "no_active_order"))
         await state.set_state(None)
         return
-    is_test_order = False
-    try:
-        order_payload = await api_client.get_order(order_id)
-        order_row = order_payload.get("order") if isinstance(order_payload, dict) else None
-        is_test_order = bool(order_row and order_row.get("is_test"))
-    except Exception:
-        is_test_order = False
+    is_test_order = str(data.get("current_order_test_id") or "").strip() == str(order_id).strip()
+    if not is_test_order:
+        try:
+            order_payload = await api_client.get_order(order_id)
+            order_row = order_payload.get("order") if isinstance(order_payload, dict) else None
+            is_test_order = bool(order_row and order_row.get("is_test"))
+        except Exception:
+            is_test_order = False
     if (
         not is_test_order
         and _is_duplicate_user_image(
@@ -2918,6 +2919,7 @@ async def _process_payment_proof(
         payment_ready=False,
         payment_method=None,
         payment_method_order_id=None,
+        current_order_test_id=None,
         payment_proof_invalid_attempts=0,
     )
     await state.set_state(None)

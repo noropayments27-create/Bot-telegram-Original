@@ -958,7 +958,7 @@ async function markBroadcastRetryableFailure(pool, broadcastId, workerToken, err
      SET status = CASE
            WHEN progress_status = 'STOPPING' THEN 'FAILED'
            ELSE status
-         END,
+         END::broadcast_status,
          sent_at = CASE
            WHEN progress_status = 'STOPPING' THEN COALESCE(sent_at, now())
            ELSE sent_at
@@ -1229,7 +1229,7 @@ function startBroadcastRecoveryLoop() {
          SET status = CASE
                WHEN COALESCE(progress_sent_count, 0) > 0 THEN 'SENT'
                ELSE 'FAILED'
-             END,
+             END::broadcast_status,
              sent_at = COALESCE(sent_at, now()),
              progress_status = CASE
                WHEN COALESCE(progress_sent_count, 0) > 0 THEN 'SENT'
@@ -10834,7 +10834,7 @@ router.post("/broadcasts/:id/stop", async (req, res, next) => {
        SET status = CASE
              WHEN progress_status IN ('QUEUED', 'PAUSED') THEN 'FAILED'
              ELSE status
-           END,
+           END::broadcast_status,
            sent_at = CASE
              WHEN progress_status IN ('QUEUED', 'PAUSED') THEN now()
              ELSE sent_at

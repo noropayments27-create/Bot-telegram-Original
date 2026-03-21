@@ -3330,6 +3330,7 @@ async def _launch_test_order_flow(
         last_order_id=order_id,
         current_order_id=order_id,
         order_id=order_id,
+        current_order_test_id=order_id,
         current_order_total=total,
         current_order_summary=None,
         payment_ready=False,
