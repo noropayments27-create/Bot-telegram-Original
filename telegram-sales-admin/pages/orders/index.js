@@ -66,6 +66,10 @@ function isScamOrder(order) {
   return order?.is_scam === true;
 }
 
+function isTestOrder(order) {
+  return order?.is_test === true;
+}
+
 function formatOrderStatusForOrder(order, detail = null) {
   if (!order) {
     return "-";
@@ -86,6 +90,9 @@ function formatOrderStatusForOrder(order, detail = null) {
 function formatOrderNumberLabel(order) {
   if (!order) {
     return "-";
+  }
+  if (isTestOrder(order)) {
+    return "Prueba";
   }
   if (isScamOrder(order)) {
     const releasedNumber = Number(order.released_order_number || 0);
@@ -202,6 +209,7 @@ function getOrderTone(order, payment) {
 const STATUS_OPTIONS = [
   { value: "RECENT", label: "Nuevas" },
   { value: "", label: "Todos" },
+  { value: "SCAM", label: "Estafas" },
   { value: "FREE", label: "Gratis" },
   { value: "CANCELLED", label: "Cancelado" },
   { value: "EXPIRED", label: "Expiradas" },
@@ -1319,18 +1327,37 @@ export default function OrdersPage() {
                         return (
                           <div className={`orders-detail-footer orders-detail-footer--${tone}`}>
                             <div className="orders-status-inline">
-                              <span>
-                                <span className={`orders-status-dot is-${tone}`}></span>
-                                Pago aprobado
-                              </span>
-                              <span>
-                                <span className={`orders-status-dot is-${tone}`}></span>
-                                Stock consumido
-                              </span>
-                              <span>
-                                <span className={`orders-status-dot is-${tone}`}></span>
-                                Entrega realizada
-                              </span>
+                              {detail.order?.is_test === true ? (
+                                <>
+                                  <span>
+                                    <span className={`orders-status-dot is-${tone}`}></span>
+                                    Orden de prueba finalizada
+                                  </span>
+                                  <span>
+                                    <span className={`orders-status-dot is-${tone}`}></span>
+                                    Sin stock real
+                                  </span>
+                                  <span>
+                                    <span className={`orders-status-dot is-${tone}`}></span>
+                                    Limpieza automática
+                                  </span>
+                                </>
+                              ) : (
+                                <>
+                                  <span>
+                                    <span className={`orders-status-dot is-${tone}`}></span>
+                                    Pago aprobado
+                                  </span>
+                                  <span>
+                                    <span className={`orders-status-dot is-${tone}`}></span>
+                                    Stock consumido
+                                  </span>
+                                  <span>
+                                    <span className={`orders-status-dot is-${tone}`}></span>
+                                    Entrega realizada
+                                  </span>
+                                </>
+                              )}
                             </div>
                           </div>
                         );

@@ -49,6 +49,9 @@ function formatOrderNumberLabel(order) {
   if (!order) {
     return "-";
   }
+  if (order.is_test === true) {
+    return "Prueba";
+  }
   if (order.is_scam === true) {
     const releasedNumber = Number(order.released_order_number || 0);
     if (Number.isFinite(releasedNumber) && releasedNumber > 0) {
@@ -341,6 +344,9 @@ export default function OrderDetail() {
         <div className="detail-section">
           <h3 className="icon-inline"><IconOrders className="panel-icon" /> Detalle</h3>
           <p>Estado: {formatOrderStatusForOrder(order, detail)}</p>
+          {order.is_test === true && (
+            <p>Tipo: Orden de prueba temporal</p>
+          )}
           {order.is_scam === true && (
             <p>Motivo estafa: {order.scam_reason || "-"}</p>
           )}
@@ -438,9 +444,19 @@ export default function OrderDetail() {
         <h3 className="icon-inline"><IconOrders className="panel-icon" /> Acciones</h3>
         {isAlreadyProcessed && (
           <div className="muted">
-            <p>Pago aprobado</p>
-            <p>Stock consumido</p>
-            <p>Entrega realizada</p>
+            {order.is_test === true ? (
+              <>
+                <p>Orden de prueba finalizada</p>
+                <p>No consumió stock real</p>
+                <p>Se eliminará automáticamente</p>
+              </>
+            ) : (
+              <>
+                <p>Pago aprobado</p>
+                <p>Stock consumido</p>
+                <p>Entrega realizada</p>
+              </>
+            )}
           </div>
         )}
         {!isFreeOrder && (

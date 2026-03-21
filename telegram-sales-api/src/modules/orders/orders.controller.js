@@ -583,6 +583,7 @@ async function submitPaymentProof(req, res, next) {
     }
 
     const order = orderRes.rows[0];
+    const isTestOrder = Boolean(order.is_test);
     if (Number(order.owner_telegram_id) !== telegramId) {
       await client.query("ROLLBACK");
       return res.status(403).json({ error: "Not allowed" });
@@ -598,19 +599,21 @@ async function submitPaymentProof(req, res, next) {
       return res.status(409).json({ error: "Order rejected" });
     }
 
-    const duplicateRes = await client.query(
-      `SELECT 1
-       FROM order_payments op
-       JOIN orders o ON o.id = op.order_id
-       JOIN users u ON u.id = o.user_id
-       WHERE u.telegram_id = $1
-         AND op.screenshot_unique_id = $2
-       LIMIT 1`,
-      [telegramId, screenshotUniqueId]
-    );
-    if (duplicateRes.rowCount > 0) {
-      await client.query("ROLLBACK");
-      return res.status(409).json({ error: "DUPLICATE_IMAGE" });
+    if (!isTestOrder) {
+      const duplicateRes = await client.query(
+        `SELECT 1
+         FROM order_payments op
+         JOIN orders o ON o.id = op.order_id
+         JOIN users u ON u.id = o.user_id
+         WHERE u.telegram_id = $1
+           AND op.screenshot_unique_id = $2
+         LIMIT 1`,
+        [telegramId, screenshotUniqueId]
+      );
+      if (duplicateRes.rowCount > 0) {
+        await client.query("ROLLBACK");
+        return res.status(409).json({ error: "DUPLICATE_IMAGE" });
+      }
     }
 
     const existingPaymentRes = await client.query(
@@ -628,18 +631,20 @@ async function submitPaymentProof(req, res, next) {
         .json({ error: "SCREENSHOT_ALREADY_SUBMITTED" });
     }
 
-    const proofValidation = await validatePaymentProofScreenshot(
-      screenshotFileId,
-      paymentMethod
-    );
-    if (proofValidation && proofValidation.valid === false) {
-      await client.query("ROLLBACK");
-      return res.status(422).json({
-        error: "PAYMENT_PROOF_NOT_VALID",
-        message:
-          "⚠️ La imagen no parece un comprobante de pago. Envía una captura donde se vea método y monto.",
-        details: proofValidation,
-      });
+    if (!isTestOrder) {
+      const proofValidation = await validatePaymentProofScreenshot(
+        screenshotFileId,
+        paymentMethod
+      );
+      if (proofValidation && proofValidation.valid === false) {
+        await client.query("ROLLBACK");
+        return res.status(422).json({
+          error: "PAYMENT_PROOF_NOT_VALID",
+          message:
+            "⚠️ La imagen no parece un comprobante de pago. Envía una captura donde se vea método y monto.",
+          details: proofValidation,
+        });
+      }
     }
 
     const paymentRes = await client.query(
@@ -662,7 +667,7 @@ async function submitPaymentProof(req, res, next) {
       [orderId, screenshotFileId, screenshotUniqueId, paymentMethod]
     );
 
-    if (!isFreeOrderRow(orderRes.rows[0])) {
+    if (!isFreeOrderRow(orderRes.rows[0]) && !isTestOrder) {
       await ensureOrderNumberForOrder(client, orderId);
     }
 

@@ -268,6 +268,20 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_create_test_order(
+        self, telegram_id: int, username: Optional[str] = None
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/orders/test"
+        payload: Dict[str, Any] = {"telegram_id": telegram_id}
+        if username:
+            payload["username"] = username
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=30
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def admin_refund_order(
         self, order_id: str, reason: Optional[str] = None, amount: Optional[float] = None
     ) -> Dict[str, Any]:

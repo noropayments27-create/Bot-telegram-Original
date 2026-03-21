@@ -2787,11 +2787,6 @@ async def _process_payment_proof(
     locale = await get_user_locale(
         api_client, message.from_user.id, message.from_user.language_code
     )
-    if _is_duplicate_user_image(
-        _PAYMENT_IMAGE_CACHE, message.from_user.id, screenshot_unique_id
-    ):
-        await message.answer(t(locale, "duplicate_image_warning"))
-        return
     wait_seconds = check_global_rate_limit(
         message.from_user.id,
         BOT_RATE_LIMIT_SECONDS,
@@ -2815,6 +2810,21 @@ async def _process_payment_proof(
             pass
         await message.answer(t(locale, "no_active_order"))
         await state.set_state(None)
+        return
+    is_test_order = False
+    try:
+        order_payload = await api_client.get_order(order_id)
+        order_row = order_payload.get("order") if isinstance(order_payload, dict) else None
+        is_test_order = bool(order_row and order_row.get("is_test"))
+    except Exception:
+        is_test_order = False
+    if (
+        not is_test_order
+        and _is_duplicate_user_image(
+            _PAYMENT_IMAGE_CACHE, message.from_user.id, screenshot_unique_id
+        )
+    ):
+        await message.answer(t(locale, "duplicate_image_warning"))
         return
     if current_state != PaymentStates.waiting_photo.state or not data.get("payment_ready"):
         await message.answer(t(locale, "payment_press_paid_first"))

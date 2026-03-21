@@ -36,6 +36,7 @@ from ..services.i18n import t
 from ..services.user_locale import get_user_locale
 from ..utils.home_view import render_home_view
 from ..utils.rate_limit import check_global_rate_limit
+from .shop import _render_payment_methods_prompt
 
 router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
@@ -156,6 +157,24 @@ def _is_scam_order(order: Dict[str, Any] | None) -> bool:
     if not isinstance(order, dict):
         return False
     return bool(order.get("is_scam"))
+
+
+def _is_test_order(order: Dict[str, Any] | None) -> bool:
+    if not isinstance(order, dict):
+        return False
+    return bool(order.get("is_test"))
+
+
+def _visible_order_number_text(order: Dict[str, Any] | None) -> str:
+    if not isinstance(order, dict):
+        return "-"
+    if _is_test_order(order):
+        return "Prueba"
+    released_order_number = order.get("released_order_number")
+    if _is_scam_order(order) and released_order_number is not None:
+        return str(released_order_number).zfill(5)
+    order_number = order.get("order_number")
+    return str(order_number).zfill(5) if order_number is not None else "-"
 
 
 def _order_status_display(order: Dict[str, Any] | None, locale: str | None) -> str:
@@ -940,6 +959,12 @@ def _build_orders_menu_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                 InlineKeyboardButton(
                     text=_tr(locale, "🚨 Estafa", "🚨 Scam"),
                     callback_data="adminui:scam",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🧪 Orden de Prueba", "🧪 Test Order"),
+                    callback_data="adminui:testorder",
                 ),
             ],
             [
@@ -2559,12 +2584,9 @@ async def _build_orders_pending_text(limit: int, locale: str | None = "es") -> s
         )
     ]
     for index, row in enumerate(items, start=1):
-        order_number = row.get("order_number")
-        order_label = (
-            str(order_number).zfill(5)
-            if order_number is not None
-            else str(row.get("id", ""))[:8]
-        )
+        order_label = _visible_order_number_text(row)
+        if order_label == "-":
+            order_label = str(row.get("id", ""))[:8]
         username = _escape_html(row.get("telegram_username") or "-")
         order_id = _escape_html(row.get("id"))
         lines.append(
@@ -3094,13 +3116,14 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
         item_lines.append(f"• {name} x{qty} — <b>${_fmt_amount(total)}</b>")
     items_block = "\n".join(item_lines) if item_lines else _tr(locale, "- Sin items", "- No items")
 
-    order_number = order.get("order_number")
-    released_order_number = order.get("released_order_number")
-    if _is_scam_order(order) and released_order_number is not None:
-        order_number_text = str(released_order_number).zfill(5)
+    if _is_test_order(order):
+        order_number_text = "Prueba"
+        order_number_label = _tr(locale, "Número", "Number")
+    elif _is_scam_order(order) and order.get("released_order_number") is not None:
+        order_number_text = str(order.get("released_order_number")).zfill(5)
         order_number_label = _tr(locale, "Número liberado", "Released number")
     else:
-        order_number_text = str(order_number).zfill(5) if order_number is not None else "-"
+        order_number_text = _visible_order_number_text(order)
         order_number_label = _tr(locale, "Número", "Number")
     markup_percent = totals.get("markup_percent")
     markup_text = f"{markup_percent}%" if markup_percent is not None else "-"
@@ -3110,12 +3133,17 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
         if _is_scam_order(order)
         else ""
     )
+    test_block = (
+        f"\n🧪 {_tr(locale, 'Orden de prueba temporal', 'Temporary test order')}"
+        if _is_test_order(order)
+        else ""
+    )
 
     return (
         _tr(locale, "🧾 <b>Detalle de la Orden</b>\n\n", "🧾 <b>Order Detail</b>\n\n")
         + f"🆔 ID: <code>{_escape_html(order.get('id'))}</code>\n"
         + f"🏷 {order_number_label}: <code>{_escape_html(order_number_text)}</code>\n"
-        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_display(order, locale))}</b>{scam_block}\n\n"
+        + f"📌 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_order_status_display(order, locale))}</b>{scam_block}{test_block}\n\n"
         + _tr(locale, "👤 <b>Usuario</b>\n", "👤 <b>User</b>\n")
         + f"• ID: <code>{_escape_html(user.get('telegram_id'))}</code>\n"
         + f"• Username: @{_escape_html(user.get('telegram_username') or '-')}\n\n"
@@ -3148,14 +3176,7 @@ async def _build_approve_order_text(order_ref: str, locale: str | None = "es") -
             data = await api_client.admin_get_order(order_ref)
             order = data.get("order", {})
             status = order.get("status") or "OK"
-            order_number = (
-                order.get("released_order_number")
-                if _is_scam_order(order)
-                else order.get("order_number")
-            )
-            order_number_text = (
-                str(order_number).zfill(5) if order_number is not None else "-"
-            )
+            order_number_text = _visible_order_number_text(order)
             return (
                 _tr(
                     locale,
@@ -3221,20 +3242,57 @@ async def _build_scam_order_text(order_ref: str, locale: str | None = "es") -> s
     )
     order = response.get("order") or {}
     released_order_number = order.get("released_order_number")
-    released_text = (
+    released_text = "Prueba" if _is_test_order(order) else (
         str(released_order_number).zfill(5)
         if released_order_number is not None
         else "-"
+    )
+    notification = response.get("notification") or {}
+    notify_sent = bool(notification.get("sent"))
+    notify_method = str(notification.get("method") or "").strip().lower()
+    notify_error = str(notification.get("error") or "").strip()
+    notify_text = (
+        _tr(
+            locale,
+            "📨 Aviso al usuario: <b>Enviado</b>",
+            "📨 User notice: <b>Sent</b>",
+        )
+        + (
+            _tr(locale, " (imagen)", " (photo)")
+            if notify_method == "photo"
+            else _tr(locale, " (texto)", " (text)")
+            if notify_method == "text"
+            else ""
+        )
+        if notify_sent
+        else (
+            _tr(
+                locale,
+                "📨 Aviso al usuario: <b>Fallido</b>",
+                "📨 User notice: <b>Failed</b>",
+            )
+            + (f"\n⚠️ <code>{_escape_html(notify_error)}</code>" if notify_error else "")
+        )
     )
     return (
         _tr(locale, "🚨 <b>Orden marcada como Estafa</b>\n\n", "🚨 <b>Order marked as Scam</b>\n\n")
         + f"🧾 {_tr(locale, 'Referencia', 'Reference')}: <code>{_escape_html(order_ref)}</code>\n"
         + f"🏷 {_tr(locale, 'Número liberado', 'Released number')}: <code>{_escape_html(released_text)}</code>\n"
-        + _tr(
-            locale,
-            "La orden quedó marcada en el bot y el panel web. Ese número podrá reutilizarse en una próxima orden real.",
-            "The order was marked in bot and web admin. That number can now be reused by a future real order.",
+        + (
+            _tr(
+                locale,
+                "La orden de prueba quedó marcada en el bot y el panel web.",
+                "The test order was marked in bot and web admin.",
+            )
+            if _is_test_order(order)
+            else _tr(
+                locale,
+                "La orden quedó marcada en el bot y el panel web. Ese número podrá reutilizarse en una próxima orden real.",
+                "The order was marked in bot and web admin. That number can now be reused by a future real order.",
+            )
         )
+        + "\n\n"
+        + notify_text
     )
 
 
@@ -3247,6 +3305,45 @@ async def _build_refund_order_text(order_ref: str, reason: str, locale: str | No
         f"💰 {_tr(locale, 'Monto', 'Amount')}: <b>${_fmt_amount(refund.get('amount'))}</b>\n"
         f"🏷 {_tr(locale, 'Tipo', 'Type')}: <b>{_escape_html(_refund_type_text(refund.get('refund_type'), locale))}</b>\n"
         f"📝 {_tr(locale, 'Motivo', 'Reason')}: {_escape_html(reason)}"
+    )
+
+
+async def _launch_test_order_flow(
+    message: Message,
+    state: FSMContext,
+    locale: str | None,
+) -> None:
+    user = message.from_user
+    if not user:
+        return
+    response = await api_client.admin_create_test_order(
+        user.id,
+        username=user.username,
+    )
+    order = response.get("order") or {}
+    order_id = str(order.get("id") or "").strip()
+    if not order_id:
+        raise RuntimeError("TEST_ORDER_CREATE_FAILED")
+    total = order.get("total")
+    await state.clear()
+    await state.update_data(
+        last_order_id=order_id,
+        current_order_id=order_id,
+        order_id=order_id,
+        current_order_total=total,
+        current_order_summary=None,
+        payment_ready=False,
+        payment_method=None,
+        payment_method_order_id=None,
+        payment_proof_invalid_attempts=0,
+    )
+    await _render_payment_methods_prompt(
+        message,
+        user.id,
+        order_id,
+        1,
+        1,
+        locale,
     )
 
 
@@ -3870,6 +3967,14 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 callback.message,
                 _guide_text("scam", locale),
                 reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
+        if action == "testorder":
+            await _launch_test_order_flow(callback.message, state, locale)
+            await _answer_callback_safe(
+                callback,
+                _tr(locale, "Orden de prueba creada.", "Test order created."),
             )
             return
 
@@ -6222,10 +6327,10 @@ async def cmd_order(message: Message) -> None:
             total = item.get("line_total_usd") or item.get("unit_price_usd") or 0
             item_lines.append(f"- {name} x{qty} (${total})")
         items_block = "\n".join(item_lines) if item_lines else "- Sin items"
-        visible_number = order.get("released_order_number") if _is_scam_order(order) else order.get("order_number")
+        visible_number = _visible_order_number_text(order)
         text = (
             f"🧾 Orden: {order.get('id')}\n"
-            f"Número: {str(visible_number).zfill(5) if visible_number is not None else '-'}\n"
+            f"Número: {visible_number}\n"
             f"Estado: {_order_status_display(order, locale)}\n"
             f"Usuario: {user.get('telegram_id')} (@{user.get('telegram_username') or '-'})\n"
             f"Método: {payment.get('payment_method') or '-'}\n"

@@ -30,8 +30,24 @@ async function ensureOrderNumberSchema(db) {
      ADD COLUMN IF NOT EXISTS released_order_number bigint`
   );
   await db.query(
+    `ALTER TABLE orders
+     ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false`
+  );
+  await db.query(
+    `ALTER TABLE orders
+     ADD COLUMN IF NOT EXISTS test_cleanup_after timestamptz`
+  );
+  await db.query(
     `CREATE INDEX IF NOT EXISTS orders_is_scam_idx
      ON orders(is_scam)`
+  );
+  await db.query(
+    `CREATE INDEX IF NOT EXISTS orders_is_test_idx
+     ON orders(is_test)`
+  );
+  await db.query(
+    `CREATE INDEX IF NOT EXISTS orders_test_cleanup_after_idx
+     ON orders(test_cleanup_after)`
   );
 
   orderNumberSchemaReady = true;

@@ -105,7 +105,11 @@ async function syncExpiredWaitingPaymentOrders(pool) {
        SET status = 'EXPIRED',
            cancelled_at = COALESCE(cancelled_at, now()),
            cancel_source = 'EXPIRED',
-           order_number = NULL
+           order_number = NULL,
+           test_cleanup_after = CASE
+             WHEN o.is_test THEN now() + ($2 * interval '1 second')
+             ELSE o.test_cleanup_after
+           END
        WHERE o.status = 'WAITING_PAYMENT'
          AND COALESCE(o.unit_price_at_purchase, 0) > 0
          AND o.created_at <= now() - ($1 * interval '1 second')
@@ -113,7 +117,7 @@ async function syncExpiredWaitingPaymentOrders(pool) {
            SELECT 1 FROM order_payments op WHERE op.order_id = o.id
          )
        RETURNING o.id`,
-      [expirySeconds]
+      [expirySeconds, getTestOrderCleanupSeconds()]
     );
 
     const expiredOrderIds = expiredRes.rows.map((row) => row.id).filter(Boolean);
@@ -1992,6 +1996,9 @@ function formatOrderNumberForAdmin(order) {
   if (!order || typeof order !== "object") {
     return "-";
   }
+  if (order.is_test) {
+    return "Prueba";
+  }
   if (order.is_scam) {
     if (order.released_order_number) {
       return `Estafa: ${String(order.released_order_number).padStart(5, "0")}`;
@@ -2121,6 +2128,81 @@ function buildScamCustomerNotification(order) {
     + "❗ Si crees que se trata de un error, comunícate lo antes posible con: @Noropayments 📩\n"
     + "Explícales tu caso antes de que seas reportado públicamente 🚨."
   );
+}
+
+function isTestOrderRow(order) {
+  return Boolean(order?.is_test);
+}
+
+function getTestOrderCleanupSeconds() {
+  return Math.max(
+    Number.parseInt(process.env.TEST_ORDER_CLEANUP_SECONDS || "", 10) || 120,
+    10
+  );
+}
+
+async function ensureUserByTelegram(client, telegramId, username = null) {
+  const existingRes = await client.query(
+    `SELECT *
+     FROM users
+     WHERE telegram_id = $1
+     LIMIT 1`,
+    [telegramId]
+  );
+  if (existingRes.rowCount > 0) {
+    if (username) {
+      await client.query(
+        `UPDATE users
+         SET telegram_username = $2
+         WHERE id = $1
+           AND COALESCE(telegram_username, '') <> $2`,
+        [existingRes.rows[0].id, username]
+      );
+      return {
+        ...existingRes.rows[0],
+        telegram_username: username,
+      };
+    }
+    return existingRes.rows[0];
+  }
+
+  const insertRes = await client.query(
+    `INSERT INTO users (telegram_id, telegram_username)
+     VALUES ($1, $2)
+     RETURNING *`,
+    [telegramId, username || null]
+  );
+  return insertRes.rows[0];
+}
+
+function buildTestOrderDeliveryCaption(order) {
+  const productName = String(order?.product_name || "Producto de prueba").trim() || "Producto de prueba";
+  return (
+    "🧪 <b>Entrega de prueba completada</b>\n\n"
+    + `📦 Producto: <b>${escapeHtml(productName)}</b>\n`
+    + "✅ Esta orden era solo de prueba.\n"
+    + "🚫 No se descontó stock real ni suma ventas/ganancias.\n"
+    + "🧹 Se eliminará automáticamente en 2 minutos."
+  );
+}
+
+async function deliverTestOrderToTelegram(order) {
+  const caption = buildTestOrderDeliveryCaption(order);
+  const imageUrl = String(order?.product_image_url || "").trim();
+  if (imageUrl) {
+    try {
+      await sendPhoto(order.telegram_id, {
+        url: imageUrl,
+        caption,
+        parse_mode: "HTML",
+      });
+      return { delivered: true, method: "photo" };
+    } catch (error) {
+      console.error("Test order photo delivery failed", error);
+    }
+  }
+  await sendMessage(order.telegram_id, caption, { parse_mode: "HTML" });
+  return { delivered: true, method: "text" };
 }
 
 async function recalcSkuKeys(client) {
@@ -5209,9 +5291,13 @@ router.get("/orders", async (req, res, next) => {
       filters.push(
         "(o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
       );
+      filters.push("COALESCE(o.is_scam, false) = false");
+    } else if (status === "SCAM") {
+      filters.push("COALESCE(o.is_scam, false) = true");
     } else if (status) {
       values.push(status);
       filters.push(`o.status = $${values.length}`);
+      filters.push("COALESCE(o.is_scam, false) = false");
       if (status === "EXPIRED") {
         filters.push(
           "(o.free_order_number IS NULL AND COALESCE(o.unit_price_at_purchase, 0) > 0)"
@@ -5222,9 +5308,13 @@ router.get("/orders", async (req, res, next) => {
     filters.push(
       "(o.free_order_number IS NOT NULL OR COALESCE(o.unit_price_at_purchase, 0) <= 0)"
     );
+    filters.push("COALESCE(o.is_scam, false) = false");
+  } else if (status === "SCAM") {
+    filters.push("COALESCE(o.is_scam, false) = true");
   } else if (status) {
     values.push(status);
     filters.push(`o.status = $${values.length}`);
+    filters.push("COALESCE(o.is_scam, false) = false");
     if (status === "EXPIRED") {
       filters.push(
         "(o.free_order_number IS NULL AND COALESCE(o.unit_price_at_purchase, 0) > 0)"
@@ -5271,6 +5361,8 @@ router.get("/orders", async (req, res, next) => {
                               o.released_order_number,
                               o.free_order_number,
                               o.is_scam,
+                              o.is_test,
+                              o.test_cleanup_after,
                               o.scam_flagged_at,
                               o.scam_reason,
                               o.unit_price_at_purchase,
@@ -5317,7 +5409,11 @@ router.get("/orders/status-counts", async (req, res, next) => {
   try {
     await syncExpiredWaitingPaymentOrders(pool);
     const countsQuery = includeAll
-      ? `SELECT o.status, COUNT(*)::int AS count
+      ? `SELECT CASE
+                WHEN COALESCE(o.is_scam, false) THEN 'SCAM'
+                ELSE o.status::text
+              END AS status,
+              COUNT(*)::int AS count
          FROM orders o
          WHERE NOT (
            o.status = 'EXPIRED'
@@ -5326,8 +5422,12 @@ router.get("/orders/status-counts", async (req, res, next) => {
              OR COALESCE(o.unit_price_at_purchase, 0) <= 0
            )
          )
-         GROUP BY o.status`
-      : `SELECT o.status, COUNT(*)::int AS count
+         GROUP BY 1`
+      : `SELECT CASE
+                WHEN COALESCE(o.is_scam, false) THEN 'SCAM'
+                ELSE o.status::text
+              END AS status,
+              COUNT(*)::int AS count
          FROM orders o
          LEFT JOIN order_payments op ON op.order_id = o.id
          WHERE (
@@ -5345,7 +5445,7 @@ router.get("/orders/status-counts", async (req, res, next) => {
                 OR COALESCE(o.unit_price_at_purchase, 0) <= 0
               )
             )
-         GROUP BY o.status`;
+         GROUP BY 1`;
     const countsRes = await pool.query(countsQuery);
     const freeCountRes = await pool.query(
       `SELECT COUNT(*)::int AS count
@@ -5361,6 +5461,77 @@ router.get("/orders/status-counts", async (req, res, next) => {
     return res.json({ counts });
   } catch (error) {
     return next(error);
+  }
+});
+
+router.post("/orders/test", async (req, res, next) => {
+  const telegramId = Number(req.body?.telegram_id);
+  const usernameRaw = String(req.body?.username || "").trim();
+  const username = usernameRaw ? usernameRaw.replace(/^@+/, "") : null;
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "TELEGRAM_ID_REQUIRED" });
+  }
+
+  const pool = getPool();
+  await ensureProductCategorySchema(pool);
+  await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const user = await ensureUserByTelegram(client, telegramId, username);
+    const productRes = await client.query(
+      `SELECT id,
+              code,
+              name,
+              price,
+              image_url
+       FROM products
+       WHERE is_active = true
+         AND COALESCE(price, 0) > 0
+       ORDER BY random()
+       LIMIT 1`
+    );
+    if (productRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "NO_ACTIVE_PRODUCT_FOR_TEST_ORDER" });
+    }
+
+    const product = productRes.rows[0];
+    const unitPrice = Number(product.price || 0);
+    const orderInsertRes = await client.query(
+      `INSERT INTO orders
+        (user_id, product_id, affiliate_id, status, unit_price_at_purchase, is_test)
+       VALUES ($1, $2, NULL, 'WAITING_PAYMENT', $3, true)
+       RETURNING *`,
+      [user.id, product.id, unitPrice]
+    );
+    const order = orderInsertRes.rows[0];
+
+    await client.query(
+      `INSERT INTO order_items
+        (order_id, product_id, qty, unit_price_usd, total_price_usd, line_total_usd, price_usd)
+       VALUES ($1, $2, 1, $3, $3, $3, $3)`,
+      [order.id, product.id, unitPrice]
+    );
+
+    await client.query("COMMIT");
+
+    return res.status(201).json({
+      order: {
+        ...order,
+        total: unitPrice,
+        order_number_label: "Prueba",
+      },
+      product: product,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -5640,6 +5811,8 @@ router.get("/orders/:id", async (req, res, next) => {
         free_order_label: formatFreeOrderLabel(order.free_order_number),
         is_free_order: orderIsFree,
         is_scam: Boolean(order.is_scam),
+        is_test: Boolean(order.is_test),
+        test_cleanup_after: order.test_cleanup_after || null,
         scam_flagged_at: order.scam_flagged_at,
         scam_reason: order.scam_reason,
         status: order.status,
@@ -6092,6 +6265,7 @@ router.get("/summary", async (req, res, next) => {
        FROM orders o
        LEFT JOIN order_payments op ON op.order_id = o.id
        WHERE o.status = 'WAITING_PAYMENT'
+         AND COALESCE(o.is_test, false) = false
          AND (
            (op.id IS NOT NULL AND op.review_status = 'PENDING')
            OR (
@@ -6105,9 +6279,10 @@ router.get("/summary", async (req, res, next) => {
     );
 
     const customersRes = await pool.query(
-      `SELECT COUNT(DISTINCT o.user_id)::int AS count
+       `SELECT COUNT(DISTINCT o.user_id)::int AS count
        FROM orders o
-       WHERE o.status IN ('PAID', 'DELIVERED')`
+       WHERE o.status IN ('PAID', 'DELIVERED')
+         AND COALESCE(o.is_test, false) = false`
     );
 
     const usersTotalRes = await pool.query(
@@ -6116,16 +6291,18 @@ router.get("/summary", async (req, res, next) => {
     );
 
     const salesRes = await pool.query(
-      `SELECT COUNT(*)::int AS count
+       `SELECT COUNT(*)::int AS count
        FROM orders o
-       WHERE o.status IN ('PAID', 'DELIVERED')`
+       WHERE o.status IN ('PAID', 'DELIVERED')
+         AND COALESCE(o.is_test, false) = false`
     );
 
     const revenueRes = await pool.query(
-      `SELECT COALESCE(SUM(oi.line_total_usd), 0)::numeric AS total
+       `SELECT COALESCE(SUM(oi.line_total_usd), 0)::numeric AS total
        FROM order_items oi
        JOIN orders o ON o.id = oi.order_id
-       WHERE o.status IN ('PAID', 'DELIVERED')`
+       WHERE o.status IN ('PAID', 'DELIVERED')
+         AND COALESCE(o.is_test, false) = false`
     );
 
     const productsRes = await pool.query(
@@ -6229,6 +6406,7 @@ router.get("/stats/sales-insights", async (req, res, next) => {
          LEFT JOIN products p ON p.id = oi.product_id
          WHERE o.status IN ('PAID', 'DELIVERED')
            AND o.free_order_number IS NULL
+           AND COALESCE(o.is_test, false) = false
          GROUP BY o.id, COALESCE(o.paid_at, o.delivered_at, o.created_at)
          HAVING COALESCE(
            SUM(
@@ -6279,6 +6457,7 @@ router.get("/stats/sales-insights", async (req, res, next) => {
          JOIN orders o ON o.id = oi.order_id
          LEFT JOIN products p ON p.id = oi.product_id
          WHERE o.status IN ('PAID', 'DELIVERED')
+           AND COALESCE(o.is_test, false) = false
            AND COALESCE(o.paid_at, o.delivered_at, o.created_at) >= $1
            AND COALESCE(o.paid_at, o.delivered_at, o.created_at) < $2`,
         [start.toISOString(), end.toISOString()]
@@ -6306,6 +6485,7 @@ router.get("/stats/sales-insights", async (req, res, next) => {
            JOIN orders o ON o.id = oi.order_id
            LEFT JOIN products p ON p.id = oi.product_id
            WHERE o.status IN ('PAID', 'DELIVERED')
+             AND COALESCE(o.is_test, false) = false
            GROUP BY 1
          ) daily
          ORDER BY total DESC, day DESC
@@ -6371,7 +6551,8 @@ router.get("/stats/top-products-month", async (req, res, next) => {
     const firstSaleRes = await pool.query(
       `SELECT MIN(COALESCE(paid_at, delivered_at, created_at)) AS first_sale_at
        FROM orders
-       WHERE status IN ('PAID', 'DELIVERED')`
+       WHERE status IN ('PAID', 'DELIVERED')
+         AND COALESCE(is_test, false) = false`
     );
     const firstSaleRaw = firstSaleRes.rows[0]?.first_sale_at || null;
     const firstSaleAt = firstSaleRaw ? new Date(firstSaleRaw) : null;
@@ -6403,6 +6584,7 @@ router.get("/stats/top-products-month", async (req, res, next) => {
        JOIN orders o ON o.id = oi.order_id
        LEFT JOIN products p ON p.id = oi.product_id
        WHERE o.status IN ('PAID', 'DELIVERED')
+         AND COALESCE(o.is_test, false) = false
          AND COALESCE(o.paid_at, o.delivered_at, o.created_at) >= $1
          AND COALESCE(o.paid_at, o.delivered_at, o.created_at) < $2
        GROUP BY oi.product_id, p.name
@@ -6864,6 +7046,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       `SELECT o.*, u.telegram_id, u.telegram_username,
               p.name AS product_name,
               p.price AS product_price,
+              p.image_url AS product_image_url,
               p.delivery_type,
               p.delivery_payload,
               p.delivery_template,
@@ -6891,17 +7074,24 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       await client.query("ROLLBACK");
       if (order.status === "PAID" && !order.delivered_at) {
         console.log("[admin/approve] retry_delivery", { order_id: orderId });
-        const deliveryResult = await deliverOrderToTelegram({
-          dbClient: pool,
-          orderId: order.id,
-          telegramId: order.telegram_id,
-        });
+        const deliveryResult = isTestOrderRow(order)
+          ? await deliverTestOrderToTelegram(order)
+          : await deliverOrderToTelegram({
+            dbClient: pool,
+            orderId: order.id,
+            telegramId: order.telegram_id,
+          });
         if (deliveryResult.delivered) {
           await pool.query(
             `UPDATE orders
-             SET status = 'DELIVERED', delivered_at = now()
+             SET status = 'DELIVERED',
+                 delivered_at = now(),
+                 test_cleanup_after = CASE
+                   WHEN is_test THEN now() + ($2 * interval '1 second')
+                   ELSE test_cleanup_after
+                 END
              WHERE id = $1`,
-            [order.id]
+            [order.id, getTestOrderCleanupSeconds()]
           );
         }
         return res.json({
@@ -6927,23 +7117,25 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       return res.status(400).json({ error: "NO_PAYMENT_PROOF" });
     }
 
-    try {
-      await consumeStockForOrder(client, order.id);
-    } catch (error) {
-      await client.query("ROLLBACK");
-      if (error.code === "INSUFFICIENT_STOCK") {
-        return res.status(409).json({
-          ok: false,
-          code: "INSUFFICIENT_STOCK",
-          message: "Stock insuficiente para aprobar la orden.",
-          available: error.available ?? null,
-        });
+    if (!isTestOrderRow(order)) {
+      try {
+        await consumeStockForOrder(client, order.id);
+      } catch (error) {
+        await client.query("ROLLBACK");
+        if (error.code === "INSUFFICIENT_STOCK") {
+          return res.status(409).json({
+            ok: false,
+            code: "INSUFFICIENT_STOCK",
+            message: "Stock insuficiente para aprobar la orden.",
+            available: error.available ?? null,
+          });
+        }
+        throw error;
       }
-      throw error;
+      console.log("[admin/approve] consumed_stock", { order_id: orderId });
     }
-    console.log("[admin/approve] consumed_stock", { order_id: orderId });
 
-    if (!isFreeOrder) {
+    if (!isFreeOrder && !isTestOrderRow(order)) {
       await ensureOrderNumberForOrder(client, orderId);
     }
 
@@ -6951,7 +7143,10 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       `UPDATE orders
        SET status = 'PAID',
            paid_at = now(),
-           order_number = order_number
+           order_number = CASE
+             WHEN is_test THEN NULL
+             ELSE order_number
+           END
        WHERE id = $1
        RETURNING *`,
       [orderId]
@@ -6977,7 +7172,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       ]
     );
 
-    if (order.affiliate_id) {
+    if (order.affiliate_id && !isTestOrderRow(order)) {
       const statsRes = await client.query(
         `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
                 COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
@@ -7117,7 +7312,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       console.error("Telegram congratulations failed", err);
     }
 
-    if (order.affiliate_id) {
+    if (order.affiliate_id && !isTestOrderRow(order)) {
       try {
         const affiliateUserRes = await pool.query(
           `SELECT u.telegram_id
@@ -7198,7 +7393,7 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       }
     }
 
-    if (!isFreeOrder) {
+    if (!isFreeOrder && !isTestOrderRow(order)) {
       let receipt = "";
       try {
         let items = [];
@@ -7369,6 +7564,43 @@ router.post("/orders/:id/mark-paid", async (req, res, next) => {
       } catch (err) {
         console.error("Telegram content notice failed", err);
       }
+    }
+
+    if (isTestOrderRow(order)) {
+      let deliveryResult = { delivered: false, error: null };
+      try {
+        deliveryResult = await deliverTestOrderToTelegram(order);
+      } catch (error) {
+        console.error("Test order delivery failed", error);
+        deliveryResult = {
+          delivered: false,
+          error: error?.message || "TEST_DELIVERY_FAILED",
+        };
+      }
+
+      const finalOrderRes = await pool.query(
+        `UPDATE orders
+         SET status = CASE
+               WHEN $2::boolean THEN 'DELIVERED'::order_status
+               ELSE status
+             END,
+             delivered_at = CASE
+               WHEN $2::boolean THEN now()
+               ELSE delivered_at
+             END,
+             test_cleanup_after = now() + ($3 * interval '1 second')
+         WHERE id = $1
+         RETURNING *`,
+        [order.id, Boolean(deliveryResult.delivered), getTestOrderCleanupSeconds()]
+      );
+      await updateAdminOrderNotifications(pool, order.id);
+      return res.json({
+        ok: true,
+        delivered: Boolean(deliveryResult.delivered),
+        delivery_error: deliveryResult.error || null,
+        test_order: true,
+        order: finalOrderRes.rows[0] || updatedOrderRes.rows[0],
+      });
     }
 
     console.log("[order-delivery] scheduled", {
@@ -7693,7 +7925,7 @@ router.post("/orders/:id/reject", async (req, res, next) => {
 
     const nextStatus = mode === "retry" ? "CREATED" : "CANCELLED";
 
-    if (!isFreeOrder && nextStatus === "CANCELLED") {
+    if (!isFreeOrder && nextStatus === "CANCELLED" && !isTestOrderRow(orderRow)) {
       await ensureOrderNumberForOrder(client, orderId);
     }
 
@@ -7702,10 +7934,17 @@ router.post("/orders/:id/reject", async (req, res, next) => {
        SET status = $2::order_status,
            cancelled_at = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN now() ELSE cancelled_at END,
            cancel_source = CASE WHEN $2::order_status = 'CANCELLED'::order_status THEN 'ADMIN' ELSE cancel_source END,
-           order_number = order_number
+           order_number = CASE
+             WHEN is_test THEN NULL
+             ELSE order_number
+           END,
+           test_cleanup_after = CASE
+             WHEN is_test THEN now() + ($3 * interval '1 second')
+             ELSE test_cleanup_after
+           END
        WHERE id = $1
        RETURNING *`,
-      [orderId, nextStatus]
+      [orderId, nextStatus, getTestOrderCleanupSeconds()]
     );
 
     await releaseStockForOrder(client, orderId);
@@ -7831,7 +8070,9 @@ router.post("/orders/:id/scam", async (req, res, next) => {
 
     await releaseStockForOrder(client, orderId);
 
-    const releasedOrderNumber = Number(order.order_number || 0) || null;
+    const releasedOrderNumber = !isTestOrderRow(order)
+      ? (Number(order.order_number || 0) || null)
+      : null;
     if (releasedOrderNumber) {
       await releaseOrderNumber(client, releasedOrderNumber, orderId, "SCAM");
     }
@@ -7845,13 +8086,18 @@ router.post("/orders/:id/scam", async (req, res, next) => {
            scam_flagged_at = now(),
            scam_reason = $2,
            released_order_number = COALESCE(released_order_number, $3),
-           order_number = NULL
+           order_number = NULL,
+           test_cleanup_after = CASE
+             WHEN is_test THEN now() + ($4 * interval '1 second')
+             ELSE test_cleanup_after
+           END
        WHERE id = $1
        RETURNING *`,
       [
         orderId,
         reason || "Marcada como estafa por admin.",
         releasedOrderNumber,
+        getTestOrderCleanupSeconds(),
       ]
     );
 
@@ -7884,21 +8130,41 @@ router.post("/orders/:id/scam", async (req, res, next) => {
 
     await updateAdminOrderNotifications(pool, orderId);
 
+    let notification = {
+      sent: false,
+      method: null,
+      error: null,
+    };
     try {
       await sendPhoto(order.telegram_id, {
         url: "https://i.ibb.co/ZDbLWHM/images.jpg",
         caption: buildScamCustomerNotification(order),
       });
+      notification = {
+        sent: true,
+        method: "photo",
+        error: null,
+      };
     } catch (err) {
       console.error("Telegram scam notification failed", err);
       try {
         await sendMessage(order.telegram_id, buildScamCustomerNotification(order));
+        notification = {
+          sent: true,
+          method: "text",
+          error: err?.message || "PHOTO_SEND_FAILED",
+        };
       } catch (fallbackErr) {
         console.error("Telegram scam notification fallback failed", fallbackErr);
+        notification = {
+          sent: false,
+          method: null,
+          error: fallbackErr?.message || err?.message || "SCAM_NOTIFICATION_FAILED",
+        };
       }
     }
 
-    return res.json({ order: updatedOrderRes.rows[0] });
+    return res.json({ order: updatedOrderRes.rows[0], notification });
   } catch (error) {
     await client.query("ROLLBACK");
     return next(error);

@@ -1,13 +1,22 @@
 const { getPool } = require("../db");
-const { sendMessage } = require("./telegram");
+const { sendMessage, deleteMessage } = require("./telegram");
 const { ensureFreeOrderSchema } = require("./freeOrders");
+const { ensureOrderNumberSchema } = require("./orderNumbers");
 
 let timer = null;
+let cleanupTimer = null;
 let running = false;
 let cachedBotUsername = "";
 let cachedBotUsernameAt = 0;
 const BOT_USERNAME_CACHE_TTL_MS = 10 * 60 * 1000;
 const FOLLOWUP_NOTIFIED_ORDERS = new Set();
+
+function getTestOrderCleanupSeconds() {
+  return Math.max(
+    parseInt(process.env.TEST_ORDER_CLEANUP_SECONDS || "120", 10) || 120,
+    10
+  );
+}
 
 function escapeHtml(value) {
   return String(value || "")
@@ -163,12 +172,14 @@ async function expireWaitingPaymentOrders() {
 
   try {
     await ensureFreeOrderSchema(pool);
+    await ensureOrderNumberSchema(pool);
     client = await pool.connect();
     await client.query("BEGIN");
 
     const ordersRes = await client.query(
       `SELECT o.id,
               o.product_id,
+              o.is_test,
               p.code AS product_code,
               p.name AS product_name,
               u.telegram_id
@@ -192,10 +203,14 @@ async function expireWaitingPaymentOrders() {
          SET status = 'EXPIRED',
              cancelled_at = now(),
              cancel_source = 'EXPIRED',
-             order_number = NULL
+             order_number = NULL,
+             test_cleanup_after = CASE
+               WHEN is_test THEN now() + ($2 * interval '1 second')
+               ELSE test_cleanup_after
+             END
          WHERE id = $1 AND status = 'WAITING_PAYMENT'
          RETURNING id`,
-        [order.id]
+        [order.id, getTestOrderCleanupSeconds()]
       );
 
       if (updateRes.rowCount === 0) {
@@ -260,8 +275,103 @@ async function expireWaitingPaymentOrders() {
   }
 }
 
+async function purgeFinishedTestOrders() {
+  const pool = getPool();
+  await ensureOrderNumberSchema(pool);
+  const client = await pool.connect();
+  const orderIds = [];
+  const notificationsByOrder = new Map();
+
+  try {
+    await client.query("BEGIN");
+    const ordersRes = await client.query(
+      `SELECT id
+       FROM orders
+       WHERE is_test = true
+         AND test_cleanup_after IS NOT NULL
+         AND test_cleanup_after <= now()
+       FOR UPDATE SKIP LOCKED`
+    );
+
+    for (const row of ordersRes.rows) {
+      const orderId = row.id;
+      const notificationsRes = await client.query(
+        `SELECT admin_telegram_id, message_id
+         FROM order_admin_notifications
+         WHERE order_id = $1`,
+        [orderId]
+      );
+      notificationsByOrder.set(orderId, notificationsRes.rows || []);
+      await client.query(
+        `UPDATE product_stock_units
+         SET status = 'AVAILABLE',
+             held_by_order_id = NULL,
+             held_by_telegram_id = NULL,
+             held_by_username = NULL,
+             held_at = NULL,
+             updated_at = now()
+         WHERE held_by_order_id = $1`,
+        [orderId]
+      );
+      await client.query(
+        `UPDATE product_stock_holds
+         SET status = 'EXPIRED',
+             updated_at = now()
+         WHERE order_id = $1
+           AND status = 'HELD'`,
+        [orderId]
+      );
+      await client.query(
+        `DELETE FROM order_admin_notifications
+         WHERE order_id = $1`,
+        [orderId]
+      );
+      await client.query(
+        `DELETE FROM audit_logs
+         WHERE entity_type = 'order'
+           AND entity_id = $1`,
+        [orderId]
+      );
+      await client.query(
+        `DELETE FROM orders
+         WHERE id = $1
+           AND is_test = true`,
+        [orderId]
+      );
+      orderIds.push(orderId);
+    }
+
+    await client.query("COMMIT");
+  } catch (error) {
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error("[test-order-cleanup] rollback failed:", rollbackError);
+    }
+    console.error("[test-order-cleanup] failed:", error);
+    return;
+  } finally {
+    client.release();
+  }
+
+  for (const orderId of orderIds) {
+    try {
+      const notifications = notificationsByOrder.get(orderId) || [];
+      await Promise.all(
+        notifications.map((row) =>
+          deleteMessage(row.admin_telegram_id, row.message_id).catch((error) => {
+            console.error("[test-order-cleanup] notification delete failed:", error);
+          })
+        )
+      );
+    } catch (error) {
+      console.error("[test-order-cleanup] notification lookup failed:", error);
+    }
+  }
+}
+
 function startOrderExpiryJob() {
-  if (timer) {
+  if (timer || cleanupTimer) {
     return timer;
   }
   const intervalMs = Math.max(
@@ -269,7 +379,9 @@ function startOrderExpiryJob() {
     1000
   );
   timer = setInterval(expireWaitingPaymentOrders, intervalMs);
+  cleanupTimer = setInterval(purgeFinishedTestOrders, intervalMs);
   expireWaitingPaymentOrders();
+  purgeFinishedTestOrders();
   return timer;
 }
 
