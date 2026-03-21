@@ -2054,26 +2054,22 @@ async function resolveOrderLookupId(db, rawRef, orderNumber) {
       `SELECT id
        FROM orders
        WHERE order_number = $1
-       ORDER BY created_at DESC, id DESC
+          OR released_order_number = $1
+          OR free_order_number = $1
+       ORDER BY
+         CASE
+           WHEN order_number = $1 THEN 0
+           WHEN released_order_number = $1 THEN 1
+           WHEN free_order_number = $1 THEN 2
+           ELSE 3
+         END,
+         created_at DESC,
+         id DESC
        LIMIT 1`,
       [orderNumber]
     );
     if (exactNumberRes.rowCount > 0) {
       return exactNumberRes.rows[0].id;
-    }
-  }
-
-  if (Number.isFinite(orderNumber) && orderNumber > 0) {
-    const fallbackRes = await db.query(
-      `SELECT id
-       FROM orders
-       ORDER BY created_at ASC, id ASC
-       OFFSET ($1::bigint - 1)
-       LIMIT 1`,
-      [orderNumber]
-    );
-    if (fallbackRes.rowCount > 0) {
-      return fallbackRes.rows[0].id;
     }
   }
 

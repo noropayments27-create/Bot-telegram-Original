@@ -72,11 +72,11 @@ async def _prepare_photo_for_telegram(photo: str):
                     source,
                     content_type or "-",
                 )
-                return source
+                return None
             body = response.content or b""
             if not body:
                 logger.warning("photo_fetch_empty_body source=%s", source)
-                return source
+                return None
             if len(body) > _PHOTO_FETCH_MAX_BYTES:
                 logger.warning(
                     "photo_fetch_too_large source=%s bytes=%s max_bytes=%s",
@@ -84,12 +84,12 @@ async def _prepare_photo_for_telegram(photo: str):
                     len(body),
                     _PHOTO_FETCH_MAX_BYTES,
                 )
-                return source
+                return None
             filename = _guess_photo_filename(str(response.url), content_type)
             return BufferedInputFile(body, filename=filename)
     except Exception as exc:
         logger.warning("photo_fetch_failed source=%s error=%s", source, str(exc))
-        return source
+        return None
 
 
 def _log_telegram_error(
@@ -319,6 +319,15 @@ async def render_main_view_with_photo(
     chat_id = message.chat.id
     message_id = _MAIN_MESSAGE_BY_USER.get(user_id)
     prepared_photo = await _prepare_photo_for_telegram(photo)
+    if prepared_photo is None:
+        return await render_main_view(
+            message,
+            user_id,
+            text,
+            reply_markup=reply_markup,
+            parse_mode=parse_mode,
+            push_history=push_history,
+        )
     media = InputMediaPhoto(media=prepared_photo, caption=text, parse_mode=parse_mode)
 
     if message_id:
@@ -365,6 +374,15 @@ async def render_main_view_with_photo(
 
     try:
         prepared_photo = await _prepare_photo_for_telegram(photo)
+        if prepared_photo is None:
+            return await render_main_view(
+                message,
+                user_id,
+                text,
+                reply_markup=reply_markup,
+                parse_mode=parse_mode,
+                push_history=push_history,
+            )
         sent = await message.answer_photo(
             photo=prepared_photo,
             caption=text,

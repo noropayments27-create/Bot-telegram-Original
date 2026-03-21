@@ -232,6 +232,9 @@ function buildOrderNotificationCaption({
     : String(order?.product_name || "-");
 
   const paymentMethod = payment?.payment_method || order?.payment_method || null;
+  const paymentStatusText = order?.is_scam
+    ? "🚨 Estafa"
+    : escapeHtml(formatPaymentStatus(payment?.review_status));
 
   const lines = [
     "🧾 Detalle de la Orden",
@@ -274,7 +277,7 @@ function buildOrderNotificationCaption({
     "",
     "💳 Pago",
     `🏦 Método: ${escapeHtml(formatPaymentMethod(paymentMethod))}`,
-    `📉 Estado del pago: ${escapeHtml(formatPaymentStatus(payment?.review_status))}`,
+    `📉 Estado del pago: ${paymentStatusText}`,
     `⏰ Enviado: ${formatBogotaDateTime(payment?.submitted_at)}`,
     "",
     "🗓️ Información adicional",

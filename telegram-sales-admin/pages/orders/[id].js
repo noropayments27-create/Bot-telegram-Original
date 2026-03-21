@@ -109,6 +109,13 @@ function formatOrderStatusForOrder(order, detail = null) {
   return formatOrderStatus(order.status);
 }
 
+function formatPaymentReviewForOrder(order, payment) {
+  if (order?.is_scam === true) {
+    return "ESTAFA";
+  }
+  return formatOrderStatus(payment?.review_status);
+}
+
 export default function OrderDetail() {
   const router = useRouter();
   const { id } = router.query;
@@ -399,7 +406,7 @@ export default function OrderDetail() {
           <>
             <p>Método: {formatPaymentMethod(payment.payment_method)}</p>
             <p>ID de archivo: {payment.screenshot_file_id}</p>
-            <p>Estado de revisión: {payment.review_status}</p>
+            <p>Estado de revisión: {formatPaymentReviewForOrder(order, payment)}</p>
             <p>Enviado: {new Date(payment.submitted_at).toLocaleString()}</p>
           </>
         ) : (

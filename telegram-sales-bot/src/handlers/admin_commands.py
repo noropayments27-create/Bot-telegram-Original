@@ -183,6 +183,16 @@ def _order_status_display(order: Dict[str, Any] | None, locale: str | None) -> s
     return _order_status_text((order or {}).get("status"), locale)
 
 
+def _payment_review_display(
+    order: Dict[str, Any] | None,
+    payment: Dict[str, Any] | None,
+    locale: str | None,
+) -> str:
+    if _is_scam_order(order):
+        return _order_status_text("SCAM", locale)
+    return _payment_review_text((payment or {}).get("review_status"), locale)
+
+
 def _build_order_not_found_text(payload: Dict[str, Any], locale: str | None) -> str:
     lookup = payload.get("order_lookup") if isinstance(payload, dict) else None
     if not isinstance(lookup, dict):
@@ -3149,7 +3159,7 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
         + f"• Username: @{_escape_html(user.get('telegram_username') or '-')}\n\n"
         + _tr(locale, "💳 <b>Pago</b>\n", "💳 <b>Payment</b>\n")
         + f"• {_tr(locale, 'Método', 'Method')}: <b>{_escape_html(payment.get('payment_method') or '-')}</b>\n"
-        + f"• {_tr(locale, 'Revisión', 'Review')}: <b>{_escape_html(_payment_review_text(payment.get('review_status'), locale))}</b>\n\n"
+        + f"• {_tr(locale, 'Revisión', 'Review')}: <b>{_escape_html(_payment_review_display(order, payment, locale))}</b>\n\n"
         + _tr(locale, "💰 <b>Totales</b>\n", "💰 <b>Totals</b>\n")
         + f"• USD: <b>${_fmt_amount(totals.get('total_usd'))}</b>\n"
         + f"• Markup: <b>{markup_text}</b>\n"
