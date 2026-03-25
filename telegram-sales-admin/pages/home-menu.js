@@ -32,6 +32,7 @@ const SECTION_DEFAULT_LAYOUTS = {
           { label: "👥 Comunidad", action: "home:community" },
           { label: "🆘 Soporte", action: "home:support" },
         ],
+        [{ label: "💰 Mi saldo", action: "home:wallet" }],
         [{ label: "🌐 Idioma", action: "home:soon:idioma" }],
       ],
     },
@@ -54,6 +55,7 @@ const SECTION_DEFAULT_LAYOUTS = {
           { label: "👥 Community", action: "home:community" },
           { label: "🆘 Support", action: "home:support" },
         ],
+        [{ label: "💰 My balance", action: "home:wallet" }],
         [{ label: "🌐 Language", action: "home:soon:idioma" }],
       ],
     },
@@ -297,6 +299,29 @@ function normalizeRows(rawButtons) {
   return rows;
 }
 
+function ensureWalletButton(rows, locale = "es") {
+  const walletAction = "home:wallet";
+  if (
+    rows.some((row) =>
+      row.some((button) => String(button?.action || "").trim() === walletAction)
+    )
+  ) {
+    return rows;
+  }
+  const nextRows = rows.map((row) => row.slice(0, 2));
+  let insertIndex = nextRows.length;
+  for (let index = 0; index < nextRows.length; index += 1) {
+    const actions = new Set(
+      nextRows[index].map((button) => String(button?.action || "").trim())
+    );
+    if (actions.has("home:community") || actions.has("home:support")) {
+      insertIndex = index + 1;
+    }
+  }
+  nextRows.splice(insertIndex, 0, [{ label: locale === "en" ? "💰 My balance" : "💰 Mi saldo", action: walletAction }]);
+  return nextRows;
+}
+
 function normalizeLayout(raw) {
   const source = raw && typeof raw === "object" ? raw : {};
   const layout = {};
@@ -306,7 +331,7 @@ function normalizeLayout(raw) {
       : {};
     layout[locale] = {
       text: String(localized.text || ""),
-      buttons: normalizeRows(localized.buttons),
+      buttons: ensureWalletButton(normalizeRows(localized.buttons), locale),
     };
   }
   return layout;

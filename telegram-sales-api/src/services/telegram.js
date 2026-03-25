@@ -270,6 +270,10 @@ async function sendAnimation(telegramId, payload) {
   return sendMedia(telegramId, "sendAnimation", "animation", payload);
 }
 
+async function sendSticker(telegramId, payload) {
+  return sendMedia(telegramId, "sendSticker", "sticker", payload);
+}
+
 async function editMessageCaption(telegramId, messageId, caption, options = {}) {
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/bot${token}/editMessageCaption`;
@@ -277,6 +281,37 @@ async function editMessageCaption(telegramId, messageId, caption, options = {}) 
     chat_id: telegramId,
     message_id: messageId,
     caption,
+  };
+  if (options.parse_mode) {
+    body.parse_mode = options.parse_mode;
+  }
+  if (options.reply_markup) {
+    body.reply_markup = options.reply_markup;
+  }
+
+  const response = await fetch(url, {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    throw new Error("TELEGRAM_EDIT_FAILED");
+  }
+  const data = await response.json();
+  if (!data.ok) {
+    throw new Error("TELEGRAM_EDIT_FAILED");
+  }
+  return data.result;
+}
+
+async function editMessageText(telegramId, messageId, text, options = {}) {
+  const token = getToken();
+  const url = `${TELEGRAM_API_BASE}/bot${token}/editMessageText`;
+  const body = {
+    chat_id: telegramId,
+    message_id: messageId,
+    text,
   };
   if (options.parse_mode) {
     body.parse_mode = options.parse_mode;
@@ -310,5 +345,7 @@ module.exports = {
   sendPhoto,
   sendVideo,
   sendAnimation,
+  sendSticker,
   editMessageCaption,
+  editMessageText,
 };

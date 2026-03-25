@@ -29,6 +29,7 @@ async def _request_with_retry(fn, attempts: int = 3, delay: float = 0.35) -> Any
 
 class ApiClient:
     _shared_clients: Dict[str, httpx.AsyncClient] = {}
+    _shared_cache: Dict[str, tuple[float, Any]] = {}
 
     def __init__(
         self,
@@ -61,6 +62,27 @@ class ApiClient:
         client = httpx.AsyncClient()
         self._shared_clients[key] = client
         return client
+
+    def _cache_key(self, scope: str, value: Any = None) -> str:
+        suffix = "" if value is None else f":{value}"
+        return f"{self.base_url}:{scope}{suffix}"
+
+    def _cache_get(self, key: str) -> Any | None:
+        cached = self._shared_cache.get(key)
+        if not cached:
+            return None
+        expires_at, value = cached
+        if expires_at <= time.monotonic():
+            self._shared_cache.pop(key, None)
+            return None
+        return value
+
+    def _cache_set(self, key: str, value: Any, ttl_seconds: float) -> Any:
+        self._shared_cache[key] = (time.monotonic() + max(ttl_seconds, 0), value)
+        return value
+
+    def _cache_pop(self, key: str) -> None:
+        self._shared_cache.pop(key, None)
 
     async def _request(
         self,
@@ -156,6 +178,21 @@ class ApiClient:
             timeout=PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS,
         )
         response.raise_for_status()
+        return response.json()
+
+    async def pay_order_with_wallet(self, order_id: str, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/orders/{order_id}/pay-with-wallet"
+        response = await self._request(
+            "POST",
+            url,
+            json={"telegram_id": telegram_id},
+            headers=self._headers(),
+            timeout=60,
+        )
+        if response.status_code == 409:
+            return {"status_code": 409, "data": response.json()}
+        response.raise_for_status()
+        self._cache_pop(self._cache_key("wallet", telegram_id))
         return response.json()
 
     async def admin_get_maintenance(self) -> Dict[str, Any]:
@@ -428,6 +465,158 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_list_publish_targets(
+        self,
+        *,
+        scope: str = "all",
+        include_inactive: bool = False,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publish-targets"
+        params: Dict[str, Any] = {"scope": scope}
+        if include_inactive:
+            params["include_inactive"] = 1
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params=params,
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_send_publication(
+        self,
+        *,
+        scope: str = "all",
+        message: str,
+        buttons: Optional[list[Dict[str, str]]] = None,
+        media_file_id: Optional[str] = None,
+        media_kind: Optional[str] = None,
+        message_entities: Optional[list[Dict[str, Any]]] = None,
+        chat_ids: Optional[list[int | str]] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications/send"
+        payload: Dict[str, Any] = {
+            "scope": scope,
+            "message": message,
+        }
+        if buttons is not None:
+            payload["buttons"] = buttons
+        if media_file_id:
+            payload["media_file_id"] = media_file_id
+        if media_kind:
+            payload["media_kind"] = media_kind
+        if message_entities is not None:
+            payload["message_entities"] = message_entities
+        if chat_ids:
+            payload["chat_ids"] = chat_ids
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=180,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_create_publication(
+        self,
+        *,
+        message: str,
+        buttons: Optional[list[Dict[str, str]]] = None,
+        media_file_id: Optional[str] = None,
+        media_kind: Optional[str] = None,
+        message_entities: Optional[list[Dict[str, Any]]] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications"
+        payload: Dict[str, Any] = {"message": message}
+        if buttons is not None:
+            payload["buttons"] = buttons
+        if media_file_id:
+            payload["media_file_id"] = media_file_id
+        if media_kind:
+            payload["media_kind"] = media_kind
+        if message_entities is not None:
+            payload["message_entities"] = message_entities
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_list_publications(self, page: int = 1, page_size: int = 20) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={"page": page, "page_size": page_size},
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_get_publication(self, publication_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications/{publication_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(url, headers=self._headers(), timeout=20)
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_update_publication(
+        self,
+        publication_id: str,
+        payload: Dict[str, Any],
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications/{publication_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.patch(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=30,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_delete_publication(self, publication_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications/{publication_id}"
+        async with httpx.AsyncClient() as client:
+            response = await client.delete(
+                url,
+                headers=self._headers(),
+                timeout=20,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_send_saved_publication(
+        self,
+        publication_id: str,
+        *,
+        scope: str = "all",
+        chat_ids: Optional[list[int | str]] = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/publications/{publication_id}/send"
+        payload: Dict[str, Any] = {"scope": scope}
+        if chat_ids:
+            payload["chat_ids"] = chat_ids
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url,
+                json=payload,
+                headers=self._headers(),
+                timeout=180,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def admin_get_logs(self, category: str, limit: int = 10) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/logs"
         async with httpx.AsyncClient() as client:
@@ -474,6 +663,156 @@ class ApiClient:
             )
             response.raise_for_status()
             return response.json()
+
+    async def admin_list_wallet_topups(
+        self,
+        status: str = "SUBMITTED",
+        page: int = 1,
+        page_size: int = 10,
+        include_all: bool = False,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/topups"
+        response = await self._request(
+            "GET",
+            url,
+            params={
+                "status": status,
+                "page": page,
+                "page_size": page_size,
+                "include_all": "1" if include_all else "0",
+            },
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_get_wallet_topup(self, ref: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/topups/{ref}"
+        response = await self._request(
+            "GET",
+            url,
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_approve_wallet_topup(self, ref: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/topups/{ref}/approve"
+        response = await self._request(
+            "POST",
+            url,
+            json={},
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        data = response.json()
+        telegram_id = (data.get("topup") or {}).get("telegram_id")
+        if telegram_id is not None:
+            self._cache_pop(self._cache_key("wallet", telegram_id))
+        return data
+
+    async def admin_reject_wallet_topup(self, ref: str, reason: str | None = None) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/topups/{ref}/reject"
+        payload: Dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_scam_wallet_topup(self, ref: str, reason: str | None = None) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/topups/{ref}/scam"
+        payload: Dict[str, Any] = {}
+        if reason:
+            payload["reason"] = reason
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_list_wallet_gifts(
+        self,
+        *,
+        status: str | None = None,
+        source_kind: str | None = None,
+        page: int = 1,
+        page_size: int = 10,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallet-gifts"
+        params: Dict[str, Any] = {"page": page, "page_size": page_size}
+        if status:
+            params["status"] = status
+        if source_kind:
+            params["source_kind"] = source_kind
+        response = await self._request(
+            "GET",
+            url,
+            params=params,
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_get_wallet_gift(self, gift_id: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallet-gifts/{gift_id}"
+        response = await self._request(
+            "GET",
+            url,
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_get_wallet_user(self, lookup: str | int, limit: int = 20) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/users/{lookup}"
+        response = await self._request(
+            "GET",
+            url,
+            params={"limit": limit},
+            headers=self._headers(),
+            timeout=20,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def admin_adjust_wallet(
+        self,
+        telegram_id: int,
+        amount: float,
+        reason: str | None = None,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/wallets/users/{telegram_id}/adjust"
+        payload: Dict[str, Any] = {"amount": amount}
+        if reason is not None:
+            payload["reason"] = reason
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=20,
+        )
+        if response.status_code == 409:
+            return {"status_code": 409, "data": response.json()}
+        response.raise_for_status()
+        self._cache_pop(self._cache_key("wallet", telegram_id))
+        return response.json()
 
     async def admin_get_sales_insights(
         self,
@@ -622,14 +961,22 @@ class ApiClient:
         return response.json()
 
     async def get_payment_methods(self) -> Dict[str, Any]:
+        cache_key = self._cache_key("payment_methods")
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         url = f"{self.base_url}/orders/payment-methods"
         response = await self._request(
             "GET", url, headers=self._headers(), timeout=5
         )
         response.raise_for_status()
-        return response.json()
+        return self._cache_set(cache_key, response.json(), 30)
 
     async def get_user(self, telegram_id: int) -> Dict[str, Any]:
+        cache_key = self._cache_key("user", telegram_id)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         url = f"{self.base_url}/users/{telegram_id}"
 
         async def _do() -> Dict[str, Any]:
@@ -642,7 +989,90 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
-        return await _request_with_retry(_do)
+        result = await _request_with_retry(_do)
+        return self._cache_set(cache_key, result, 15)
+
+    async def get_wallet(self, telegram_id: int) -> Dict[str, Any]:
+        cache_key = self._cache_key("wallet", telegram_id)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        url = f"{self.base_url}/users/{telegram_id}/wallet"
+        response = await self._request(
+            "GET",
+            url,
+            headers=self._headers(),
+            timeout=15,
+        )
+        response.raise_for_status()
+        return self._cache_set(cache_key, response.json(), 8)
+
+    async def get_wallet_history(self, telegram_id: int, limit: int = 10) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/{telegram_id}/wallet/history"
+        response = await self._request(
+            "GET",
+            url,
+            params={"limit": limit},
+            headers=self._headers(),
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def create_wallet_topup(self, telegram_id: int, amount_usd: float) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/{telegram_id}/wallet/topups"
+        response = await self._request(
+            "POST",
+            url,
+            json={"amount_usd": amount_usd},
+            headers=self._headers(),
+            timeout=20,
+        )
+        if response.status_code == 400:
+            return {"status_code": 400, "data": response.json()}
+        response.raise_for_status()
+        return response.json()
+
+    async def get_wallet_topup(self, ref: str, telegram_id: int) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/wallet-topups/{ref}"
+        response = await self._request(
+            "GET",
+            url,
+            params={"telegram_id": telegram_id},
+            headers=self._headers(),
+            timeout=15,
+        )
+        response.raise_for_status()
+        return response.json()
+
+    async def submit_wallet_topup_proof(self, ref: str, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/wallet-topups/{ref}/payment-proof"
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=PAYMENT_PROOF_SUBMIT_TIMEOUT_SECONDS,
+        )
+        if response.status_code in (403, 409, 422):
+            return {"status_code": response.status_code, "data": response.json()}
+        response.raise_for_status()
+        return response.json()
+
+    async def claim_wallet_gift(self, telegram_id: int, claim_token: str) -> Dict[str, Any]:
+        url = f"{self.base_url}/users/wallet-gifts/claim"
+        response = await self._request(
+            "POST",
+            url,
+            json={"telegram_id": telegram_id, "claim_token": claim_token},
+            headers=self._headers(),
+            timeout=30,
+        )
+        if response.status_code in (404, 409):
+            return {"status_code": response.status_code, "data": response.json()}
+        response.raise_for_status()
+        self._cache_pop(self._cache_key("wallet", telegram_id))
+        return response.json()
 
     async def admin_get_layout(self, key: str) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/layouts/{key}"
@@ -674,6 +1104,10 @@ class ApiClient:
         return await _request_with_retry(_do)
 
     async def get_ban_status(self, telegram_id: int) -> Dict[str, Any]:
+        cache_key = self._cache_key("ban", telegram_id)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         url = f"{self.base_url}/users/{telegram_id}/ban"
 
         async def _do() -> Dict[str, Any]:
@@ -686,9 +1120,14 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
-        return await _request_with_retry(_do)
+        result = await _request_with_retry(_do)
+        return self._cache_set(cache_key, result, 8)
 
     async def get_maintenance_status(self) -> Dict[str, Any]:
+        cache_key = self._cache_key("maintenance")
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         url = f"{self.base_url}/bot/maintenance"
 
         async def _do() -> Dict[str, Any]:
@@ -701,9 +1140,14 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
-        return await _request_with_retry(_do)
+        result = await _request_with_retry(_do)
+        return self._cache_set(cache_key, result, 5)
 
     async def get_bot_assets(self) -> Dict[str, Any]:
+        cache_key = self._cache_key("bot_assets")
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         url = f"{self.base_url}/bot/assets"
 
         async def _do() -> Dict[str, Any]:
@@ -716,9 +1160,14 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
-        return await _request_with_retry(_do)
+        result = await _request_with_retry(_do)
+        return self._cache_set(cache_key, result, 30)
 
     async def get_bot_layout(self, key: str) -> Dict[str, Any]:
+        cache_key = self._cache_key("bot_layout", key)
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
         url = f"{self.base_url}/bot/layouts/{key}"
 
         async def _do() -> Dict[str, Any]:
@@ -731,7 +1180,21 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
-        return await _request_with_retry(_do)
+        result = await _request_with_retry(_do)
+        return self._cache_set(cache_key, result, 30)
+
+    async def bot_register_publish_target(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/bot/publish-targets/register"
+        response = await self._request(
+            "POST",
+            url,
+            json=payload,
+            headers=self._headers(),
+            timeout=15,
+            retry=True,
+        )
+        response.raise_for_status()
+        return response.json()
 
     async def get_affiliate_top(
         self, telegram_id: int, period: str = "week"

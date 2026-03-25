@@ -162,6 +162,7 @@ function formatPaymentMethod(method) {
     USDT_BSC: "USDT BSC",
     USDT_TRON: "USDT Tron",
     PAYPAL: "PayPal",
+    WALLET: "Wallet",
   };
   return map[key] || key;
 }

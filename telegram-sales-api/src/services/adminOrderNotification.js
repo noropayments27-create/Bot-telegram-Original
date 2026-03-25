@@ -96,6 +96,7 @@ function formatPaymentMethod(method) {
     USDT_BSC: "USDT BSC",
     USDT_TRON: "USDT Tron",
     PAYPAL: "PayPal",
+    WALLET: "Wallet",
   };
   return map[key] || key;
 }
@@ -106,6 +107,20 @@ function formatPaymentStatus(status) {
   if (key === "REJECTED") return "❌ Rechazado";
   if (key === "PENDING") return "⏳ Pendiente";
   return status || "-";
+}
+
+function formatOrderStatus(status) {
+  const key = String(status || "").toUpperCase();
+  const labels = {
+    CREATED: "Creada",
+    WAITING_PAYMENT: "Esperando pago",
+    PAID: "Pagada",
+    DELIVERED: "Entregada",
+    CANCELLED: "Cancelada",
+    REFUNDED: "Reembolsada",
+    EXPIRED: "Expirada",
+  };
+  return labels[key] || status || "-";
 }
 
 function escapeHtml(value) {
@@ -244,7 +259,7 @@ function buildOrderNotificationCaption({
         ? "🚨 Estafa"
         : order?.is_test
           ? `🧪 ${escapeHtml(order?.status || "PRUEBA")}`
-          : escapeHtml(order?.status || "-")
+          : escapeHtml(formatOrderStatus(order?.status))
     }`,
     "",
     "👤 Usuario",
@@ -257,6 +272,7 @@ function buildOrderNotificationCaption({
     "",
     "💰 Totales",
     `💲 Total USD: ${formatUsdAmount(subtotalUsd)}`,
+    ...(order?.paid_with_wallet ? ["Pagado con saldo"] : []),
   ];
 
   if (localTotal && localTotal.currency) {

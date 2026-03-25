@@ -1,56 +1,69 @@
 let orderNumberSchemaReady = false;
+let orderNumberSchemaPromise = null;
 
 async function ensureOrderNumberSchema(db) {
   if (orderNumberSchemaReady) {
     return;
   }
+  if (orderNumberSchemaPromise) {
+    await orderNumberSchemaPromise;
+    return;
+  }
 
-  await db.query(
-    `CREATE TABLE IF NOT EXISTS available_order_numbers (
-       order_number bigint PRIMARY KEY,
-       source_order_id uuid REFERENCES orders(id) ON DELETE SET NULL,
-       reason text,
-       released_at timestamptz NOT NULL DEFAULT now()
-     )`
-  );
-  await db.query(
-    `ALTER TABLE orders
-     ADD COLUMN IF NOT EXISTS is_scam boolean NOT NULL DEFAULT false`
-  );
-  await db.query(
-    `ALTER TABLE orders
-     ADD COLUMN IF NOT EXISTS scam_flagged_at timestamptz`
-  );
-  await db.query(
-    `ALTER TABLE orders
-     ADD COLUMN IF NOT EXISTS scam_reason text`
-  );
-  await db.query(
-    `ALTER TABLE orders
-     ADD COLUMN IF NOT EXISTS released_order_number bigint`
-  );
-  await db.query(
-    `ALTER TABLE orders
-     ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false`
-  );
-  await db.query(
-    `ALTER TABLE orders
-     ADD COLUMN IF NOT EXISTS test_cleanup_after timestamptz`
-  );
-  await db.query(
-    `CREATE INDEX IF NOT EXISTS orders_is_scam_idx
-     ON orders(is_scam)`
-  );
-  await db.query(
-    `CREATE INDEX IF NOT EXISTS orders_is_test_idx
-     ON orders(is_test)`
-  );
-  await db.query(
-    `CREATE INDEX IF NOT EXISTS orders_test_cleanup_after_idx
-     ON orders(test_cleanup_after)`
-  );
+  orderNumberSchemaPromise = (async () => {
+    await db.query(
+      `CREATE TABLE IF NOT EXISTS available_order_numbers (
+         order_number bigint PRIMARY KEY,
+         source_order_id uuid REFERENCES orders(id) ON DELETE SET NULL,
+         reason text,
+         released_at timestamptz NOT NULL DEFAULT now()
+       )`
+    );
+    await db.query(
+      `ALTER TABLE orders
+       ADD COLUMN IF NOT EXISTS is_scam boolean NOT NULL DEFAULT false`
+    );
+    await db.query(
+      `ALTER TABLE orders
+       ADD COLUMN IF NOT EXISTS scam_flagged_at timestamptz`
+    );
+    await db.query(
+      `ALTER TABLE orders
+       ADD COLUMN IF NOT EXISTS scam_reason text`
+    );
+    await db.query(
+      `ALTER TABLE orders
+       ADD COLUMN IF NOT EXISTS released_order_number bigint`
+    );
+    await db.query(
+      `ALTER TABLE orders
+       ADD COLUMN IF NOT EXISTS is_test boolean NOT NULL DEFAULT false`
+    );
+    await db.query(
+      `ALTER TABLE orders
+       ADD COLUMN IF NOT EXISTS test_cleanup_after timestamptz`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS orders_is_scam_idx
+       ON orders(is_scam)`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS orders_is_test_idx
+       ON orders(is_test)`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS orders_test_cleanup_after_idx
+       ON orders(test_cleanup_after)`
+    );
 
-  orderNumberSchemaReady = true;
+    orderNumberSchemaReady = true;
+  })();
+
+  try {
+    await orderNumberSchemaPromise;
+  } finally {
+    orderNumberSchemaPromise = null;
+  }
 }
 
 async function syncOrderNumberSequence(db) {

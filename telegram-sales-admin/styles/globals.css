@@ -3584,19 +3584,23 @@ body.login-no-scroll {
     display: flex;
     align-items: flex-end;
     justify-content: flex-start;
-    justify-self: start;
-    margin-left: calc(1.5cm - 8.5cm);
-    gap: 0px;
+    justify-self: stretch;
+    grid-column: 1 / -1;
+    margin-left: 0;
+    width: 100%;
+    gap: 0.4cm;
+    box-sizing: border-box;
   }
 
   .product-edit__grid .stock-inline-block .stock-toggle-group {
-    margin-left: 0.5cm;
+    margin-left: 0;
     gap: 0.2cm;
+    flex-wrap: wrap;
   }
 
   .product-edit__grid .stock-inline-block .stock-input-field {
     flex: 0 0 auto;
-    min-width: auto;
+    min-width: 160px;
   }
 
   .product-edit__delivery > span,

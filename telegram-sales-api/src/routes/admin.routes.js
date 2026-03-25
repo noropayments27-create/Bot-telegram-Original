@@ -25,8 +25,10 @@ const {
   sendPhoto,
   sendVideo,
   sendAnimation,
+  sendSticker,
   sendDocument,
   editMessageCaption,
+  editMessageText,
 } = require("../services/telegram");
 const {
   listAdminOrderNotifications,
@@ -76,6 +78,36 @@ const {
   recordAppError,
   listAppErrors,
 } = require("../services/appErrorLogs");
+const {
+  ensureUserWalletSchema,
+  getUserWalletByTelegramId,
+  getUserWalletHistoryByUserId,
+  createWalletTopup,
+  resolveWalletTopupId,
+  getWalletTopupById,
+  listWalletTopups,
+  listWalletGifts,
+  getWalletGiftById,
+  approveWalletTopup,
+  rejectWalletTopup,
+  markWalletTopupScam,
+  recordWalletTransaction,
+  syncExpiredWalletTopups,
+  formatWalletTopupNumber,
+  getWalletTopupDisplayNumber,
+  listWalletTopupAdminNotifications,
+  buildWalletTopupAdminCaption,
+  ensureWalletGiftSchema,
+  prepareWalletGiftButtonsForSend,
+  recordWalletGiftMessage,
+  syncWalletGifts,
+} = require("../services/userWallets");
+const {
+  ensurePublishTargetsSchema,
+  upsertPublishTarget,
+  listPublishTargets,
+  getPublishTargetSummary,
+} = require("../services/publishTargets");
 const { sendMail, isMailConfigured } = require("../services/mailer");
 const { buildPasswordRecoveryEmailTemplate } = require("../services/emailTemplates");
 const {
@@ -742,6 +774,23 @@ async function sendBroadcastToRecipient(context, broadcast, telegramId) {
   } = context;
 
   if (storedTelegramMedia) {
+    if (storedTelegramMedia.kind === "sticker") {
+      const stickerResult = await sendSticker(telegramId, {
+        file_id: storedTelegramMedia.fileId,
+        reply_markup: !formattedMessage && replyMarkup ? replyMarkup : undefined,
+      });
+      if (formattedMessage) {
+        const textResult = await sendMessage(telegramId, formattedMessage, messageOptions);
+        return {
+          messageId: Number(textResult?.message_id || 0) || null,
+          linkedMessageId: Number(stickerResult?.message_id || 0) || null,
+        };
+      }
+      return {
+        messageId: Number(stickerResult?.message_id || 0) || null,
+        linkedMessageId: null,
+      };
+    }
     const mediaPayload = {
       file_id: storedTelegramMedia.fileId,
       caption: formattedMessage,
@@ -753,13 +802,15 @@ async function sendBroadcastToRecipient(context, broadcast, telegramId) {
       mediaPayload.parse_mode = "HTML";
     }
     if (storedTelegramMedia.kind === "video") {
-      await sendVideo(telegramId, mediaPayload);
+      const result = await sendVideo(telegramId, mediaPayload);
+      return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
     } else if (storedTelegramMedia.kind === "animation") {
-      await sendAnimation(telegramId, mediaPayload);
+      const result = await sendAnimation(telegramId, mediaPayload);
+      return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
     } else {
-      await sendPhoto(telegramId, mediaPayload);
+      const result = await sendPhoto(telegramId, mediaPayload);
+      return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
     }
-    return;
   }
 
   if (broadcast.image_path) {
@@ -776,16 +827,151 @@ async function sendBroadcastToRecipient(context, broadcast, telegramId) {
       mediaPayload.parse_mode = "HTML";
     }
     if (mime === "image/gif") {
-      await sendAnimation(telegramId, mediaPayload);
+      const result = await sendAnimation(telegramId, mediaPayload);
+      return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
     } else if (mime.startsWith("video/")) {
-      await sendVideo(telegramId, mediaPayload);
+      const result = await sendVideo(telegramId, mediaPayload);
+      return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
     } else {
-      await sendPhoto(telegramId, mediaPayload);
+      const result = await sendPhoto(telegramId, mediaPayload);
+      return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
     }
-    return;
   }
 
-  await sendMessage(telegramId, formattedMessage, messageOptions);
+  const result = await sendMessage(telegramId, formattedMessage, messageOptions);
+  return { messageId: Number(result?.message_id || 0) || null, linkedMessageId: null };
+}
+
+async function sendPublicationToTargets(pool, payload) {
+  await ensurePublishTargetsSchema(pool);
+  await ensureWalletGiftSchema(pool);
+  const scope = String(payload?.scope || "all").trim().toLowerCase();
+  const explicitChatIds = normalizeChatIds(payload?.chat_ids);
+  let targets = [];
+  if (explicitChatIds.length > 0) {
+    const allTargets = await listPublishTargets(pool, {
+      scope: "all",
+      activeOnly: true,
+      adminOnly: true,
+      limit: 500,
+    });
+    const allowed = new Set(explicitChatIds.map((id) => String(id)));
+    targets = allTargets.filter((item) => allowed.has(String(item.chat_id)));
+  } else {
+    targets = await listPublishTargets(pool, {
+      scope,
+      activeOnly: true,
+      adminOnly: true,
+      limit: 500,
+    });
+  }
+
+  const messageText = String(payload?.message || "").trim();
+  const messageEntities = normalizeBroadcastMessageEntities(payload?.message_entities);
+  const buttons = normalizeBroadcastButtons(payload?.buttons);
+  const mediaFileId = String(payload?.media_file_id || "").trim();
+  const mediaKind = normalizeBroadcastMediaKind(payload?.media_kind);
+
+  if (!messageText && !mediaFileId) {
+    const error = new Error("MESSAGE_REQUIRED");
+    error.code = "MESSAGE_REQUIRED";
+    throw error;
+  }
+  if (mediaFileId && !mediaKind) {
+    const error = new Error("MEDIA_KIND_INVALID");
+    error.code = "MEDIA_KIND_INVALID";
+    throw error;
+  }
+
+  const prepared = await prepareWalletGiftButtonsForSend(pool, buttons, {
+    sourceKind: "PUBLICATION",
+    sourceEntityId: String(payload?.publication_id || "").trim() || null,
+    sourceScope: "CHAT",
+  });
+
+  const context = buildBroadcastDeliveryContext({
+    message_text: messageText,
+    message_entities: messageEntities,
+    buttons: prepared.buttons,
+    image_path: mediaFileId ? `tgfile:${mediaFileId}` : null,
+    image_mime: mediaFileId ? `tg:${mediaKind}` : null,
+  });
+
+  let sentCount = 0;
+  let failedCount = 0;
+  const failures = [];
+  for (const target of targets) {
+    const chatId = String(target.chat_id || "").trim();
+    if (!chatId) {
+      continue;
+    }
+    try {
+      const sendResult = await sendBroadcastToRecipient(
+        context,
+        { image_path: mediaFileId ? `tgfile:${mediaFileId}` : null, image_mime: mediaFileId ? `tg:${mediaKind}` : null },
+        chatId
+      );
+      if (prepared.gift && sendResult?.messageId) {
+        await recordWalletGiftMessage(pool, {
+          giftId: prepared.gift.id,
+          chatId,
+          chatType: target.chat_type || null,
+          messageId: sendResult.messageId,
+          linkedMessageId: sendResult.linkedMessageId || null,
+        });
+      }
+      sentCount += 1;
+    } catch (error) {
+      failedCount += 1;
+      failures.push({
+        chat_id: chatId,
+        title: target.chat_title || null,
+        type: target.chat_type || null,
+        error: String(error?.description || error?.message || error || "SEND_FAILED").slice(0, 200),
+      });
+    }
+    if (targets.length > 1) {
+      await new Promise((resolve) => setTimeout(resolve, BROADCAST_BATCH_DELAY_MS));
+    }
+  }
+
+  return {
+    scope,
+    gift_id: prepared.gift?.id || null,
+    target_count: targets.length,
+    sent_count: sentCount,
+    failed_count: failedCount,
+    failures,
+  };
+}
+
+let ensurePublicationSchemaPromise = null;
+
+async function ensurePublicationSchema(pool) {
+  if (ensurePublicationSchemaPromise) {
+    await ensurePublicationSchemaPromise;
+    return;
+  }
+  ensurePublicationSchemaPromise = (async () => {
+    await pool.query(`
+      CREATE TABLE IF NOT EXISTS publications (
+        id UUID PRIMARY KEY,
+        message_text TEXT NOT NULL DEFAULT '',
+        message_entities JSONB NOT NULL DEFAULT '[]'::jsonb,
+        buttons JSONB NOT NULL DEFAULT '[]'::jsonb,
+        image_path TEXT,
+        image_filename TEXT,
+        image_mime TEXT,
+        created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
+        updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
+      )
+    `);
+  })();
+  try {
+    await ensurePublicationSchemaPromise;
+  } finally {
+    ensurePublicationSchemaPromise = null;
+  }
 }
 
 async function acquireBroadcastLease(pool, broadcastId, workerToken) {
@@ -1485,7 +1671,17 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
   const updateProgress = options.updateProgress === true;
   let sentCount = 0;
   let failedCount = 0;
-  const context = buildBroadcastDeliveryContext(broadcast);
+  await ensureWalletGiftSchema(pool);
+  const prepared = await prepareWalletGiftButtonsForSend(pool, broadcast.buttons, {
+    sourceKind: "BROADCAST",
+    sourceEntityId: String(broadcastId || "").trim() || null,
+    sourceScope: "PRIVATE",
+  });
+  const deliveryBroadcast = {
+    ...broadcast,
+    buttons: prepared.buttons,
+  };
+  const context = buildBroadcastDeliveryContext(deliveryBroadcast);
 
   if (updateProgress) {
     await pool.query(
@@ -1505,7 +1701,16 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
     const batch = recipientIds.slice(i, i + BROADCAST_BATCH_SIZE);
     for (const telegramId of batch) {
       try {
-        await sendBroadcastToRecipient(context, broadcast, telegramId);
+        const sendResult = await sendBroadcastToRecipient(context, deliveryBroadcast, telegramId);
+        if (prepared.gift && sendResult?.messageId) {
+          await recordWalletGiftMessage(pool, {
+            giftId: prepared.gift.id,
+            chatId: telegramId,
+            chatType: "private",
+            messageId: sendResult.messageId,
+            linkedMessageId: sendResult.linkedMessageId || null,
+          });
+        }
         sentCount += 1;
       } catch (err) {
         failedCount += 1;
@@ -1568,6 +1773,7 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
   return {
     broadcast: updatedRes.rows[0],
     result: {
+      gift_id: prepared.gift?.id || null,
       target_count: recipientIds.length,
       sent_count: sentCount,
       failed_count: failedCount,
@@ -1991,6 +2197,59 @@ async function updateAdminOrderNotifications(pool, orderId) {
   }
 }
 
+async function updateWalletTopupAdminNotifications(pool, topupId) {
+  try {
+    const notifications = await listWalletTopupAdminNotifications(pool, topupId);
+    if (!notifications.length) {
+      return;
+    }
+
+    const topup = await getWalletTopupById(pool, topupId);
+    if (!topup) {
+      return;
+    }
+
+    const caption = await buildWalletTopupAdminCaption(topup);
+    const replyMarkup = {
+      inline_keyboard: [
+        [
+          { text: "Panel web", callback_data: `admin_panel:${topupId}` },
+          { text: "Panel Bot", callback_data: "adminui:wallets" },
+        ],
+        [
+          { text: "Banear Usuario", callback_data: `admin_ban:${topup.telegram_id}:${topupId}` },
+        ],
+      ],
+    };
+
+    await Promise.all(
+      notifications.map((row) => {
+        const messageType = String(row.message_type || "photo").toLowerCase();
+        if (messageType === "text") {
+          return editMessageText(
+            row.admin_telegram_id,
+            row.message_id,
+            caption,
+            { parse_mode: "HTML", reply_markup: replyMarkup }
+          ).catch((error) => {
+            console.error("Wallet topup admin notify text update failed", error);
+          });
+        }
+        return editMessageCaption(
+          row.admin_telegram_id,
+          row.message_id,
+          caption,
+          { parse_mode: "HTML", reply_markup: replyMarkup }
+        ).catch((error) => {
+          console.error("Wallet topup admin notify caption update failed", error);
+        });
+      })
+    );
+  } catch (error) {
+    console.error("Wallet topup admin notify update failed", error);
+  }
+}
+
 function parsePagination(query) {
   const page = Math.max(parseInt(query.page, 10) || 1, 1);
   const pageSize = Math.min(Math.max(parseInt(query.page_size, 10) || 20, 1), 100);
@@ -2150,6 +2409,39 @@ function buildScamCustomerNotification(order) {
     + "❗ Si crees que se trata de un error, comunícate lo antes posible con: @Noropayments 📩\n"
     + "Explícales tu caso antes de que seas reportado públicamente 🚨."
   );
+}
+
+function buildWalletTopupScamCustomerNotification(topup) {
+  const telegramId = String(topup?.telegram_id || "-").trim() || "-";
+  const username = String(topup?.telegram_username || "").trim();
+  const usernameLine = username ? `@${username.replace(/^@+/, "")}` : "-";
+  return (
+    `ID: ${telegramId}\n`
+    + `Username: ${usernameLine}\n\n`
+    + "⚠️ Tu última recarga ha sido marcada como “Estafa” 🚫💰.\n"
+    + "A partir de este momento, los administradores del bot te publicarán en su canal de “Ratas” 🐀 y serás expuesto como estafador en más de 400 grupos en Telegram y WhatsApp 📢🔥.\n\n"
+    + "❗ Si crees que se trata de un error, comunícate lo antes posible con: @Noropayments 📩\n"
+    + "Explícales tu caso antes de que seas reportado públicamente 🚨."
+  );
+}
+
+function formatWalletUsd(amount) {
+  const numeric = Number(amount || 0);
+  if (!Number.isFinite(numeric)) {
+    return "$0";
+  }
+  return `$${numeric.toFixed(2)} USD`;
+}
+
+function formatWalletTxType(value) {
+  const key = String(value || "").trim().toUpperCase();
+  const labels = {
+    TOPUP_APPROVED: "Recarga aprobada",
+    ORDER_PAYMENT: "Compra con saldo",
+    ORDER_REFUND: "Reembolso a saldo",
+    ADMIN_ADJUSTMENT: "Ajuste manual",
+  };
+  return labels[key] || key || "-";
 }
 
 function isTestOrderRow(order) {
@@ -2364,13 +2656,34 @@ function normalizeBroadcastButtons(value) {
       }
       const text = String(button.text || "").trim();
       const url = String(button.url || "").trim();
-      if (!text || !url || !/^https?:\/\//i.test(url)) {
-        return null;
-      }
+      const action = String(button.action || button.type || "").trim().toLowerCase();
       const rawRow = Number(button.row);
       const row =
         Number.isInteger(rawRow) && rawRow >= 0 ? rawRow : fallbackRow;
       fallbackRow += 1;
+      if (!text) {
+        return null;
+      }
+      if (action === "gift") {
+        const amountUsd = Number(button.gift_amount_usd || button.amount_usd || button.amount || 0);
+        const maxClaims = Number.parseInt(
+          String(button.gift_max_claims || button.max_claims || button.claims || ""),
+          10
+        );
+        if (!Number.isFinite(amountUsd) || amountUsd <= 0 || !Number.isFinite(maxClaims) || maxClaims <= 0) {
+          return null;
+        }
+        return {
+          text,
+          row,
+          action: "gift",
+          gift_amount_usd: Number(amountUsd.toFixed(2)),
+          gift_max_claims: maxClaims,
+        };
+      }
+      if (!url || !/^https?:\/\//i.test(url)) {
+        return null;
+      }
       return { text, url, row };
     })
     .filter(Boolean);
@@ -2410,7 +2723,7 @@ function getImageExtension(mime) {
 
 function normalizeBroadcastMediaKind(value) {
   const kind = String(value || "").trim().toLowerCase();
-  if (kind === "photo" || kind === "animation" || kind === "video") {
+  if (kind === "photo" || kind === "animation" || kind === "video" || kind === "sticker") {
     return kind;
   }
   return "";
@@ -2428,7 +2741,7 @@ function parseStoredTelegramMedia(imagePath, imageMime) {
   const rawMime = String(imageMime || "").trim().toLowerCase();
   const maybeKind = rawMime.startsWith("tg:") ? rawMime.slice(3) : "";
   const kind =
-    maybeKind === "animation" || maybeKind === "video" || maybeKind === "photo"
+    maybeKind === "animation" || maybeKind === "video" || maybeKind === "photo" || maybeKind === "sticker"
       ? maybeKind
       : "photo";
   return { fileId, kind };
@@ -3590,6 +3903,278 @@ router.post("/auth/decision", (req, res) => {
 
 router.use(requireAdmin);
 
+router.get("/publish-targets", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensurePublishTargetsSchema(pool);
+    const scope = String(req.query.scope || "all").trim().toLowerCase();
+    const activeOnly = String(req.query.include_inactive || "").trim() !== "1";
+    const targets = await listPublishTargets(pool, {
+      scope,
+      activeOnly,
+      adminOnly: false,
+      limit: 500,
+    });
+    const summary = await getPublishTargetSummary(pool);
+    return res.json({ items: targets, summary });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/publications/send", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const result = await sendPublicationToTargets(pool, req.body || {});
+    return res.json({ ok: true, result });
+  } catch (error) {
+    if (error?.code === "MESSAGE_REQUIRED") {
+      return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+    }
+    if (error?.code === "MEDIA_KIND_INVALID") {
+      return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
+    }
+    if (error?.code === "BOT_USERNAME_REQUIRED") {
+      return res.status(400).json({ error: "BOT_USERNAME_REQUIRED" });
+    }
+    if (error?.code === "WALLET_GIFT_BUTTON_LIMIT") {
+      return res.status(400).json({ error: "WALLET_GIFT_BUTTON_LIMIT" });
+    }
+    return next(error);
+  }
+});
+
+router.get("/publications", async (req, res, next) => {
+  const pool = getPool();
+  const { page, pageSize, offset } = parsePagination(req.query);
+  try {
+    await ensurePublicationSchema(pool);
+    const countRes = await pool.query("SELECT COUNT(*)::int AS total FROM publications");
+    const listRes = await pool.query(
+      `SELECT *
+       FROM publications
+       ORDER BY created_at DESC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, offset]
+    );
+    return res.json({
+      items: listRes.rows,
+      page,
+      page_size: pageSize,
+      total: countRes.rows[0]?.total || 0,
+      total_pages: Math.ceil((countRes.rows[0]?.total || 0) / pageSize) || 1,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/publications/:id", async (req, res, next) => {
+  const pool = getPool();
+  const publicationId = String(req.params.id || "").trim();
+  try {
+    await ensurePublicationSchema(pool);
+    const publicationRes = await pool.query(
+      "SELECT * FROM publications WHERE id = $1",
+      [publicationId]
+    );
+    if (publicationRes.rowCount === 0) {
+      return res.status(404).json({ error: "PUBLICATION_NOT_FOUND" });
+    }
+    return res.json({ publication: publicationRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/publications", async (req, res, next) => {
+  const pool = getPool();
+  const messageText = req.body && req.body.message ? String(req.body.message).trim() : "";
+  const messageEntities = normalizeBroadcastMessageEntities(req.body && req.body.message_entities);
+  const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
+  const mediaFileId = req.body && req.body.media_file_id
+    ? String(req.body.media_file_id).trim()
+    : "";
+  const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
+
+  if (!messageText && !mediaFileId) {
+    return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+  }
+  if (mediaFileId && !mediaKind) {
+    return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
+  }
+
+  try {
+    await ensurePublicationSchema(pool);
+    const publicationId = randomUUID();
+    const insertRes = await pool.query(
+      `INSERT INTO publications (
+         id,
+         message_text,
+         message_entities,
+         buttons,
+         image_path,
+         image_filename,
+         image_mime
+       )
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, NULL, $6)
+       RETURNING *`,
+      [
+        publicationId,
+        messageText,
+        JSON.stringify(messageEntities),
+        JSON.stringify(buttons),
+        mediaFileId ? `tgfile:${mediaFileId}` : null,
+        mediaFileId ? `tg:${mediaKind}` : null,
+      ]
+    );
+    return res.status(201).json({ publication: insertRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.patch("/publications/:id", async (req, res, next) => {
+  const pool = getPool();
+  const publicationId = String(req.params.id || "").trim();
+  const messageText = req.body && Object.prototype.hasOwnProperty.call(req.body, "message")
+    ? String(req.body.message || "").trim()
+    : null;
+  const hasMessageEntitiesInput = Boolean(
+    req.body && Object.prototype.hasOwnProperty.call(req.body, "message_entities")
+  );
+  const messageEntities = hasMessageEntitiesInput
+    ? normalizeBroadcastMessageEntities(req.body.message_entities)
+    : null;
+  const buttons = req.body && Object.prototype.hasOwnProperty.call(req.body, "buttons")
+    ? normalizeBroadcastButtons(req.body.buttons)
+    : null;
+  const mediaFileId = req.body && req.body.media_file_id
+    ? String(req.body.media_file_id).trim()
+    : "";
+  const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
+  const clearImage = Boolean(req.body && req.body.clear_image);
+
+  if (mediaFileId && !mediaKind) {
+    return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
+  }
+
+  try {
+    await ensurePublicationSchema(pool);
+    const currentRes = await pool.query(
+      "SELECT * FROM publications WHERE id = $1",
+      [publicationId]
+    );
+    if (currentRes.rowCount === 0) {
+      return res.status(404).json({ error: "PUBLICATION_NOT_FOUND" });
+    }
+    const current = currentRes.rows[0];
+    const nextMessage = messageText !== null ? messageText : String(current.message_text || "").trim();
+    const nextButtons = buttons !== null ? buttons : (current.buttons || []);
+    const nextEntities = hasMessageEntitiesInput ? messageEntities : (current.message_entities || []);
+    const nextImagePath = mediaFileId
+      ? `tgfile:${mediaFileId}`
+      : clearImage
+      ? null
+      : current.image_path;
+    const nextImageMime = mediaFileId
+      ? `tg:${mediaKind}`
+      : clearImage
+      ? null
+      : current.image_mime;
+
+    if (!nextMessage && !nextImagePath) {
+      return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+    }
+
+    const updateRes = await pool.query(
+      `UPDATE publications
+       SET message_text = $2,
+           message_entities = $3::jsonb,
+           buttons = $4::jsonb,
+           image_path = $5,
+           image_filename = NULL,
+           image_mime = $6,
+           updated_at = now()
+       WHERE id = $1
+       RETURNING *`,
+      [
+        publicationId,
+        nextMessage,
+        JSON.stringify(nextEntities),
+        JSON.stringify(nextButtons),
+        nextImagePath,
+        nextImageMime,
+      ]
+    );
+    return res.json({ publication: updateRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.delete("/publications/:id", async (req, res, next) => {
+  const pool = getPool();
+  const publicationId = String(req.params.id || "").trim();
+  try {
+    await ensurePublicationSchema(pool);
+    const deleteRes = await pool.query(
+      "DELETE FROM publications WHERE id = $1 RETURNING *",
+      [publicationId]
+    );
+    if (deleteRes.rowCount === 0) {
+      return res.status(404).json({ error: "PUBLICATION_NOT_FOUND" });
+    }
+    return res.json({ ok: true, publication: deleteRes.rows[0] });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/publications/:id/send", async (req, res, next) => {
+  const pool = getPool();
+  const publicationId = String(req.params.id || "").trim();
+  try {
+    await ensurePublicationSchema(pool);
+    const publicationRes = await pool.query(
+      "SELECT * FROM publications WHERE id = $1",
+      [publicationId]
+    );
+    if (publicationRes.rowCount === 0) {
+      return res.status(404).json({ error: "PUBLICATION_NOT_FOUND" });
+    }
+    const publication = publicationRes.rows[0];
+    const result = await sendPublicationToTargets(pool, {
+      ...req.body,
+      publication_id: publicationId,
+      message: publication.message_text || "",
+      message_entities: publication.message_entities || [],
+      buttons: publication.buttons || [],
+      media_file_id: String(publication.image_path || "").startsWith("tgfile:")
+        ? String(publication.image_path || "").slice("tgfile:".length)
+        : "",
+      media_kind: String(publication.image_mime || "").startsWith("tg:")
+        ? String(publication.image_mime || "").slice("tg:".length)
+        : "",
+    });
+    return res.json({ ok: true, publication, result });
+  } catch (error) {
+    if (error?.code === "MESSAGE_REQUIRED") {
+      return res.status(400).json({ error: "MESSAGE_REQUIRED" });
+    }
+    if (error?.code === "MEDIA_KIND_INVALID") {
+      return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
+    }
+    if (error?.code === "BOT_USERNAME_REQUIRED") {
+      return res.status(400).json({ error: "BOT_USERNAME_REQUIRED" });
+    }
+    if (error?.code === "WALLET_GIFT_BUTTON_LIMIT") {
+      return res.status(400).json({ error: "WALLET_GIFT_BUTTON_LIMIT" });
+    }
+    return next(error);
+  }
+});
+
 router.post("/app-errors", async (req, res, next) => {
   const pool = getPool();
   try {
@@ -3608,6 +4193,406 @@ router.post("/app-errors", async (req, res, next) => {
     return res.json({ ok: true });
   } catch (error) {
     return next(error);
+  }
+});
+
+router.get("/wallets/topups", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensureUserWalletSchema(pool);
+    await syncExpiredWalletTopups(pool);
+    const statusRaw = String(req.query.status || "SUBMITTED").trim().toUpperCase();
+    const status = statusRaw === "ALL" ? "" : statusRaw;
+    const { page, pageSize } = parsePagination(req.query);
+    const result = await listWalletTopups(pool, {
+      status,
+      page,
+      pageSize,
+      includeAll: String(req.query.include_all || "").trim() === "1",
+    });
+    result.items = (result.items || []).map((item) => ({
+      ...item,
+      topup_number_label: formatWalletTopupNumber(item.topup_number),
+    }));
+    return res.json(result);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/wallets/topups/:id", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensureUserWalletSchema(pool);
+    await syncExpiredWalletTopups(pool);
+    const resolvedId = await resolveWalletTopupId(pool, req.params.id);
+    if (!resolvedId) {
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const topup = await getWalletTopupById(pool, resolvedId);
+    if (!topup) {
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    return res.json({
+      topup: {
+        ...topup,
+        topup_number_label: formatWalletTopupNumber(topup.topup_number),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/wallets/topups/:id/payment-proof", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensureUserWalletSchema(pool);
+    const resolvedId = await resolveWalletTopupId(pool, req.params.id);
+    if (!resolvedId) {
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const topup = await getWalletTopupById(pool, resolvedId);
+    if (!topup || !topup.screenshot_file_id) {
+      return res.status(404).json({ error: "NO_PAYMENT_PROOF" });
+    }
+    const filePath = await getFilePath(topup.screenshot_file_id);
+    const { buffer, contentType } = await downloadFile(filePath);
+    res.setHeader("Content-Type", contentType);
+    res.setHeader("Cache-Control", "no-store");
+    return res.send(buffer);
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/wallets/topups/:id/approve", async (req, res, next) => {
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureUserWalletSchema(client);
+    await syncExpiredWalletTopups(client);
+    const resolvedId = await resolveWalletTopupId(client, req.params.id);
+    if (!resolvedId) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const result = await approveWalletTopup(client, {
+      topupId: resolvedId,
+      createdByAdmin: req.admin?.sub || null,
+    });
+    await client.query("COMMIT");
+    await updateWalletTopupAdminNotifications(pool, resolvedId);
+
+    try {
+      const topup = await getWalletTopupById(pool, resolvedId);
+      if (topup?.telegram_id) {
+        await sendMessage(
+          topup.telegram_id,
+          `✅ Tu recarga fue aprobada.\n\n`
+            + `🔗 Referencia: ${formatWalletTopupNumber(getWalletTopupDisplayNumber(topup))}\n\n`
+            + `💵 Monto acreditado: $${Number(topup.amount_usd || 0).toFixed(0)} USD\n`
+            + `💰 Saldo actual: $${Number(result.wallet?.balance || 0).toFixed(0)} USD`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [
+                  { text: "💰 Mi saldo", callback_data: "home:wallet" },
+                  { text: "🏠 Inicio", callback_data: "home:show" },
+                ],
+              ],
+            },
+          }
+        );
+      }
+    } catch (notifyError) {
+      console.error("Wallet topup approval notify failed", notifyError);
+    }
+
+    return res.json({
+      ok: true,
+      topup: {
+        ...result.topup,
+        topup_number_label: formatWalletTopupNumber(result.topup?.topup_number),
+      },
+      wallet: result.wallet,
+      already_approved: Boolean(result.alreadyApproved),
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "TOPUP_NOT_APPROVABLE") {
+      return res.status(409).json({ error: "TOPUP_NOT_APPROVABLE" });
+    }
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/wallets/topups/:id/reject", async (req, res, next) => {
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureUserWalletSchema(client);
+    await syncExpiredWalletTopups(client);
+    const resolvedId = await resolveWalletTopupId(client, req.params.id);
+    if (!resolvedId) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const rejected = await rejectWalletTopup(client, {
+      topupId: resolvedId,
+      reason: req.body?.reason || null,
+    });
+    await client.query("COMMIT");
+    await updateWalletTopupAdminNotifications(pool, resolvedId);
+
+    try {
+      const topup = await getWalletTopupById(pool, resolvedId);
+      if (topup?.telegram_id) {
+        await sendMessage(
+          topup.telegram_id,
+          `❌ Tu recarga ${formatWalletTopupNumber(getWalletTopupDisplayNumber(topup))} fue rechazada.\n\n`
+            + (rejected?.reason ? `Motivo: ${rejected.reason}` : "Si necesitas ayuda, escríbenos a /soporte")
+        );
+      }
+    } catch (notifyError) {
+      console.error("Wallet topup rejection notify failed", notifyError);
+    }
+
+    return res.json({
+      ok: true,
+      topup: {
+        ...rejected,
+        topup_number_label: formatWalletTopupNumber(rejected?.topup_number),
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "TOPUP_NOT_REJECTABLE") {
+      return res.status(409).json({ error: "TOPUP_NOT_REJECTABLE" });
+    }
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.post("/wallets/topups/:id/scam", async (req, res, next) => {
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureUserWalletSchema(client);
+    await syncExpiredWalletTopups(client);
+    const resolvedId = await resolveWalletTopupId(client, req.params.id);
+    if (!resolvedId) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const scammed = await markWalletTopupScam(client, {
+      topupId: resolvedId,
+      reason: req.body?.reason || null,
+    });
+    await client.query("COMMIT");
+    await updateWalletTopupAdminNotifications(pool, resolvedId);
+
+    let notification = {
+      sent: false,
+      method: null,
+      error: null,
+    };
+    try {
+      const topup = await getWalletTopupById(pool, resolvedId);
+      if (topup?.telegram_id) {
+        try {
+          await sendPhoto(topup.telegram_id, {
+            url: "https://i.ibb.co/ZDbLWHM/images.jpg",
+            caption: buildWalletTopupScamCustomerNotification(topup),
+          });
+          notification = {
+            sent: true,
+            method: "photo",
+            error: null,
+          };
+        } catch (err) {
+          console.error("Wallet topup scam notification failed", err);
+          try {
+            await sendMessage(
+              topup.telegram_id,
+              buildWalletTopupScamCustomerNotification(topup)
+            );
+            notification = {
+              sent: true,
+              method: "text",
+              error: err?.message || "PHOTO_SEND_FAILED",
+            };
+          } catch (fallbackErr) {
+            console.error("Wallet topup scam notification fallback failed", fallbackErr);
+            notification = {
+              sent: false,
+              method: null,
+              error:
+                fallbackErr?.message
+                || err?.message
+                || "SCAM_NOTIFICATION_FAILED",
+            };
+          }
+        }
+      }
+    } catch (notifyError) {
+      console.error("Wallet topup scam notify failed", notifyError);
+    }
+
+    return res.json({
+      ok: true,
+      topup: {
+        ...scammed,
+        topup_number_label: formatWalletTopupNumber(scammed?.topup_number),
+      },
+      notification,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "TOPUP_NOT_SCAMMABLE") {
+      return res.status(409).json({ error: "TOPUP_NOT_SCAMMABLE" });
+    }
+    return next(error);
+  } finally {
+    client.release();
+  }
+});
+
+router.get("/wallet-gifts", async (req, res, next) => {
+  try {
+    const pool = getPool();
+    await ensureWalletGiftSchema(pool);
+    await syncWalletGifts(pool);
+    const page = Math.max(Number.parseInt(String(req.query.page || "1"), 10) || 1, 1);
+    const pageSize = Math.max(
+      Math.min(Number.parseInt(String(req.query.page_size || "20"), 10) || 20, 100),
+      1
+    );
+    const statusRaw = String(req.query.status || "").trim().toUpperCase();
+    const sourceKindRaw = String(req.query.source_kind || "").trim().toUpperCase();
+    const status = statusRaw && statusRaw !== "ALL" ? statusRaw : "";
+    const sourceKind = sourceKindRaw && sourceKindRaw !== "ALL" ? sourceKindRaw : "";
+    const result = await listWalletGifts(pool, {
+      status,
+      sourceKind,
+      page,
+      pageSize,
+    });
+    res.json(result);
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/wallet-gifts/:id", async (req, res, next) => {
+  try {
+    const pool = getPool();
+    await ensureWalletGiftSchema(pool);
+    await syncWalletGifts(pool);
+    const gift = await getWalletGiftById(pool, req.params.id);
+    if (!gift) {
+      return res.status(404).json({ error: "WALLET_GIFT_NOT_FOUND" });
+    }
+    res.json({ gift });
+  } catch (error) {
+    next(error);
+  }
+});
+
+router.get("/wallets/users/:lookup", async (req, res, next) => {
+  const lookup = String(req.params.lookup || "").trim();
+  if (!lookup) {
+    return res.status(400).json({ error: "LOOKUP_REQUIRED" });
+  }
+  const pool = getPool();
+  try {
+    await ensureUserWalletSchema(pool);
+    const result = await getUserWalletByTelegramId(pool, lookup);
+    if (!result) {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    const limit = Math.max(Math.min(Number.parseInt(String(req.query.limit || "20"), 10) || 20, 100), 1);
+    const history = await getUserWalletHistoryByUserId(pool, result.user.id, {
+      limit,
+      visibleToUserOnly: false,
+    });
+    return res.json({
+      user: result.user,
+      wallet: result.wallet,
+      history,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/wallets/users/:telegram_id/adjust", async (req, res, next) => {
+  const telegramId = Number(req.params.telegram_id);
+  const amount = Number(req.body?.amount);
+  const reason = String(req.body?.reason || "").trim() || null;
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "TELEGRAM_ID_REQUIRED" });
+  }
+  if (!Number.isFinite(amount) || amount === 0) {
+    return res.status(400).json({ error: "INVALID_AMOUNT" });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureUserWalletSchema(client);
+    const result = await getUserWalletByTelegramId(client, telegramId);
+    if (!result) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    const tx = await recordWalletTransaction(client, {
+      userId: result.user.id,
+      amount: Math.abs(amount),
+      direction: amount > 0 ? "CREDIT" : "DEBIT",
+      transactionType: "ADMIN_ADJUSTMENT",
+      referenceType: "admin_adjustment",
+      note: reason,
+      visibleToUser: Boolean(reason),
+      createdByAdmin: req.admin?.sub || null,
+    });
+    await client.query("COMMIT");
+    if (reason) {
+      try {
+        await sendMessage(
+          telegramId,
+          `${amount > 0 ? "✅" : "⚠️"} Ajuste de saldo aplicado.\n\n`
+            + `Movimiento: ${amount > 0 ? "+" : "-"}${formatWalletUsd(Math.abs(amount)).replace(" USD", "")}\n`
+            + `Motivo: ${reason}\n`
+            + `Saldo actual: ${formatWalletUsd(tx.wallet?.balance)}`
+        );
+      } catch (notifyError) {
+        console.error("Wallet adjustment notify failed", notifyError);
+      }
+    }
+    return res.json({
+      ok: true,
+      wallet: tx.wallet,
+      transaction: tx.transaction,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "INSUFFICIENT_WALLET_BALANCE") {
+      return res.status(409).json({
+        error: "INSUFFICIENT_WALLET_BALANCE",
+        available: error.available ?? null,
+      });
+    }
+    return next(error);
+  } finally {
+    client.release();
   }
 });
 
@@ -4133,6 +5118,9 @@ router.post("/products", async (req, res, next) => {
   const imageUrl = Object.prototype.hasOwnProperty.call(req.body || {}, "image_url")
     ? String(req.body?.image_url || "").trim()
     : "";
+  const imageFileId = Object.prototype.hasOwnProperty.call(req.body || {}, "image_file_id")
+    ? String(req.body?.image_file_id || "").trim()
+    : "";
   const deliveryPayload = req.body?.delivery_payload && typeof req.body.delivery_payload === "object"
     ? req.body.delivery_payload
     : {};
@@ -4150,10 +5138,10 @@ router.post("/products", async (req, res, next) => {
       }
       const insertRes = await client.query(
         `INSERT INTO products
-          (sku_key, name, description, name_en, description_en, image_url, price, is_active,
+          (sku_key, name, description, name_en, description_en, image_url, image_file_id, price, is_active,
            delivery_type, delivery_payload, delivery_payload_en, stock_mode, stock_qty, show_stock,
            unique_purchase, out_of_stock, category_key)
-         VALUES ($1, $2, $3, $4, $5, $6, $7, true, $8, $9, $10, $11, $12, $13, $14, $15, $16)
+         VALUES ($1, $2, $3, $4, $5, $6, $7, $8, true, $9, $10, $11, $12, $13, $14, $15, $16, $17)
          RETURNING *`,
         [
           skuKey,
@@ -4162,6 +5150,7 @@ router.post("/products", async (req, res, next) => {
           nameEn,
           descriptionEn,
           imageUrl || null,
+          imageFileId || null,
           parsedPrice,
           deliveryType,
           deliveryPayload,
@@ -4245,6 +5234,10 @@ router.post("/products/:id/update", async (req, res, next) => {
   const imageUrl = imageUrlProvided
     ? String(req.body?.image_url || "").trim()
     : null;
+  const imageFileIdProvided = Object.prototype.hasOwnProperty.call(req.body || {}, "image_file_id");
+  const imageFileId = imageFileIdProvided
+    ? String(req.body?.image_file_id || "").trim()
+    : null;
 
   const showStock = req.body?.show_stock === undefined
     ? true
@@ -4291,6 +5284,7 @@ router.post("/products/:id/update", async (req, res, next) => {
              name_en = COALESCE($4, name_en),
              description_en = COALESCE($5, description_en),
              image_url = CASE WHEN $14 THEN $15 ELSE image_url END,
+             image_file_id = CASE WHEN $18 THEN $19 ELSE image_file_id END,
              price = $6,
              show_stock = $7,
              unique_purchase = $8,
@@ -4322,6 +5316,8 @@ router.post("/products/:id/update", async (req, res, next) => {
           imageUrl || null,
           outOfStockProvided,
           outOfStock,
+          imageFileIdProvided,
+          imageFileId || null,
         ]
       );
 
@@ -4637,6 +5633,7 @@ router.get("/stock/inspect", async (req, res, next) => {
         description: product.description,
         description_en: product.description_en,
         image_url: product.image_url,
+        image_file_id: product.image_file_id,
         price: product.price,
         show_stock: product.show_stock,
         stock_mode: product.stock_mode,
@@ -5441,6 +6438,12 @@ router.get("/orders", async (req, res, next) => {
       total_pages: resultTotalPages,
     });
   } catch (error) {
+    if (error?.code === "BOT_USERNAME_REQUIRED") {
+      return res.status(400).json({ error: "BOT_USERNAME_REQUIRED" });
+    }
+    if (error?.code === "WALLET_GIFT_BUTTON_LIMIT") {
+      return res.status(400).json({ error: "WALLET_GIFT_BUTTON_LIMIT" });
+    }
     next(error);
   }
 });
@@ -5801,6 +6804,7 @@ router.get("/orders/:id", async (req, res, next) => {
          oi.product_id,
          p.code,
          COALESCE(p.name, 'Producto eliminado') AS name,
+         p.image_url,
          oi.qty,
          COALESCE(oi.unit_price_usd, p.price) AS unit_price_usd,
          COALESCE(
@@ -5818,6 +6822,7 @@ router.get("/orders/:id", async (req, res, next) => {
       product_id: row.product_id,
       code: row.code,
       name: row.name,
+      image_url: row.image_url || null,
       qty: row.qty,
       unit_price_usd: row.unit_price_usd,
       line_total_usd: row.line_total_usd,
@@ -5881,6 +6886,7 @@ router.get("/orders/:id", async (req, res, next) => {
         refunded_amount: order.refunded_amount,
         refunded_at: order.refunded_at,
         refund_reason: order.refund_reason,
+        paid_with_wallet: Boolean(order.paid_with_wallet),
       },
       user: {
         telegram_id: order.telegram_id,
@@ -5892,6 +6898,7 @@ router.get("/orders/:id", async (req, res, next) => {
         code: order.product_code,
         name: order.product_name,
         price: order.product_price,
+        image_url: order.product_image_url || null,
       },
       items,
       payment: paymentRes.rows[0] || null,
@@ -7713,6 +8720,7 @@ router.post("/orders/:id/refund", async (req, res, next) => {
 
   try {
     await client.query("BEGIN");
+    await ensureUserWalletSchema(client);
     const resolvedOrderId = await resolveOrderLookupId(
       client,
       orderLookupRef,
@@ -7858,6 +8866,18 @@ router.post("/orders/:id/refund", async (req, res, next) => {
       [orderId, refundAmount, refundType, reason || null, req.admin?.sub || null]
     );
 
+    const walletTx = await recordWalletTransaction(client, {
+      userId: order.user_id,
+      amount: refundAmount,
+      direction: "CREDIT",
+      transactionType: "ORDER_REFUND",
+      referenceType: "order",
+      referenceId: orderId,
+      note: reason || `Reembolso ${refundType === "FULL" ? "completo" : "parcial"} de orden`,
+      visibleToUser: true,
+      createdByAdmin: req.admin?.sub || null,
+    });
+
     await client.query(
       `INSERT INTO audit_logs (admin_action, entity_type, entity_id, meta)
        VALUES ($1, $2, $3, $4::jsonb)`,
@@ -7870,6 +8890,7 @@ router.post("/orders/:id/refund", async (req, res, next) => {
           amount: refundAmount,
           refund_type: refundType,
           commission_refund: commissionRefunded,
+          wallet_balance_after: walletTx.wallet?.balance ?? null,
         }),
       ]
     );
@@ -7878,9 +8899,10 @@ router.post("/orders/:id/refund", async (req, res, next) => {
 
     const locale = order.locale || "es";
     const refundMessage =
-      (MESSAGES[locale]?.[fullyRefunded ? "refund_full" : "refund_partial"]
-        || MESSAGES.es[fullyRefunded ? "refund_full" : "refund_partial"])
-        .replace("{amount}", formatUsdWithCurrency(refundAmount));
+      `✅ Tu reembolso fue acreditado a tu saldo interno.\n\n`
+      + `💵 Monto: ${formatUsdWithCurrency(refundAmount)}\n`
+      + `💰 Saldo actual: ${formatWalletUsd(walletTx.wallet?.balance)}`
+      + (reason ? `\n📝 Motivo: ${reason}` : "");
 
     try {
       await sendMessage(order.telegram_id, refundMessage);
@@ -7918,6 +8940,7 @@ router.post("/orders/:id/refund", async (req, res, next) => {
         commission_refund: commissionRefunded,
         fully_refunded: fullyRefunded,
       },
+      wallet: walletTx.wallet,
     });
   } catch (error) {
     await client.query("ROLLBACK");

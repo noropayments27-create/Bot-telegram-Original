@@ -4,7 +4,7 @@ const { deliverOrderToTelegram } = require("../../services/delivery");
 const { getAffiliateLevel } = require("../../services/affiliateLevels");
 const { listPaymentMethods, normalizeMethodKey } = require("../../services/paymentMethods");
 const { getBotAssets } = require("../../services/botAssets");
-const { sendPhoto } = require("../../services/telegram");
+const { sendPhoto, sendMessage } = require("../../services/telegram");
 const { ensureProductCategorySchema } = require("../../services/productSchema");
 const { validatePaymentProofScreenshot } = require("../../services/paymentProofValidation");
 const {
@@ -17,6 +17,11 @@ const {
   ensureOrderNumberForOrder,
 } = require("../../services/orderNumbers");
 const {
+  ensureUserWalletSchema,
+  getUserWalletByTelegramId,
+  recordWalletTransaction,
+} = require("../../services/userWallets");
+const {
   recordAdminOrderNotification,
   buildOrderNotificationCaption,
   buildOrderNotificationKeyboard,
@@ -27,6 +32,10 @@ const ORDER_STATUS_PENDING = "CREATED"; // maps to PENDING_PAYMENT
 const ORDER_STATUS_WAITING_CONFIRMATION = "WAITING_PAYMENT"; // maps to WAITING_CONFIRMATION
 const ORDER_STATUS_PAID = "PAID";
 const ORDER_STATUS_REJECTED = "CANCELLED"; // maps to REJECTED
+const DELIVERY_START_DELAY_MS = Math.max(
+  Number(process.env.DELIVERY_START_DELAY_MS || 10000) || 10000,
+  0
+);
 
 async function getPaymentMethodMarkup(pool, paymentMethod) {
   const rawKey = normalizeMethodKey(paymentMethod);
@@ -99,6 +108,162 @@ function parseAdminTelegramIds() {
     .map((item) => item.trim())
     .filter((item) => item && /^[0-9]+$/.test(item))
     .map((item) => Number(item));
+}
+
+async function applyCommissionForPaidOrder(client, order) {
+  if (!order.affiliate_id) {
+    return;
+  }
+
+  const statsRes = await client.query(
+    `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
+            COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
+            MAX(c.earned_at) AS last_sale_at
+     FROM commissions c
+     LEFT JOIN (
+       SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
+       FROM order_items
+       GROUP BY order_id
+     ) oi ON oi.order_id = c.order_id
+     WHERE c.affiliate_id = $1
+       AND c.status != 'REFUNDED'`,
+    [order.affiliate_id]
+  );
+  const stats = statsRes.rows[0] || {};
+  const salesTotal = stats.sales_count || 0;
+  const earningsTotal = Number(stats.earnings_total || 0);
+  const boostRes = await client.query(
+    "SELECT commission_rate FROM affiliates WHERE id = $1",
+    [order.affiliate_id]
+  );
+  const boostRate = Number(boostRes.rows[0]?.commission_rate || 0);
+  let daysSinceLastSale = null;
+  if (stats.last_sale_at) {
+    const lastSaleTime = new Date(stats.last_sale_at).getTime();
+    daysSinceLastSale = Math.max(
+      Math.floor((Date.now() - lastSaleTime) / (24 * 60 * 60 * 1000)),
+      0
+    );
+  }
+  let baseRate = 0.2;
+  let boostEffective = boostRate;
+  if (salesTotal > 0) {
+    const currentLevel = getAffiliateLevel({
+      salesTotal,
+      earningsTotal,
+      daysSinceLastSale,
+    });
+    baseRate = currentLevel.rate;
+  } else {
+    boostEffective = 0;
+  }
+  const rate = Math.min(baseRate + boostEffective, 1);
+  const amount = Number(
+    (Number(order.unit_price_at_purchase) * rate).toFixed(2)
+  );
+
+  await client.query(
+    `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
+     VALUES ($1, $2, $3, $4)
+     ON CONFLICT (order_id) DO NOTHING`,
+    [order.id, order.affiliate_id, rate, amount]
+  );
+}
+
+async function finalizeOrderDelivery(pool, orderId, telegramId, updatedOrder) {
+  const deliveryResult = await deliverOrderToTelegram({
+    dbClient: pool,
+    orderId,
+    telegramId,
+  });
+
+  if (deliveryResult.delivered) {
+    await pool.query(
+      `UPDATE orders SET status = 'DELIVERED', delivered_at = now() WHERE id = $1`,
+      [orderId]
+    );
+    return {
+      ok: true,
+      delivered: true,
+      order: updatedOrder,
+    };
+  }
+
+  console.error("[order/delivery] failed:", deliveryResult.error);
+  return {
+    ok: true,
+    delivered: false,
+    delivery_error: deliveryResult.error,
+    order: updatedOrder,
+  };
+}
+
+async function approvePaidOrderRecord(
+  client,
+  order,
+  {
+    paymentMethod = null,
+    paidWithWallet = false,
+  } = {}
+) {
+  const orderId = order.id;
+  const isFreeOrder = isFreeOrderRow(order);
+
+  try {
+    await consumeStockForOrder(client, order.id);
+  } catch (error) {
+    if (error.code === "INSUFFICIENT_STOCK") {
+      error.httpStatus = 409;
+    }
+    throw error;
+  }
+
+  if (!isFreeOrder) {
+    await ensureOrderNumberForOrder(client, orderId);
+  }
+
+  const updatedOrderRes = await client.query(
+    `UPDATE orders
+     SET status = $2,
+         paid_at = COALESCE(paid_at, now()),
+         order_number = order_number,
+         paid_with_wallet = CASE
+           WHEN $3 THEN true
+           ELSE paid_with_wallet
+         END
+     WHERE id = $1
+     RETURNING *`,
+    [orderId, ORDER_STATUS_PAID, Boolean(paidWithWallet)]
+  );
+
+  if (paymentMethod) {
+    await client.query(
+      `INSERT INTO order_payments (
+         order_id,
+         screenshot_file_id,
+         screenshot_unique_id,
+         review_status,
+         payment_method,
+         reviewed_by_admin_at
+       )
+       VALUES ($1, NULL, NULL, 'APPROVED', $2, now())
+       ON CONFLICT (order_id)
+       DO UPDATE SET review_status = 'APPROVED',
+                     reviewed_by_admin_at = now(),
+                     payment_method = EXCLUDED.payment_method`,
+      [orderId, paymentMethod]
+    );
+  } else {
+    await client.query(
+      `UPDATE order_payments
+       SET review_status = 'APPROVED', reviewed_by_admin_at = now()
+       WHERE order_id = $1`,
+      [orderId]
+    );
+  }
+
+  await applyCommissionForPaidOrder(client, order);
+  return updatedOrderRes.rows[0];
 }
 
 async function ensureUser(client, telegramId, username) {
@@ -472,12 +637,22 @@ async function createOrder(req, res, next) {
 
     await client.query("COMMIT");
 
+    const walletBalanceRes = await pool.query(
+      `SELECT balance
+       FROM user_wallets
+       WHERE user_id = $1
+       LIMIT 1`,
+      [user.id]
+    );
+    const walletBalance = Number(walletBalanceRes.rows[0]?.balance || 0);
+
     return res.status(201).json({
       order: {
         ...orderRow,
         qty,
         total,
       },
+      wallet_balance: Number.isFinite(walletBalance) ? walletBalance : 0,
       free_order: isFreeOrder,
       free_order_label: formatFreeOrderLabel(orderRow.free_order_number),
       ...(isFreeOrder
@@ -538,6 +713,250 @@ async function getPaymentMethods(req, res, next) {
     });
   } catch (error) {
     return next(error);
+  }
+}
+
+async function payOrderWithWallet(req, res, next) {
+  const orderId = req.params.id;
+  const telegramId = Number(req.body.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+
+  const pool = getPool();
+  await ensureFreeOrderSchema(pool);
+  await ensureOrderNumberSchema(pool);
+  await ensureUserWalletSchema(pool);
+  const client = await pool.connect();
+
+  try {
+    await client.query("BEGIN");
+
+    const orderRes = await client.query(
+      `SELECT o.*, u.telegram_id
+       FROM orders o
+       JOIN users u ON u.id = o.user_id
+       WHERE o.id = $1
+       FOR UPDATE`,
+      [orderId]
+    );
+    if (orderRes.rowCount === 0) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "Order not found" });
+    }
+
+    const order = orderRes.rows[0];
+    if (Number(order.telegram_id) !== telegramId) {
+      await client.query("ROLLBACK");
+      return res.status(403).json({ error: "Not allowed" });
+    }
+    if (order.status === ORDER_STATUS_PAID || order.status === "DELIVERED") {
+      await client.query("COMMIT");
+      return res.status(200).json({ status: "already_paid" });
+    }
+    if (order.status === ORDER_STATUS_REJECTED || order.status === "REFUNDED" || order.status === "EXPIRED") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "ORDER_NOT_PAYABLE" });
+    }
+
+    const paymentStateRes = await client.query(
+      `SELECT review_status
+       FROM order_payments
+       WHERE order_id = $1
+       LIMIT 1`,
+      [orderId]
+    );
+    const reviewStatus = String(paymentStateRes.rows[0]?.review_status || "").toUpperCase();
+    if (reviewStatus && reviewStatus !== "REJECTED") {
+      await client.query("ROLLBACK");
+      return res.status(409).json({ error: "ORDER_ALREADY_SUBMITTED" });
+    }
+
+    const totalRes = await client.query(
+      `SELECT COALESCE(SUM(line_total_usd), 0) AS total
+       FROM order_items
+       WHERE order_id = $1`,
+      [orderId]
+    );
+    const totalUsd = Number(totalRes.rows[0]?.total || order.unit_price_at_purchase || 0);
+    if (!Number.isFinite(totalUsd) || totalUsd <= 0) {
+      await client.query("ROLLBACK");
+      return res.status(400).json({ error: "ORDER_TOTAL_INVALID" });
+    }
+
+    let walletResult;
+    try {
+      walletResult = await recordWalletTransaction(client, {
+        userId: order.user_id,
+        amount: totalUsd,
+        direction: "DEBIT",
+        transactionType: "ORDER_PAYMENT",
+        referenceType: "order",
+        referenceId: order.id,
+        note: `Pago con saldo de la orden ${order.order_number || order.id}`,
+        visibleToUser: true,
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.code === "INSUFFICIENT_WALLET_BALANCE") {
+        return res.status(409).json({
+          error: "INSUFFICIENT_WALLET_BALANCE",
+          available: error.available ?? null,
+          required: totalUsd,
+        });
+      }
+      throw error;
+    }
+
+    let updatedOrder;
+    try {
+      updatedOrder = await approvePaidOrderRecord(client, order, {
+        paymentMethod: "WALLET",
+        paidWithWallet: true,
+      });
+    } catch (error) {
+      await client.query("ROLLBACK");
+      if (error.httpStatus === 409 && error.code === "INSUFFICIENT_STOCK") {
+        return res.status(409).json({
+          ok: false,
+          code: "INSUFFICIENT_STOCK",
+          message: "Stock insuficiente para aprobar la orden.",
+          available: error.available ?? null,
+        });
+      }
+      throw error;
+    }
+
+    await client.query("COMMIT");
+
+    try {
+      const adminIds = parseAdminTelegramIds();
+      if (adminIds.length > 0) {
+        const [userRes, itemsRes, paymentRes] = await Promise.all([
+          pool.query(
+            `SELECT telegram_id, telegram_username
+             FROM users
+             WHERE id = $1
+             LIMIT 1`,
+            [order.user_id]
+          ),
+          pool.query(
+            `SELECT oi.qty, p.name, p.image_url
+             FROM order_items oi
+             JOIN products p ON p.id = oi.product_id
+             WHERE oi.order_id = $1`,
+            [order.id]
+          ),
+          pool.query(
+            `SELECT *
+             FROM order_payments
+             WHERE order_id = $1
+             LIMIT 1`,
+            [order.id]
+          ),
+        ]);
+        const subtotalUsd = totalUsd;
+        const totalsWithMarkup = await resolveTotalsWithMarkup(
+          pool,
+          subtotalUsd,
+          "WALLET",
+          null
+        );
+        const caption = buildOrderNotificationCaption({
+          order: updatedOrder,
+          user: userRes.rows[0] || { telegram_id: order.telegram_id, telegram_username: null },
+          items: itemsRes.rows || [],
+          payment: paymentRes.rows[0] || { payment_method: "WALLET", review_status: "APPROVED" },
+          subtotalUsd: totalsWithMarkup.subtotalUsd,
+          localTotal: totalsWithMarkup.localTotal,
+          markupPercent: totalsWithMarkup.markupPercent,
+        });
+        const replyMarkup = buildOrderNotificationKeyboard({
+          id: order.id,
+          telegram_id: order.telegram_id,
+        });
+        const itemImages = (itemsRes.rows || [])
+          .map((item) => String(item.image_url || "").trim())
+          .filter(Boolean);
+        const productImageUrl = itemImages.length > 0
+          ? itemImages[Math.floor(Math.random() * itemImages.length)]
+          : String(updatedOrder?.product_image_url || "").trim();
+
+        for (const adminId of adminIds) {
+          try {
+            let result = null;
+            if (productImageUrl) {
+              try {
+                result = await sendPhoto(adminId, {
+                  url: productImageUrl,
+                  caption,
+                  parse_mode: "HTML",
+                  reply_markup: replyMarkup,
+                });
+              } catch (photoError) {
+                console.error("Admin wallet payment photo notify failed", photoError);
+              }
+            }
+            if (!result) {
+              result = await sendMessage(adminId, caption, {
+                parse_mode: "HTML",
+                reply_markup: replyMarkup,
+              });
+            }
+            if (result?.message_id) {
+              await recordAdminOrderNotification(pool, order.id, adminId, result.message_id);
+            }
+          } catch (error) {
+            console.error("Admin wallet payment notify failed", error);
+          }
+        }
+      }
+    } catch (notifyError) {
+      console.error("Admin wallet payment notify failed", notifyError);
+    }
+
+    console.log("[order-delivery] scheduled", {
+      orderId: order.id,
+      delayMs: DELIVERY_START_DELAY_MS,
+      reason: "wallet_payment",
+    });
+    setTimeout(async () => {
+      console.log("[order-delivery] starting", { orderId: order.id, reason: "wallet_payment" });
+      try {
+        const deliveryResult = await deliverOrderToTelegram({
+          dbClient: pool,
+          orderId: order.id,
+          telegramId: order.telegram_id,
+        });
+        if (deliveryResult.delivered) {
+          await pool.query(
+            `UPDATE orders
+             SET status = 'DELIVERED', delivered_at = now()
+             WHERE id = $1`,
+            [order.id]
+          );
+        } else {
+          console.error("[order/delivery] failed:", deliveryResult.error || "DELIVERY_FAILED");
+        }
+      } catch (error) {
+        console.error("Telegram delivery failed", error);
+      }
+    }, DELIVERY_START_DELAY_MS);
+
+    return res.json({
+      ok: true,
+      delivered: false,
+      delivery_scheduled: true,
+      delivery_delay_ms: DELIVERY_START_DELAY_MS,
+      order: updatedOrder,
+      wallet: walletResult.wallet,
+      transaction: walletResult.transaction,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    return next(error);
+  } finally {
+    client.release();
   }
 }
 
@@ -829,8 +1248,9 @@ async function markOrderPaid(req, res, next) {
       return res.status(200).json({ status: "already_paid" });
     }
 
+    let updatedOrder;
     try {
-      await consumeStockForOrder(client, order.id);
+      updatedOrder = await approvePaidOrderRecord(client, order);
     } catch (error) {
       await client.query("ROLLBACK");
       if (error.code === "INSUFFICIENT_STOCK") {
@@ -844,112 +1264,8 @@ async function markOrderPaid(req, res, next) {
       throw error;
     }
 
-    if (!isFreeOrder) {
-      await ensureOrderNumberForOrder(client, orderId);
-    }
-
-    const updatedOrderRes = await client.query(
-      `UPDATE orders
-       SET status = $2,
-           paid_at = now(),
-           order_number = order_number
-       WHERE id = $1
-       RETURNING *`,
-      [orderId, ORDER_STATUS_PAID]
-    );
-
-    await client.query(
-      `UPDATE order_payments
-       SET review_status = 'APPROVED', reviewed_by_admin_at = now()
-       WHERE order_id = $1`,
-      [orderId]
-    );
-
-    if (order.affiliate_id) {
-      const statsRes = await client.query(
-        `SELECT COALESCE(SUM(COALESCE(oi.sale_qty, 1)), 0)::int AS sales_count,
-                COALESCE(SUM(c.amount - COALESCE(c.refunded_amount, 0)), 0) AS earnings_total,
-                MAX(c.earned_at) AS last_sale_at
-         FROM commissions c
-         LEFT JOIN (
-           SELECT order_id, COALESCE(SUM(qty), 0) AS sale_qty
-           FROM order_items
-           GROUP BY order_id
-         ) oi ON oi.order_id = c.order_id
-         WHERE c.affiliate_id = $1
-           AND c.status != 'REFUNDED'`,
-        [order.affiliate_id]
-      );
-      const stats = statsRes.rows[0] || {};
-      const salesTotal = stats.sales_count || 0;
-      const earningsTotal = Number(stats.earnings_total || 0);
-      const boostRes = await client.query(
-        "SELECT commission_rate FROM affiliates WHERE id = $1",
-        [order.affiliate_id]
-      );
-      const boostRate = Number(boostRes.rows[0]?.commission_rate || 0);
-      let daysSinceLastSale = null;
-      if (stats.last_sale_at) {
-        const lastSaleTime = new Date(stats.last_sale_at).getTime();
-        daysSinceLastSale = Math.max(
-          Math.floor((Date.now() - lastSaleTime) / (24 * 60 * 60 * 1000)),
-          0
-        );
-      }
-      let baseRate = 0.2;
-      let boostEffective = boostRate;
-      if (salesTotal > 0) {
-        const currentLevel = getAffiliateLevel({
-          salesTotal,
-          earningsTotal,
-          daysSinceLastSale,
-        });
-        baseRate = currentLevel.rate;
-      } else {
-        boostEffective = 0;
-      }
-      const rate = Math.min(baseRate + boostEffective, 1);
-      const amount = Number(
-        (Number(order.unit_price_at_purchase) * rate).toFixed(2)
-      );
-
-      await client.query(
-        `INSERT INTO commissions (order_id, affiliate_id, rate, amount)
-         VALUES ($1, $2, $3, $4)
-         ON CONFLICT (order_id) DO NOTHING`,
-        [order.id, order.affiliate_id, rate, amount]
-      );
-
-      // Commission rate is based on level + optional boost, no per-affiliate override.
-    }
-
     await client.query("COMMIT");
-
-    const deliveryResult = await deliverOrderToTelegram({
-      dbClient: pool,
-      orderId: order.id,
-      telegramId: order.telegram_id,
-    });
-
-    if (deliveryResult.delivered) {
-      await pool.query(
-        `UPDATE orders SET status = 'DELIVERED', delivered_at = now() WHERE id = $1`,
-        [order.id]
-      );
-      return res.json({
-        ok: true,
-        delivered: true,
-        order: updatedOrderRes.rows[0],
-      });
-    }
-
-    console.error("[order/delivery] failed:", deliveryResult.error);
-    return res.json({
-      ok: true,
-      delivered: false,
-      delivery_error: deliveryResult.error,
-      order: updatedOrderRes.rows[0],
-    });
+    return res.json(await finalizeOrderDelivery(pool, order.id, order.telegram_id, updatedOrder));
   } catch (error) {
     await client.query("ROLLBACK");
     return next(error);
@@ -1017,6 +1333,7 @@ module.exports = {
   createOrder,
   getOrderById,
   getPaymentMethods,
+  payOrderWithWallet,
   submitPaymentProof,
   markOrderPaid,
   rejectPayment,

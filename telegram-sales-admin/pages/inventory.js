@@ -128,6 +128,7 @@ export default function InventoryPage() {
   const [createName, setCreateName] = useState("");
   const [createNameEn, setCreateNameEn] = useState("");
   const [createImageUrl, setCreateImageUrl] = useState("");
+  const [createImageFileId, setCreateImageFileId] = useState("");
   const [createCategory, setCreateCategory] = useState("tienda");
   const [createPrice, setCreatePrice] = useState("0");
   const [createIsFree, setCreateIsFree] = useState(false);
@@ -157,6 +158,7 @@ export default function InventoryPage() {
   const [editProductName, setEditProductName] = useState("");
   const [editNameEn, setEditNameEn] = useState("");
   const [editImageUrl, setEditImageUrl] = useState("");
+  const [editImageFileId, setEditImageFileId] = useState("");
   const [editCategory, setEditCategory] = useState("tienda");
   const [editPrice, setEditPrice] = useState("0");
   const [editIsFree, setEditIsFree] = useState(false);
@@ -560,6 +562,7 @@ export default function InventoryPage() {
     setEditProductName(stripCategoryPrefix(data?.product?.name || ""));
     setEditNameEn(String(data?.product?.name_en || ""));
     setEditImageUrl(String(data?.product?.image_url || ""));
+    setEditImageFileId(String(data?.product?.image_file_id || ""));
     setEditCategory(getCategoryKey(data?.product));
     setEditPrice(
       data?.product?.price === null || data?.product?.price === undefined
@@ -828,12 +831,14 @@ export default function InventoryPage() {
         deliveryPayloadEn.caption = caption;
       }
       const imageUrl = createImageUrl.trim();
+      const imageFileId = createImageFileId.trim();
       const data = await apiFetch("/admin/products", {
         method: "POST",
         body: JSON.stringify({
           display_name: trimmedName,
           name_en: trimmedNameEn,
           image_url: imageUrl || null,
+          image_file_id: imageFileId || null,
           category_key: categoryValueFromSlug(createCategory),
           price: normalizedPrice,
           stock_mode: createMode,
@@ -852,6 +857,7 @@ export default function InventoryPage() {
       setCreateName("");
       setCreateNameEn("");
       setCreateImageUrl("");
+      setCreateImageFileId("");
       setCreatePrice("0");
       setCreateIsFree(false);
       setCreateLastPrice("0");
@@ -1157,6 +1163,7 @@ export default function InventoryPage() {
       deliveryPayloadEn.caption = caption;
     }
     const imageUrl = editImageUrl.trim();
+    const imageFileId = editImageFileId.trim();
     setEditIsFree(Number(normalizedPrice || 0) <= 0);
     try {
       const data = await apiFetch(`/admin/products/${detail.product.id}/update`, {
@@ -1165,6 +1172,7 @@ export default function InventoryPage() {
           display_name: trimmedName,
           name_en: trimmedNameEn,
           image_url: imageUrl || null,
+          image_file_id: imageFileId || null,
           category_key: categoryValueFromSlug(editCategory),
           price: normalizedPrice,
           description: buildDescriptionPayload(editDescription),
@@ -1378,6 +1386,16 @@ export default function InventoryPage() {
                     value={createImageUrl}
                     onChange={(event) => setCreateImageUrl(event.target.value)}
                     placeholder="https://..."
+                  />
+                </label>
+                <label>
+                  Imagen (Telegram file_id)
+                  <input
+                    className="image-url-input"
+                    type="text"
+                    value={createImageFileId}
+                    onChange={(event) => setCreateImageFileId(event.target.value)}
+                    placeholder="Telegram file_id"
                   />
                 </label>
                 <label>
@@ -2194,6 +2212,16 @@ export default function InventoryPage() {
                         value={editImageUrl}
                         onChange={(event) => setEditImageUrl(event.target.value)}
                         placeholder="https://..."
+                      />
+                    </label>
+                    <label>
+                      Imagen (Telegram file_id)
+                      <input
+                        className="image-url-input"
+                        type="text"
+                        value={editImageFileId}
+                        onChange={(event) => setEditImageFileId(event.target.value)}
+                        placeholder="Telegram file_id"
                       />
                     </label>
                     <div className="stock-meta-pair">

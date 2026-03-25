@@ -1,15 +1,23 @@
 let botAssetsSchemaReady = false;
 
-const BOT_ASSET_COLUMNS = [
-  "main_image_url",
-  "affiliate_panel_image_url",
-  "affiliate_invoice_image_url",
-  "cart_image_url",
-  "community_image_url",
-  "shop_section_image_url",
-  "support_image_url",
-  "payment_methods_image_url",
+const BOT_ASSET_FIELDS = [
+  "main",
+  "affiliate_panel",
+  "affiliate_invoice",
+  "cart",
+  "community",
+  "shop_section",
+  "support",
+  "payment_methods",
+  "wallet",
+  "wallet_topup",
+  "wallet_history",
 ];
+
+const BOT_ASSET_COLUMNS = BOT_ASSET_FIELDS.flatMap((field) => [
+  `${field}_image_url`,
+  `${field}_image_file_id`,
+]);
 
 async function ensureBotAssetsSchema(pool) {
   if (botAssetsSchemaReady) {
@@ -19,26 +27,54 @@ async function ensureBotAssetsSchema(pool) {
     `CREATE TABLE IF NOT EXISTS bot_assets (
        id int PRIMARY KEY DEFAULT 1,
        main_image_url text,
+       main_image_file_id text,
        affiliate_panel_image_url text,
+       affiliate_panel_image_file_id text,
        affiliate_invoice_image_url text,
+       affiliate_invoice_image_file_id text,
        cart_image_url text,
+       cart_image_file_id text,
        community_image_url text,
+       community_image_file_id text,
        shop_section_image_url text,
+       shop_section_image_file_id text,
        support_image_url text,
+       support_image_file_id text,
        payment_methods_image_url text,
+       payment_methods_image_file_id text,
+       wallet_image_url text,
+       wallet_image_file_id text,
+       wallet_topup_image_url text,
+       wallet_topup_image_file_id text,
+       wallet_history_image_url text,
+       wallet_history_image_file_id text,
        updated_at timestamptz NOT NULL DEFAULT now()
      )`
   );
   await pool.query(
     `ALTER TABLE bot_assets
      ADD COLUMN IF NOT EXISTS main_image_url text,
+     ADD COLUMN IF NOT EXISTS main_image_file_id text,
      ADD COLUMN IF NOT EXISTS affiliate_panel_image_url text,
+     ADD COLUMN IF NOT EXISTS affiliate_panel_image_file_id text,
      ADD COLUMN IF NOT EXISTS affiliate_invoice_image_url text,
+     ADD COLUMN IF NOT EXISTS affiliate_invoice_image_file_id text,
      ADD COLUMN IF NOT EXISTS cart_image_url text,
+     ADD COLUMN IF NOT EXISTS cart_image_file_id text,
      ADD COLUMN IF NOT EXISTS community_image_url text,
+     ADD COLUMN IF NOT EXISTS community_image_file_id text,
      ADD COLUMN IF NOT EXISTS shop_section_image_url text,
+     ADD COLUMN IF NOT EXISTS shop_section_image_file_id text,
      ADD COLUMN IF NOT EXISTS support_image_url text,
-     ADD COLUMN IF NOT EXISTS payment_methods_image_url text`
+     ADD COLUMN IF NOT EXISTS support_image_file_id text,
+     ADD COLUMN IF NOT EXISTS payment_methods_image_url text,
+     ADD COLUMN IF NOT EXISTS payment_methods_image_file_id text,
+     ADD COLUMN IF NOT EXISTS wallet_image_url text,
+     ADD COLUMN IF NOT EXISTS wallet_image_file_id text,
+     ADD COLUMN IF NOT EXISTS wallet_topup_image_url text,
+     ADD COLUMN IF NOT EXISTS wallet_topup_image_file_id text,
+     ADD COLUMN IF NOT EXISTS wallet_history_image_url text,
+     ADD COLUMN IF NOT EXISTS wallet_history_image_file_id text`
   );
   await pool.query(
     `INSERT INTO bot_assets (id)

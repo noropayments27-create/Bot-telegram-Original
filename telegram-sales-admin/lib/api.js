@@ -157,7 +157,7 @@ export async function apiFetch(path, options = {}) {
     : await response.text();
 
   if (!response.ok) {
-    if (path !== "/admin/app-errors") {
+    if (path !== "/admin/app-errors" && response.status !== 429) {
       reportAdminAppError({
         code: `HTTP_${response.status}`,
         route: path,
@@ -226,7 +226,7 @@ export async function apiFetchBinary(path, options = {}) {
   }
 
   if (!response.ok) {
-    if (path !== "/admin/app-errors") {
+    if (path !== "/admin/app-errors" && response.status !== 429) {
       reportAdminAppError({
         code: `HTTP_${response.status}`,
         route: path,

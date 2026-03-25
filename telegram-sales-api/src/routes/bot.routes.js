@@ -3,6 +3,7 @@ const { getPool } = require("../db");
 const { getMaintenanceStatus } = require("../services/maintenance");
 const { getBotAssets } = require("../services/botAssets");
 const { getAdminLayout } = require("../services/adminLayouts");
+const { ensurePublishTargetsSchema, upsertPublishTarget } = require("../services/publishTargets");
 
 const router = express.Router();
 
@@ -44,6 +45,24 @@ router.get("/layouts/:key", requireBotSecret, async (req, res, next) => {
   try {
     const layout = await getAdminLayout(pool, key);
     return res.json({ layout });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/publish-targets/register", requireBotSecret, async (req, res, next) => {
+  const pool = getPool();
+  try {
+    await ensurePublishTargetsSchema(pool);
+    const target = await upsertPublishTarget(pool, {
+      chatId: req.body?.chat_id,
+      chatType: req.body?.chat_type,
+      chatTitle: req.body?.chat_title || null,
+      chatUsername: req.body?.chat_username || null,
+      isActive: req.body?.is_active !== false,
+      botIsAdmin: Boolean(req.body?.bot_is_admin),
+    });
+    return res.json({ ok: true, target });
   } catch (error) {
     return next(error);
   }

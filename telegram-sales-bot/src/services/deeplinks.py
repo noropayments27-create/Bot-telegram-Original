@@ -3,6 +3,7 @@ from typing import Dict, Optional
 
 _PRODUCT_TOKEN_PATTERN = re.compile(r"^[0-9A-Za-z_-]{2,40}$")
 _AFFILIATE_CODE_PATTERN = re.compile(r"^[0-9a-fA-F-]{1,64}$")
+_GIFT_TOKEN_PATTERN = re.compile(r"^[0-9a-zA-Z_-]{8,64}$")
 
 
 def _clean_token(value: str | None) -> str:
@@ -42,9 +43,23 @@ def parse_start_payload(raw_payload: str | None) -> Dict[str, Optional[str] | bo
         return {
             "affiliate_code": None,
             "product_id": None,
+            "gift_token": None,
             "fallback_code": None,
             "is_product_payload": False,
+            "is_gift_payload": False,
         }
+
+    if payload.startswith("g") and len(payload) > 1:
+        gift_token = _clean_token(payload[1:])
+        if _GIFT_TOKEN_PATTERN.fullmatch(gift_token):
+            return {
+                "affiliate_code": None,
+                "product_id": None,
+                "gift_token": gift_token,
+                "fallback_code": None,
+                "is_product_payload": False,
+                "is_gift_payload": True,
+            }
 
     # Backward compatibility: a_<affiliate>_p_<product>
     if payload.startswith("a_") and "_p_" in payload:
@@ -55,8 +70,10 @@ def parse_start_payload(raw_payload: str | None) -> Dict[str, Optional[str] | bo
             return {
                 "affiliate_code": affiliate_value,
                 "product_id": product_value,
+                "gift_token": None,
                 "fallback_code": None,
                 "is_product_payload": True,
+                "is_gift_payload": False,
             }
 
     # New short format: r<affiliate>_p<product>
@@ -68,8 +85,10 @@ def parse_start_payload(raw_payload: str | None) -> Dict[str, Optional[str] | bo
             return {
                 "affiliate_code": affiliate_value,
                 "product_id": product_value,
+                "gift_token": None,
                 "fallback_code": None,
                 "is_product_payload": True,
+                "is_gift_payload": False,
             }
 
     # Backward compatibility: p_<product>
@@ -79,8 +98,10 @@ def parse_start_payload(raw_payload: str | None) -> Dict[str, Optional[str] | bo
             return {
                 "affiliate_code": None,
                 "product_id": product_value,
+                "gift_token": None,
                 "fallback_code": None,
                 "is_product_payload": True,
+                "is_gift_payload": False,
             }
 
     # New short format: p<product>
@@ -90,15 +111,19 @@ def parse_start_payload(raw_payload: str | None) -> Dict[str, Optional[str] | bo
             return {
                 "affiliate_code": None,
                 "product_id": product_value,
+                "gift_token": None,
                 "fallback_code": None,
                 "is_product_payload": True,
+                "is_gift_payload": False,
             }
 
     return {
         "affiliate_code": None,
         "product_id": None,
+        "gift_token": None,
         "fallback_code": payload,
         "is_product_payload": False,
+        "is_gift_payload": False,
     }
 
 

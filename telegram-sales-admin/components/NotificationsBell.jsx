@@ -31,12 +31,13 @@ export default function NotificationsBell({ variant = "sidebar" }) {
   useEffect(() => {
     const loadNotifications = async () => {
       try {
-        const [ordersRes, ticketsRes, ticketsAllRes, payoutsRes, affiliatesRes] = await Promise.all([
+        const [ordersRes, ticketsRes, ticketsAllRes, payoutsRes, affiliatesRes, walletTopupsRes] = await Promise.all([
           apiFetch("/admin/orders?page=1&page_size=5"),
           apiFetch("/admin/tickets?status=OPEN&page=1&page_size=5"),
           apiFetch("/admin/tickets?page=1&page_size=500"),
           apiFetch("/admin/payouts?status=REQUESTED&page=1&page_size=5"),
           apiFetch("/admin/affiliates?status=PENDING&page=1&page_size=5"),
+          apiFetch("/admin/wallets/topups?status=SUBMITTED&page=1&page_size=5"),
         ]);
 
         const orders = (ordersRes.items || [])
@@ -97,8 +98,17 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           href: "/affiliates",
         }));
 
+        const walletTopups = (walletTopupsRes.items || []).map((item) => ({
+          id: item.id,
+          type: "Wallet",
+          status: item.status,
+          created_at: item.submitted_at || item.created_at,
+          text: `Recarga ${item.topup_number_label || "R-----"}`,
+          href: `/wallets?topupId=${item.id}`,
+        }));
+
         const cutoff = Date.now() - 24 * 60 * 60 * 1000;
-        const combined = [...orders, ...tickets, ...payouts, ...affiliates]
+        const combined = [...orders, ...tickets, ...payouts, ...affiliates, ...walletTopups]
           .filter((item) => item.created_at)
           .filter((item) => new Date(item.created_at).getTime() >= cutoff)
           .sort((a, b) => new Date(b.created_at) - new Date(a.created_at));
@@ -112,6 +122,9 @@ export default function NotificationsBell({ variant = "sidebar" }) {
             return false;
           }
           if (item.type === "Afiliado" && path.startsWith("/affiliates")) {
+            return false;
+          }
+          if (item.type === "Wallet" && path.startsWith("/wallets")) {
             return false;
           }
           return true;
@@ -160,6 +173,9 @@ export default function NotificationsBell({ variant = "sidebar" }) {
           return false;
         }
         if (item.type === "Afiliado" && path.startsWith("/affiliates")) {
+          return false;
+        }
+        if (item.type === "Wallet" && path.startsWith("/wallets")) {
           return false;
         }
         return true;
@@ -238,6 +254,28 @@ export default function NotificationsBell({ variant = "sidebar" }) {
             stroke="currentColor"
             strokeWidth="2"
             strokeLinecap="round"
+          />
+        </svg>
+      );
+    }
+    if (type === "Wallet") {
+      return (
+        <svg {...commonProps}>
+          <path
+            d="M4 8a2 2 0 0 1 2 -2h11a2 2 0 0 1 2 2v1h1a2 2 0 0 1 2 2v5a2 2 0 0 1 -2 2h-1v1a2 2 0 0 1 -2 2h-11a2 2 0 0 1 -2 -2z"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
+          />
+          <path
+            d="M16 13h.01"
+            fill="none"
+            stroke="currentColor"
+            strokeWidth="2"
+            strokeLinecap="round"
+            strokeLinejoin="round"
           />
         </svg>
       );

@@ -1,6 +1,6 @@
 from aiogram import F, Router
 from aiogram.filters import Command
-from aiogram.types import CallbackQuery, Message
+from aiogram.types import CallbackQuery, InlineKeyboardButton, InlineKeyboardMarkup, Message
 import re
 from aiogram.fsm.context import FSMContext
 import logging
@@ -98,6 +98,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
     parsed_start = parse_start_payload(start_payload_raw)
     start_affiliate_code = str(parsed_start.get("affiliate_code") or "").strip() or None
     start_product_id = str(parsed_start.get("product_id") or "").strip() or None
+    gift_token = str(parsed_start.get("gift_token") or "").strip() or None
     fallback_code = str(parsed_start.get("fallback_code") or "").strip() or None
 
     try:
@@ -132,6 +133,51 @@ async def handle_start(message: Message, state: FSMContext) -> None:
             return
     except Exception:
         pass
+
+    if gift_token:
+        gift_result = await api_client.claim_wallet_gift(message.from_user.id, gift_token)
+        status_code = gift_result.get("status_code")
+        if status_code == 404:
+            await message.answer(
+                "❌ Ese regalo ya no está disponible."
+            )
+            return
+        elif status_code == 409:
+            error_code = str((gift_result.get("data") or {}).get("error") or "").strip().upper()
+            if error_code == "WALLET_GIFT_ALREADY_CLAIMED":
+                await message.answer("ℹ️ Ya reclamaste este regalo.")
+            elif error_code == "WALLET_GIFT_DEPLETED":
+                await message.answer("⌛ Ese regalo ya fue reclamado por completo.")
+            elif error_code == "WALLET_GIFT_EXPIRED":
+                await message.answer("⌛ Ese regalo ya expiró.")
+            else:
+                await message.answer("❌ Ese regalo ya no está disponible.")
+            return
+        elif gift_result:
+            claim_payload = gift_result.get("claim") or {}
+            try:
+                amount_value = round(float(claim_payload.get("amount_usd") or 0))
+            except (TypeError, ValueError):
+                amount_value = 0
+            amount_text = f"${amount_value:,.0f} USD"
+            await message.answer(
+                "🎉 <b>Felicidades has recibido un regalo de saldo</b>\n\n"
+                f"💰 Has recibido <b>{amount_text}</b> de parte del admin.\n\n"
+                "Puedes verificarlo oprimiendo el botón:\n"
+                "💰 <b>Mi saldo</b>",
+                parse_mode="HTML",
+                reply_markup=InlineKeyboardMarkup(
+                    inline_keyboard=[
+                        [
+                            InlineKeyboardButton(
+                                text="💰 Mi saldo",
+                                callback_data="home:wallet",
+                            )
+                        ]
+                    ]
+                ),
+            )
+            return
 
     if message.from_user.id not in ADMIN_TELEGRAM_IDS:
         try:
@@ -226,7 +272,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
 
 
 @router.callback_query(F.data == "home:show")
-async def handle_home_show(callback: CallbackQuery) -> None:
+async def handle_home_show(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
     locale = await get_user_locale(
@@ -251,6 +297,9 @@ async def handle_home_show(callback: CallbackQuery) -> None:
             answered_early = True
         except Exception:
             answered_early = False
+    current_state = await state.get_state()
+    if current_state and current_state.startswith("WalletStates:"):
+        await state.clear()
     await stop_order_watch(callback.from_user.id, "home")
     set_main_message_id(callback.from_user.id, callback.message.message_id)
     await render_home_view(
@@ -310,9 +359,12 @@ async def handle_access_code_callback(callback: CallbackQuery, state: FSMContext
 
 
 @router.callback_query(F.data == "nav:back")
-async def handle_nav_back(callback: CallbackQuery) -> None:
+async def handle_nav_back(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
         return
+    current_state = await state.get_state()
+    if current_state and current_state.startswith("WalletStates:"):
+        await state.clear()
     previous = pop_previous_view(callback.from_user.id)
     if not previous:
         locale = await get_user_locale(

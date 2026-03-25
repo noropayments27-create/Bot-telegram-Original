@@ -6,14 +6,17 @@ import { IconImages } from "../components/PanelIcons";
 import Toast from "../components/Toast";
 
 const BOT_IMAGE_FIELDS = [
-  { key: "main_image_url", label: "Inicio" },
-  { key: "shop_section_image_url", label: "Panel: Tienda" },
-  { key: "cart_image_url", label: "Panel: Carrito" },
-  { key: "community_image_url", label: "Panel: Comunidad" },
-  { key: "affiliate_panel_image_url", label: "Panel: Afiliados" },
-  { key: "affiliate_invoice_image_url", label: "Factura afiliado" },
-  { key: "support_image_url", label: "Panel: Soporte" },
-  { key: "payment_methods_image_url", label: "Panel: Elige método de pago" },
+  { baseKey: "main", label: "Inicio" },
+  { baseKey: "shop_section", label: "Panel: Tienda" },
+  { baseKey: "cart", label: "Panel: Carrito" },
+  { baseKey: "community", label: "Panel: Comunidad" },
+  { baseKey: "affiliate_panel", label: "Panel: Afiliados" },
+  { baseKey: "affiliate_invoice", label: "Factura afiliado" },
+  { baseKey: "support", label: "Panel: Soporte" },
+  { baseKey: "payment_methods", label: "Panel: Elige método de pago" },
+  { baseKey: "wallet", label: "Panel: Mi saldo" },
+  { baseKey: "wallet_topup", label: "Panel: Recargar saldo" },
+  { baseKey: "wallet_history", label: "Panel: Historial wallet" },
 ];
 
 const CRYPTO_ASSET_OPTIONS = [
@@ -23,16 +26,19 @@ const CRYPTO_ASSET_OPTIONS = [
   { key: "ltc", label: "Cripto LTC" },
 ];
 
-const emptyAssets = {
-  main_image_url: "",
-  shop_section_image_url: "",
-  cart_image_url: "",
-  community_image_url: "",
-  affiliate_panel_image_url: "",
-  affiliate_invoice_image_url: "",
-  support_image_url: "",
-  payment_methods_image_url: "",
-};
+const emptyAssets = BOT_IMAGE_FIELDS.reduce((acc, field) => {
+  acc[`${field.baseKey}_image_url`] = "";
+  acc[`${field.baseKey}_image_file_id`] = "";
+  return acc;
+}, {});
+
+function getAssetUrlKey(baseKey) {
+  return `${baseKey}_image_url`;
+}
+
+function getAssetFileIdKey(baseKey) {
+  return `${baseKey}_image_file_id`;
+}
 
 const emptyCryptoAssets = {
   btc: "",
@@ -71,6 +77,7 @@ export default function ImagesPage() {
   const [assets, setAssets] = useState(emptyAssets);
   const [methods, setMethods] = useState([]);
   const [cryptoAssets, setCryptoAssets] = useState(emptyCryptoAssets);
+  const [cryptoAssetFileIds, setCryptoAssetFileIds] = useState(emptyCryptoAssets);
   const [toast, setToast] = useState("");
   const [isHowToOpen, setIsHowToOpen] = useState(false);
   const [savingAssets, setSavingAssets] = useState(false);
@@ -91,13 +98,20 @@ export default function ImagesPage() {
   }, [toast]);
 
   const loadData = async () => {
+    let loadedAssets = false;
+    let loadedMethods = false;
+
     try {
-      const [assetsRes, methodsRes] = await Promise.all([
-        apiFetch("/admin/bot-assets"),
-        apiFetch("/admin/payment-methods"),
-      ]);
+      const assetsRes = await apiFetch("/admin/bot-assets");
       const nextAssets = assetsRes?.assets || {};
       setAssets({ ...emptyAssets, ...nextAssets });
+      loadedAssets = true;
+    } catch (_err) {
+      loadedAssets = false;
+    }
+
+    try {
+      const methodsRes = await apiFetch("/admin/payment-methods");
       const nextMethods = Array.isArray(methodsRes?.methods)
         ? methodsRes.methods
         : [];
@@ -106,8 +120,18 @@ export default function ImagesPage() {
         (item) => String(item?.key || "").toUpperCase() === "CRYPTO"
       );
       setCryptoAssets(parseCryptoAssetImages(cryptoMethod?.asset_images || ""));
-    } catch (err) {
+      setCryptoAssetFileIds(parseCryptoAssetImages(cryptoMethod?.asset_file_ids || ""));
+      loadedMethods = true;
+    } catch (_err) {
+      loadedMethods = false;
+    }
+
+    if (!loadedAssets && !loadedMethods) {
+      setToast("No se pudieron cargar las imágenes ni los métodos de pago.");
+    } else if (!loadedAssets) {
       setToast("No se pudieron cargar las imágenes del bot.");
+    } else if (!loadedMethods) {
+      setToast("No se pudieron cargar las imágenes de métodos de pago.");
     }
   };
 
@@ -150,8 +174,20 @@ export default function ImagesPage() {
     );
   };
 
+  const handleMethodFileIdChange = (key, value) => {
+    setMethods((prev) =>
+      prev.map((method) =>
+        method.key === key ? { ...method, image_file_id: value } : method
+      )
+    );
+  };
+
   const handleCryptoAssetChange = (key, value) => {
     setCryptoAssets((prev) => ({ ...prev, [key]: value }));
+  };
+
+  const handleCryptoAssetFileIdChange = (key, value) => {
+    setCryptoAssetFileIds((prev) => ({ ...prev, [key]: value }));
   };
 
   const handleSaveAssets = async () => {
@@ -160,7 +196,8 @@ export default function ImagesPage() {
     try {
       const payload = {};
       BOT_IMAGE_FIELDS.forEach((field) => {
-        payload[field.key] = assets[field.key] || "";
+        payload[getAssetUrlKey(field.baseKey)] = assets[getAssetUrlKey(field.baseKey)] || "";
+        payload[getAssetFileIdKey(field.baseKey)] = assets[getAssetFileIdKey(field.baseKey)] || "";
       });
       const data = await apiFetch("/admin/bot-assets", {
         method: "POST",
@@ -187,7 +224,9 @@ export default function ImagesPage() {
           description: method.description,
           destination: method.destination,
           asset_images: isCrypto ? JSON.stringify(cryptoAssets) : method.asset_images,
+          asset_file_ids: isCrypto ? JSON.stringify(cryptoAssetFileIds) : method.asset_file_ids,
           image_url: method.image_url,
+          image_file_id: method.image_file_id,
           markup: method.markup,
           sort_order: method.sort_order,
           enabled: method.enabled,
@@ -217,7 +256,7 @@ export default function ImagesPage() {
           <h1 className="icon-inline">
             <IconImages className="panel-icon" /> Imagenes
           </h1>
-          <p className="muted">Pega los enlaces y actualiza.</p>
+          <p className="muted">Pega la URL o el Telegram file_id. Si hay file_id, el bot lo usa primero.</p>
           <button
             type="button"
             className="images-help-trigger"
@@ -230,14 +269,25 @@ export default function ImagesPage() {
         <h3 className="images-section-title">Bot</h3>
         <ol className="images-list">
           {BOT_IMAGE_FIELDS.map((field) => (
-            <li key={field.key}>
+            <li key={field.baseKey}>
               <span className="images-label">{field.label}</span>
               <input
                 className="images-input"
                 type="text"
-                value={assets[field.key] || ""}
-                onChange={(event) => handleAssetChange(field.key, event.target.value)}
+                value={assets[getAssetUrlKey(field.baseKey)] || ""}
+                onChange={(event) =>
+                  handleAssetChange(getAssetUrlKey(field.baseKey), event.target.value)
+                }
                 placeholder="https://..."
+              />
+              <input
+                className="images-input"
+                type="text"
+                value={assets[getAssetFileIdKey(field.baseKey)] || ""}
+                onChange={(event) =>
+                  handleAssetChange(getAssetFileIdKey(field.baseKey), event.target.value)
+                }
+                placeholder="Telegram file_id"
               />
             </li>
           ))}
@@ -266,6 +316,15 @@ export default function ImagesPage() {
                 }
                 placeholder="https://..."
               />
+              <input
+                className="images-input"
+                type="text"
+                value={method.image_file_id || ""}
+                onChange={(event) =>
+                  handleMethodFileIdChange(method.key, event.target.value)
+                }
+                placeholder="Telegram file_id"
+              />
             </li>
           ))}
           {paymentImageMethods.length === 0 && (
@@ -288,6 +347,15 @@ export default function ImagesPage() {
                 }
                 placeholder="https://..."
               />
+              <input
+                className="images-input"
+                type="text"
+                value={method.image_file_id || ""}
+                onChange={(event) =>
+                  handleMethodFileIdChange(method.key, event.target.value)
+                }
+                placeholder="Telegram file_id"
+              />
             </li>
           ))}
           {CRYPTO_ASSET_OPTIONS.map((asset) => (
@@ -301,6 +369,15 @@ export default function ImagesPage() {
                   handleCryptoAssetChange(asset.key, event.target.value)
                 }
                 placeholder="https://..."
+              />
+              <input
+                className="images-input"
+                type="text"
+                value={cryptoAssetFileIds[asset.key] || ""}
+                onChange={(event) =>
+                  handleCryptoAssetFileIdChange(asset.key, event.target.value)
+                }
+                placeholder="Telegram file_id"
               />
             </li>
           ))}

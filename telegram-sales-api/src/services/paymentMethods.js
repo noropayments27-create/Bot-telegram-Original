@@ -61,7 +61,9 @@ async function ensurePaymentMethodsSchema(pool) {
        description text,
        destination text,
        asset_images text,
+       asset_file_ids text,
        image_url text,
+       image_file_id text,
        markup text,
        sort_order int,
        enabled boolean NOT NULL DEFAULT true,
@@ -74,7 +76,9 @@ async function ensurePaymentMethodsSchema(pool) {
      ADD COLUMN IF NOT EXISTS description text,
      ADD COLUMN IF NOT EXISTS destination text,
      ADD COLUMN IF NOT EXISTS asset_images text,
+     ADD COLUMN IF NOT EXISTS asset_file_ids text,
      ADD COLUMN IF NOT EXISTS image_url text,
+     ADD COLUMN IF NOT EXISTS image_file_id text,
      ADD COLUMN IF NOT EXISTS markup text,
      ADD COLUMN IF NOT EXISTS sort_order int`
   );
@@ -124,7 +128,7 @@ function normalizeMethodKey(input) {
 async function listPaymentMethods(pool) {
   await ensurePaymentMethodsSchema(pool);
   const res = await pool.query(
-    `SELECT method_key, label, description, destination, asset_images, image_url, markup, sort_order, enabled
+    `SELECT method_key, label, description, destination, asset_images, asset_file_ids, image_url, image_file_id, markup, sort_order, enabled
      FROM payment_methods
      ORDER BY sort_order NULLS LAST, method_key ASC`
   );
@@ -134,8 +138,10 @@ async function listPaymentMethods(pool) {
     description: row.description || null,
     destination: row.destination || null,
     asset_images: row.asset_images || null,
+    asset_file_ids: row.asset_file_ids || null,
     enabled: Boolean(row.enabled),
     image_url: row.image_url || null,
+    image_file_id: row.image_file_id || null,
     markup: row.markup || null,
     sort_order: row.sort_order ?? null,
   }));
@@ -189,7 +195,7 @@ async function upsertPaymentMethod(pool, payload) {
     return null;
   }
   const currentRes = await pool.query(
-    `SELECT label, description, destination, asset_images, image_url, markup, sort_order, enabled
+    `SELECT label, description, destination, asset_images, asset_file_ids, image_url, image_file_id, markup, sort_order, enabled
      FROM payment_methods
      WHERE method_key = $1`,
     [key]
@@ -222,12 +228,27 @@ async function upsertPaymentMethod(pool, payload) {
         : JSON.stringify(assetImagesRaw)
       : null
     : current.asset_images || null;
+  const hasAssetFileIds = Object.prototype.hasOwnProperty.call(payload || {}, "asset_file_ids");
+  const assetFileIdsRaw = hasAssetFileIds ? payload?.asset_file_ids : undefined;
+  const assetFileIds = hasAssetFileIds
+    ? assetFileIdsRaw
+      ? typeof assetFileIdsRaw === "string"
+        ? assetFileIdsRaw.trim()
+        : JSON.stringify(assetFileIdsRaw)
+      : null
+    : current.asset_file_ids || null;
   const hasImageUrl = Object.prototype.hasOwnProperty.call(payload || {}, "image_url");
   const imageUrl = hasImageUrl
     ? payload?.image_url
       ? String(payload.image_url).trim()
       : null
     : current.image_url || null;
+  const hasImageFileId = Object.prototype.hasOwnProperty.call(payload || {}, "image_file_id");
+  const imageFileId = hasImageFileId
+    ? payload?.image_file_id
+      ? String(payload.image_file_id).trim()
+      : null
+    : current.image_file_id || null;
   const hasMarkup = Object.prototype.hasOwnProperty.call(payload || {}, "markup");
   const markup = hasMarkup
     ? payload?.markup
@@ -248,20 +269,22 @@ async function upsertPaymentMethod(pool, payload) {
     ? false
     : Boolean(current.enabled);
   await pool.query(
-    `INSERT INTO payment_methods (method_key, label, description, destination, asset_images, image_url, markup, sort_order, enabled)
-     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)
+    `INSERT INTO payment_methods (method_key, label, description, destination, asset_images, asset_file_ids, image_url, image_file_id, markup, sort_order, enabled)
+     VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)
      ON CONFLICT (method_key)
      DO UPDATE SET
        label = EXCLUDED.label,
        description = EXCLUDED.description,
        destination = EXCLUDED.destination,
        asset_images = EXCLUDED.asset_images,
+       asset_file_ids = EXCLUDED.asset_file_ids,
        image_url = EXCLUDED.image_url,
+       image_file_id = EXCLUDED.image_file_id,
        markup = EXCLUDED.markup,
        sort_order = EXCLUDED.sort_order,
        enabled = EXCLUDED.enabled,
        updated_at = now()`,
-    [key, label, description, destination, assetImages, imageUrl, markup, sortOrder, enabled]
+    [key, label, description, destination, assetImages, assetFileIds, imageUrl, imageFileId, markup, sortOrder, enabled]
   );
   return listPaymentMethods(pool);
 }

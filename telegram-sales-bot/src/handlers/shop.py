@@ -84,6 +84,14 @@ class PaymentStates(StatesGroup):
     waiting_photo = State()
 
 
+def _is_en(locale: str | None) -> bool:
+    return str(locale or "").lower().startswith("en")
+
+
+def _tr(locale: str | None, es_text: str, en_text: str) -> str:
+    return en_text if _is_en(locale) else es_text
+
+
 def _normalize_category_value(raw: Any) -> str:
     text = str(raw or "").strip().upper()
     if not text:
@@ -171,6 +179,11 @@ def _format_usd(amount: float) -> str:
 
 def _format_usd_value(amount: float) -> str:
     return f"{_format_usd_amount(amount)} USD"
+
+
+def _format_wallet_usd_value(amount: float) -> str:
+    safe_amount = round(float(amount or 0))
+    return f"${safe_amount:,.0f} USD"
 
 
 def _format_payment_amount(amount: float) -> str:
@@ -376,12 +389,17 @@ async def _render_product_detail_view(
 
 
 def _get_payment_method_image(method_key: str, method: Dict[str, Any] | None = None) -> str | None:
+    if method and method.get("image_file_id"):
+        return str(method.get("image_file_id"))
     if method and method.get("image_url"):
         return str(method.get("image_url"))
     return None
 
 
 def _get_product_image(product: Dict[str, Any]) -> str | None:
+    file_id = str(product.get("image_file_id") or "").strip()
+    if file_id:
+        return file_id
     value = str(product.get("image_url") or "").strip()
     if value:
         return value
@@ -391,6 +409,15 @@ def _get_product_image(product: Dict[str, Any]) -> str | None:
 def _get_crypto_asset_image(
     asset_key: str, method: Dict[str, Any] | None = None
 ) -> str | None:
+    if method and method.get("asset_file_ids"):
+        try:
+            data = json.loads(str(method.get("asset_file_ids")))
+        except (TypeError, ValueError):
+            data = None
+        if isinstance(data, dict):
+            value = str(data.get(asset_key) or "").strip()
+            if value:
+                return value
     if method and method.get("asset_images"):
         try:
             data = json.loads(str(method.get("asset_images")))
@@ -436,6 +463,8 @@ async def _render_payment_methods_prompt(
     page: int,
     index: int,
     locale: str | None = None,
+    order_total: float | None = None,
+    wallet_balance: float | None = None,
 ) -> None:
     payload = await _get_payment_methods_payload()
     methods = payload.get("methods") if isinstance(payload, dict) else []
@@ -443,7 +472,13 @@ async def _render_payment_methods_prompt(
         methods = list(_DEFAULT_PAYMENT_METHODS)
     header_image_url = await _get_payment_methods_header_image(payload)
     keyboard = await build_payment_methods_keyboard(
-        order_id, page, index, locale, methods=methods
+        order_id,
+        page,
+        index,
+        locale,
+        methods=methods,
+        wallet_balance=wallet_balance,
+        order_total=order_total,
     )
     if header_image_url:
         await render_main_view_with_photo(
@@ -1134,6 +1169,7 @@ def _normalize_product(product: Dict[str, Any]) -> Dict[str, Any]:
         "display_name": _strip_category_prefix(name),
         "description": product.get("description") or "",
         "image_url": product.get("image_url") or "",
+        "image_file_id": product.get("image_file_id") or "",
         "price": float(product.get("price") or _DEFAULT_PRODUCT_PRICE_USD),
         "available_stock": product.get("available_stock"),
         "stock_is_unlimited": product.get("stock_is_unlimited"),
@@ -1468,6 +1504,8 @@ async def build_payment_methods_keyboard(
     index: int,
     locale: str | None = None,
     methods: List[Dict[str, Any]] | None = None,
+    wallet_balance: float | None = None,
+    order_total: float | None = None,
 ) -> InlineKeyboardMarkup:
     methods = methods if isinstance(methods, list) else await _get_payment_methods()
     enabled_methods = [
@@ -1484,6 +1522,21 @@ async def build_payment_methods_keyboard(
                 InlineKeyboardButton(
                     text=str(label),
                     callback_data=f"order:method:{order_id}:{method_index}",
+                )
+            ]
+        )
+    if order_total is not None and float(order_total or 0) > 0:
+        safe_balance = float(wallet_balance or 0)
+        enough_wallet = safe_balance + 0.0001 >= float(order_total)
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text="💰 Pagar con saldo" if enough_wallet else "🚫 Saldo insuficiente",
+                    callback_data=(
+                        f"order:walletpay:{order_id}"
+                        if enough_wallet
+                        else f"order:walletinsufficient:{order_id}"
+                    ),
                 )
             ]
         )
@@ -1902,6 +1955,7 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         last_order_id=order["id"],
         current_order_id=order["id"],
         current_order_total=order.get("total"),
+        current_wallet_balance=result.get("wallet_balance"),
         current_order_summary=None,
     )
     if _is_free_order_payload(order, result):
@@ -1923,6 +1977,8 @@ async def handle_shop_buy(callback: CallbackQuery, state: FSMContext) -> None:
         page,
         index,
         locale,
+        order_total=float(order.get("total") or 0),
+        wallet_balance=float(result.get("wallet_balance") or 0),
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("category:buy:"))
@@ -2017,6 +2073,7 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         last_order_id=order["id"],
         current_order_id=order["id"],
         current_order_total=order.get("total"),
+        current_wallet_balance=result.get("wallet_balance"),
         current_order_summary=None,
     )
     if _is_free_order_payload(order, result):
@@ -2038,6 +2095,8 @@ async def handle_category_buy(callback: CallbackQuery, state: FSMContext) -> Non
         safe_page,
         index,
         locale,
+        order_total=float(order.get("total") or 0),
+        wallet_balance=float(result.get("wallet_balance") or 0),
     )
     await callback.answer()
 @router.callback_query(F.data.startswith("shop:cart:"))
@@ -2410,6 +2469,7 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         last_order_id=order_id,
         current_order_id=order_id,
         current_order_total=cart_total,
+        current_wallet_balance=result.get("wallet_balance"),
         current_order_summary=cart_summary,
         payment_method=None,
         payment_method_order_id=None,
@@ -2434,6 +2494,8 @@ async def handle_cart_checkout(callback: CallbackQuery, state: FSMContext) -> No
         1,
         1,
         locale,
+        order_total=cart_total,
+        wallet_balance=float(result.get("wallet_balance") or 0),
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
@@ -2472,9 +2534,105 @@ async def handle_order_methods(callback: CallbackQuery, state: FSMContext) -> No
         page,
         index,
         locale,
+        order_total=float((await state.get_data()).get("current_order_total") or 0),
+        wallet_balance=float((await state.get_data()).get("current_wallet_balance") or 0),
     )
     await start_order_watch(api_client, order_id, callback.message, state, locale)
     await callback.answer()
+
+
+@router.callback_query(F.data.startswith("order:walletinsufficient:"))
+async def handle_order_wallet_insufficient(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    data = await state.get_data()
+    current_total = float(data.get("current_order_total") or 0)
+    wallet_balance = float(data.get("current_wallet_balance") or 0)
+    missing = max(current_total - wallet_balance, 0)
+    await callback.answer(
+        _tr(
+            locale,
+            f"Saldo actual: {_format_wallet_usd_value(wallet_balance)}\nTe faltan {_format_wallet_usd_value(missing)} para pagar con saldo.",
+            f"Current balance: {_format_wallet_usd_value(wallet_balance)}\nYou are missing {_format_wallet_usd_value(missing)} to pay with balance.",
+        ),
+        show_alert=True,
+    )
+
+
+@router.callback_query(F.data.startswith("order:walletpay:"))
+async def handle_order_wallet_pay(callback: CallbackQuery, state: FSMContext) -> None:
+    if not callback.message or not callback.from_user:
+        return
+    locale = await get_user_locale(
+        api_client, callback.from_user.id, callback.from_user.language_code
+    )
+    order_id = callback.data.split(":")[-1]
+    if not await guard_order_payable_or_redirect(
+        api_client, order_id, callback.message, state, locale
+    ):
+        await callback.answer()
+        return
+    result = await api_client.pay_order_with_wallet(order_id, callback.from_user.id)
+    if result.get("status_code") == 409:
+        error_code = (result.get("data") or {}).get("error")
+        if error_code == "INSUFFICIENT_WALLET_BALANCE":
+            available = float((result.get("data") or {}).get("available") or 0)
+            required = float((result.get("data") or {}).get("required") or 0)
+            await callback.answer(
+                _tr(
+                    locale,
+                    f"Saldo actual: {_format_wallet_usd_value(available)}\nNecesitas {_format_wallet_usd_value(required)} para esta compra.",
+                    f"Current balance: {_format_wallet_usd_value(available)}\nYou need {_format_wallet_usd_value(required)} for this purchase.",
+                ),
+                show_alert=True,
+            )
+            await state.update_data(current_wallet_balance=available)
+            return
+        await callback.answer(
+            _tr(
+                locale,
+                "⚠️ Esa orden ya no se puede pagar con saldo.",
+                "⚠️ That order can no longer be paid with balance.",
+            ),
+            show_alert=True,
+        )
+        return
+    wallet = result.get("wallet") or {}
+    await state.update_data(
+        payment_method="WALLET",
+        payment_method_order_id=order_id,
+        payment_ready=False,
+        current_wallet_balance=float(wallet.get("balance") or 0),
+    )
+    await render_main_view(
+        callback.message,
+        callback.from_user.id,
+        _tr(
+            locale,
+            "✅ <b>Pago con saldo exitosamente</b>\n\n"
+            f"Se le desconto: <b>{_format_wallet_usd_value(float((result.get('transaction') or {}).get('amount') or 0))}</b>\n"
+            f"Saldo restante: <b>{_format_wallet_usd_value(float(wallet.get('balance') or 0))}</b>\n\n"
+            "📦 La entrega automatica de su producto, se le realizara dentro de unos segundos.",
+            "✅ <b>Balance payment successful</b>\n\n"
+            f"Deducted: <b>{_format_wallet_usd_value(float((result.get('transaction') or {}).get('amount') or 0))}</b>\n"
+            f"Remaining balance: <b>{_format_wallet_usd_value(float(wallet.get('balance') or 0))}</b>\n\n"
+            "📦 Your product delivery is automatic and will be completed in a few seconds.",
+        ),
+        reply_markup=InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(text=t(locale, "btn_back"), callback_data="nav:back"),
+                    InlineKeyboardButton(text=t(locale, "btn_home"), callback_data="home:show"),
+                ],
+            ]
+        ),
+        parse_mode=ParseMode.HTML,
+    )
+    await callback.answer()
+
 @router.callback_query(F.data.startswith("order:method:"))
 async def handle_order_method(callback: CallbackQuery, state: FSMContext) -> None:
     if not callback.message or not callback.from_user:
@@ -2737,6 +2895,8 @@ async def handle_pay(callback: CallbackQuery, state: FSMContext) -> None:
             1,
             1,
             locale,
+            order_total=float(data.get("current_order_total") or 0),
+            wallet_balance=float(data.get("current_wallet_balance") or 0),
         )
         await callback.answer(t(locale, "select_payment_method_first"), show_alert=True)
         return

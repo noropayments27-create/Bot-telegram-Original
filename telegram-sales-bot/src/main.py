@@ -15,14 +15,17 @@ from .handlers import (
     admin_commands,
     affiliates,
     lang,
+    publish_targets,
     start,
     shop,
     support,
+    wallets,
 )
 from .middlewares.ban_guard import BanGuardMiddleware
 from .middlewares.access_code import AccessCodeMiddleware
 from .middlewares.maintenance_guard import MaintenanceGuardMiddleware
 from .middlewares.perf_log import PerfLogMiddleware
+from .middlewares.private_chat_guard import PrivateChatGuardMiddleware
 
 
 _last_error_report_at: dict[str, float] = {}
@@ -77,8 +80,11 @@ async def main() -> None:
     ban_guard = BanGuardMiddleware()
     access_guard = AccessCodeMiddleware()
     perf_log = PerfLogMiddleware()
+    private_chat_guard = PrivateChatGuardMiddleware()
     dp.message.middleware(perf_log)
     dp.callback_query.middleware(perf_log)
+    dp.message.middleware(private_chat_guard)
+    dp.callback_query.middleware(private_chat_guard)
     dp.message.middleware(maintenance_guard)
     dp.callback_query.middleware(maintenance_guard)
     dp.message.middleware(ban_guard)
@@ -112,7 +118,9 @@ async def main() -> None:
 
     dp.include_router(start.router)
     dp.include_router(lang.router)
+    dp.include_router(publish_targets.router)
     dp.include_router(shop.router)
+    dp.include_router(wallets.router)
     dp.include_router(admin_auth.router)
     dp.include_router(admin_actions.router)
     dp.include_router(admin_commands.router)

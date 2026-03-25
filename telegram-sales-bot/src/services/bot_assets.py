@@ -154,6 +154,11 @@ async def get_bot_asset_image(
     api_client: ApiClient, key: str, fallback: str | None = None
 ) -> str | None:
     assets = await get_bot_assets(api_client)
+    if key.endswith("_image_url"):
+        file_id_key = f"{key[:-len('_image_url')]}_image_file_id"
+        file_id = _normalize_value(assets.get(file_id_key))
+        if file_id:
+            return file_id
     value = _normalize_value(assets.get(key))
     if value:
         return await _resolve_image_url(value)

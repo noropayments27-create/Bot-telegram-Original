@@ -79,6 +79,7 @@ async function listProducts(req, res, next) {
               p.description,
               p.description_en,
               p.image_url,
+              p.image_file_id,
               p.price,
               p.is_active,
               p.out_of_stock,

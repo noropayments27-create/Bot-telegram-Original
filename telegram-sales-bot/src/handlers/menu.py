@@ -20,6 +20,7 @@ def _default_home_buttons(locale: str | None = None) -> list[dict[str, str]]:
         {"label": t(locale, "menu_affiliates"), "action": "home:affiliates"},
         {"label": t(locale, "menu_community"), "action": "home:community"},
         {"label": t(locale, "menu_support"), "action": "home:support"},
+        {"label": t(locale, "menu_wallet"), "action": "home:wallet"},
         {"label": t(locale, "menu_language"), "action": "home:soon:idioma"},
     ]
 
@@ -151,6 +152,30 @@ def _build_keyboard_from_rows(
     return InlineKeyboardMarkup(inline_keyboard=inline_rows)
 
 
+def _ensure_wallet_button(
+    rows: list[list[dict[str, str]]],
+    locale: str | None = None,
+) -> list[list[dict[str, str]]]:
+    wallet_action = "home:wallet"
+    if any(
+        str(button.get("action") or "").strip() == wallet_action
+        for row in rows
+        for button in row
+    ):
+        return rows
+    normalized = [list(row[:2]) for row in rows if row]
+    insert_index = len(normalized)
+    for row_index, row in enumerate(normalized):
+        actions = {str(button.get("action") or "").strip() for button in row}
+        if {"home:community", "home:support"} & actions:
+            insert_index = row_index + 1
+    normalized.insert(
+        insert_index,
+        [{"label": t(locale, "menu_wallet"), "action": wallet_action}],
+    )
+    return normalized
+
+
 def build_community_text(
     locale: str | None = None,
     section_layout: dict | None = None,
@@ -212,7 +237,7 @@ def build_main_keyboard(
         localized = home_layout.get(locale_value)
         if isinstance(localized, dict):
             raw_buttons = localized.get("buttons")
-    button_rows = _normalize_layout_buttons(raw_buttons, locale)
+    button_rows = _ensure_wallet_button(_normalize_layout_buttons(raw_buttons, locale), locale)
 
     return _build_keyboard_from_rows(button_rows)
 

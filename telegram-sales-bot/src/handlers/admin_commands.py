@@ -1,6 +1,7 @@
 import asyncio
 from datetime import datetime
 import html
+import random
 import re
 from typing import Any, Dict, Optional
 
@@ -96,6 +97,7 @@ _HOME_DEFAULT_BUTTON_KEYS = [
     ("menu_affiliates", "home:affiliates"),
     ("menu_community", "home:community"),
     ("menu_support", "home:support"),
+    ("menu_wallet", "home:wallet"),
     ("menu_language", "home:soon:idioma"),
 ]
 
@@ -130,6 +132,20 @@ _REFUND_TYPE_LABELS = {
     "PARTIAL": ("Parcial", "Partial"),
 }
 
+_PAYMENT_METHOD_LABELS = {
+    "BTC": ("Bitcoin", "Bitcoin"),
+    "LTC": ("Litecoin", "Litecoin"),
+    "MP": ("Mercado Pago", "Mercado Pago"),
+    "NEQUI": ("Nequi", "Nequi"),
+    "BINANCE": ("Binance", "Binance"),
+    "BINANCE_ID": ("Binance ID", "Binance ID"),
+    "USDT": ("USDT", "USDT"),
+    "USDT_BSC": ("USDT BSC", "USDT BSC"),
+    "USDT_TRON": ("USDT Tron", "USDT Tron"),
+    "PAYPAL": ("PayPal", "PayPal"),
+    "WALLET": ("Wallet", "Wallet"),
+}
+
 
 def _map_enum_label(value: Any, locale: str | None, labels: Dict[str, tuple[str, str]]) -> str:
     key = str(value or "").upper().strip()
@@ -151,6 +167,10 @@ def _payment_review_text(value: Any, locale: str | None) -> str:
 
 def _refund_type_text(value: Any, locale: str | None) -> str:
     return _map_enum_label(value, locale, _REFUND_TYPE_LABELS)
+
+
+def _payment_method_text(value: Any, locale: str | None) -> str:
+    return _map_enum_label(value, locale, _PAYMENT_METHOD_LABELS)
 
 
 def _is_scam_order(order: Dict[str, Any] | None) -> bool:
@@ -529,10 +549,30 @@ def _default_home_layout() -> Dict[str, Any]:
     }
 
 
+def _ensure_wallet_home_button(rows: list[list[Dict[str, str]]], locale: str) -> list[list[Dict[str, str]]]:
+    if any(
+        str(button.get("action") or "").strip() == "home:wallet"
+        for row in rows
+        for button in row
+    ):
+        return rows
+    mutable = _clone_home_button_rows(rows)
+    insert_index = len(mutable)
+    for row_index, row in enumerate(mutable):
+        actions = {str(button.get("action") or "").strip() for button in row}
+        if {"home:community", "home:support"} & actions:
+            insert_index = row_index + 1
+    mutable.insert(
+        insert_index,
+        [{"label": t(locale, "menu_wallet"), "action": "home:wallet"}],
+    )
+    return _trim_home_button_rows(mutable)
+
+
 def _normalize_home_buttons(raw_buttons: Any, locale: str) -> list[list[Dict[str, str]]]:
     fallback = _default_home_button_rows(locale)
     if not isinstance(raw_buttons, list):
-        return fallback
+        return _ensure_wallet_home_button(fallback, locale)
 
     row_mode: list[list[Dict[str, str]]] = []
     flat_mode: list[Dict[str, str]] = []
@@ -559,10 +599,10 @@ def _normalize_home_buttons(raw_buttons: Any, locale: str) -> list[list[Dict[str
             else:
                 row_mode.append([button])
         normalized_rows = _trim_home_button_rows(row_mode)
-        return normalized_rows or fallback
+        return _ensure_wallet_home_button(normalized_rows or fallback, locale)
 
     normalized_rows = _trim_home_button_rows(_pair_home_buttons(flat_mode))
-    return normalized_rows or fallback
+    return _ensure_wallet_home_button(normalized_rows or fallback, locale)
 
 
 def _flatten_home_buttons(rows: list[list[Dict[str, str]]]) -> list[Dict[str, str]]:
@@ -867,15 +907,25 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
             ],
             [
                 InlineKeyboardButton(
-                    text=_tr(locale, "🚫 Banear", "🚫 Ban"),
-                    callback_data="adminui:ban",
+                    text=_tr(locale, "💼 Wallets", "💼 Wallets"),
+                    callback_data="adminui:wallets",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🆔 File ID", "🆔 File ID"),
+                    callback_data="adminui:fileid",
                 ),
             ],
             [
                 InlineKeyboardButton(
+                    text=_tr(locale, "🚫 Banear", "🚫 Ban"),
+                    callback_data="adminui:ban",
+                ),
+                InlineKeyboardButton(
                     text=_tr(locale, "♻️ Desbanear", "♻️ Unban"),
                     callback_data="adminui:unban",
                 ),
+            ],
+            [
                 InlineKeyboardButton(
                     text=_tr(locale, "🛠 Mantenimiento", "🛠 Maintenance"),
                     callback_data="adminui:maint",
@@ -883,6 +933,12 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                 InlineKeyboardButton(
                     text=_tr(locale, "📣 Difusión", "📣 Broadcast"),
                     callback_data="adminui:broadcast",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📢 Canales y Grupos", "📢 Channels & Groups"),
+                    callback_data="adminui:publication",
                 ),
             ],
             [
@@ -987,6 +1043,57 @@ def _build_orders_menu_keyboard(locale: str | None = "es") -> InlineKeyboardMark
     )
 
 
+def _build_wallets_menu_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📥 Recargas", "📥 Top-ups"),
+                    callback_data="adminui:wallets:pending",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👤 Ver wallet", "👤 View wallet"),
+                    callback_data="adminui:wallets:view",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Ajustar saldo", "➕ Adjust balance"),
+                    callback_data="adminui:wallets:adjust",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✅ Aprobar recarga", "✅ Approve top-up"),
+                    callback_data="adminui:wallets:approve",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "❌ Rechazar recarga", "❌ Reject top-up"),
+                    callback_data="adminui:wallets:reject",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🚨 Estafa", "🚨 Scam"),
+                    callback_data="adminui:wallets:scam",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎁 Regalos", "🎁 Gifts"),
+                    callback_data="adminui:wallets:gifts",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
 def _build_back_to_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
@@ -1000,51 +1107,96 @@ def _build_back_to_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMa
     )
 
 
-def _build_broadcast_buttons_prompt_text(locale: str | None = "es") -> str:
+def _build_broadcast_buttons_prompt_text(
+    locale: str | None = "es",
+    *,
+    gift_only: bool = False,
+    channels_mode: bool = False,
+) -> str:
+    if gift_only:
+        return _tr(
+            locale,
+            ("🎁 <b>Regalar saldo en Canales y Grupos</b>\n" if channels_mode else "🎁 <b>Regalar saldo por Difusión</b>\n")
+            + "---------------------------------\n"
+            + "Paso 2/3 · Configura el botón del regalo.\n\n"
+            + "Formato:\n"
+            + "<code>Reclama $1 USD | regalo:1:5</code>\n"
+            + "Eso significa: <b>$1 USD</b> por persona y <b>5 cupos</b>.\n\n"
+            + "Solo se permite <b>un botón de regalo</b> por mensaje.\n"
+            + "Si no quieres botones, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
+            ("🎁 <b>Gift balance in Channels & Groups</b>\n" if channels_mode else "🎁 <b>Gift balance by Broadcast</b>\n")
+            + "---------------------------------\n"
+            + "Step 2/3 · Configure the gift button.\n\n"
+            + "Format:\n"
+            + "<code>Claim $1 USD | gift:1:5</code>\n"
+            + "This means: <b>$1 USD</b> per person and <b>5 claims</b>.\n\n"
+            + "Only <b>one gift button</b> is allowed per message.\n"
+            + "If you don't want buttons, type <code>none</code> or use <b>⏭ Skip</b>.",
+        )
     return _tr(
         locale,
-        "📣 <b>Difusión</b>\n"
-        "Paso 2/3 · Botones con link (opcional).\n\n"
-        "Formato por línea:\n"
-        "<code>Texto botón | https://enlace</code>\n"
-        "Misma línea: <code>Botón 1 | https://a.com ; Botón 2 | https://b.com</code>\n\n"
-        "Si no quieres botones, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
-        "📣 <b>Broadcast</b>\n"
-        "Step 2/3 · Link buttons (optional).\n\n"
-        "One line format:\n"
-        "<code>Button text | https://link</code>\n"
-        "Same row: <code>Button 1 | https://a.com ; Button 2 | https://b.com</code>\n\n"
-        "If you don't want buttons, type <code>none</code> or use <b>⏭ Skip</b>.",
+        ("📢" if channels_mode else "📣")
+        + (" <b>Canales y Grupos</b>\n" if channels_mode else " <b>Difusión</b>\n")
+        + "Paso 2/3 · Botones con link (opcional).\n\n"
+        + "Formato por línea:\n"
+        + "<code>Texto botón | https://enlace</code>\n"
+        + "Misma línea: <code>Botón 1 | https://a.com ; Botón 2 | https://b.com</code>\n\n"
+        + "Si no quieres botones, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
+        ("📢" if channels_mode else "📣")
+        + (" <b>Channels & Groups</b>\n" if channels_mode else " <b>Broadcast</b>\n")
+        + "Step 2/3 · Link buttons (optional).\n\n"
+        + "One line format:\n"
+        + "<code>Button text | https://link</code>\n"
+        + "Same row: <code>Button 1 | https://a.com ; Button 2 | https://b.com</code>\n\n"
+        + "If you don't want buttons, type <code>none</code> or use <b>⏭ Skip</b>.",
     )
 
 
-def _build_broadcast_media_prompt_text(locale: str | None = "es") -> str:
+def _build_broadcast_media_prompt_text(
+    locale: str | None = "es",
+    *,
+    gift_only: bool = False,
+    channels_mode: bool = False,
+) -> str:
+    if gift_only:
+        return _tr(
+            locale,
+            ("🎁 <b>Regalar saldo en Canales y Grupos</b>\n" if channels_mode else "🎁 <b>Regalar saldo por Difusión</b>\n")
+            + "---------------------------------\n"
+            + "Paso 3/3 · Multimedia (opcional).\n\n"
+            + "Envía una <b>imagen</b>, <b>GIF</b>, <b>video</b> o <b>sticker</b>.\n"
+            + "Si no quieres multimedia, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
+            ("🎁 <b>Gift balance in Channels & Groups</b>\n" if channels_mode else "🎁 <b>Gift balance by Broadcast</b>\n")
+            + "---------------------------------\n"
+            + "Step 3/3 · Media (optional).\n\n"
+            + "Send an <b>image</b>, <b>GIF</b>, <b>video</b> or <b>sticker</b>.\n"
+            + "If you don't want media, type <code>none</code> or use <b>⏭ Skip</b>.",
+        )
     return _tr(
         locale,
-        "📣 <b>Difusión</b>\n"
-        "Paso 3/3 · Multimedia (opcional).\n\n"
-        "Envía una <b>imagen</b>, <b>GIF</b> o <b>video</b>.\n"
-        "Si no quieres multimedia, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
-        "📣 <b>Broadcast</b>\n"
-        "Step 3/3 · Media (optional).\n\n"
-        "Send an <b>image</b>, <b>GIF</b> or <b>video</b>.\n"
-        "If you don't want media, type <code>none</code> or use <b>⏭ Skip</b>.",
+        ("📢 <b>Canales y Grupos</b>\n" if channels_mode else "📣 <b>Difusión</b>\n")
+        + "Paso 3/3 · Multimedia (opcional).\n\n"
+        + "Envía una <b>imagen</b>, <b>GIF</b> o <b>video</b>.\n"
+        + "Si no quieres multimedia, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
+        ("📢 <b>Channels & Groups</b>\n" if channels_mode else "📣 <b>Broadcast</b>\n")
+        + "Step 3/3 · Media (optional).\n\n"
+        + "Send an <b>image</b>, <b>GIF</b> or <b>video</b>.\n"
+        + "If you don't want media, type <code>none</code> or use <b>⏭ Skip</b>.",
     )
 
 
-def _normalize_broadcast_buttons_state(value: Any) -> list[Dict[str, str]]:
+def _normalize_broadcast_buttons_state(value: Any) -> list[Dict[str, Any]]:
     if not isinstance(value, list):
         return []
-    normalized: list[Dict[str, str]] = []
+    normalized: list[Dict[str, Any]] = []
     default_row = 0
     for item in value:
         if not isinstance(item, dict):
             continue
         text = _sanitize_broadcast_button_text(item.get("text") or "")
+        action = str(item.get("action") or item.get("type") or "").strip().lower()
         url = str(item.get("url") or "").strip()
-        if not text or not url:
-            continue
-        if not (url.startswith("http://") or url.startswith("https://")):
+        if not text:
             continue
         row_raw = item.get("row")
         try:
@@ -1053,9 +1205,75 @@ def _normalize_broadcast_buttons_state(value: Any) -> list[Dict[str, str]]:
             row = default_row
         if row < 0:
             row = default_row
+        if action == "gift":
+            try:
+                gift_amount_usd = float(item.get("gift_amount_usd") or item.get("amount_usd") or item.get("amount") or 0)
+            except (TypeError, ValueError):
+                gift_amount_usd = 0
+            try:
+                gift_max_claims = int(item.get("gift_max_claims") or item.get("max_claims") or item.get("claims") or 0)
+            except (TypeError, ValueError):
+                gift_max_claims = 0
+            if gift_amount_usd <= 0 or gift_max_claims <= 0:
+                continue
+            normalized.append(
+                {
+                    "text": text[:64],
+                    "action": "gift",
+                    "gift_amount_usd": round(gift_amount_usd, 2),
+                    "gift_max_claims": gift_max_claims,
+                    "row": row,
+                }
+            )
+            default_row += 1
+            continue
+        if not url:
+            continue
+        if not (url.startswith("http://") or url.startswith("https://")):
+            continue
         normalized.append({"text": text[:64], "url": url, "row": row})
         default_row += 1
     return normalized
+
+
+def _buttons_have_wallet_gift(buttons: Any) -> bool:
+    normalized = _normalize_broadcast_buttons_state(buttons)
+    return any(str(item.get("action") or "").strip().lower() == "gift" for item in normalized)
+
+
+def _enforce_wallet_gift_flow_buttons(
+    buttons: list[Dict[str, Any]],
+    *,
+    gift_only: bool,
+    locale: str | None = "es",
+) -> list[Dict[str, Any]]:
+    has_gift = _buttons_have_wallet_gift(buttons)
+    if gift_only:
+        if not has_gift:
+            raise ValueError(
+                _tr(
+                    locale,
+                    "Debes configurar un botón regalo. Usa: Texto | regalo:1:5",
+                    "You must configure a gift button. Use: Text | gift:1:5",
+                )
+            )
+        if any(str(item.get("action") or "").strip().lower() != "gift" for item in buttons):
+            raise ValueError(
+                _tr(
+                    locale,
+                    "En Regalar saldo solo se permiten botones de regalo.",
+                    "Only gift buttons are allowed in Gift balance.",
+                )
+            )
+    elif has_gift:
+        raise ValueError(
+            _tr(
+                locale,
+                "Los botones regalo deben crearse desde 🎁 Regalar saldo.",
+                "Gift buttons must be created from 🎁 Gift balance.",
+            )
+        )
+    return buttons
 
 
 def _sanitize_broadcast_button_text(value: Any) -> str:
@@ -1095,15 +1313,17 @@ def _normalize_broadcast_message_entities(value: Any) -> list[Dict[str, Any]]:
 
 
 def _build_broadcast_preview_keyboard(
-    buttons: list[Dict[str, str]],
+    buttons: list[Dict[str, Any]],
+    linked_message_id: int | None = None,
     locale: str | None = "es",
 ) -> InlineKeyboardMarkup:
     grouped: Dict[int, list[InlineKeyboardButton]] = {}
     fallback_row = 0
     for button in buttons:
         text = str(button.get("text") or "").strip()[:64]
+        action = str(button.get("action") or button.get("type") or "").strip().lower()
         url = str(button.get("url") or "").strip()
-        if not text or not url:
+        if not text:
             continue
         try:
             row_key = int(button.get("row"))
@@ -1111,7 +1331,15 @@ def _build_broadcast_preview_keyboard(
             row_key = fallback_row
         if row_key < 0:
             row_key = fallback_row
-        grouped.setdefault(row_key, []).append(InlineKeyboardButton(text=text, url=url))
+        if action == "gift":
+            grouped.setdefault(row_key, []).append(
+                InlineKeyboardButton(
+                    text=text,
+                    callback_data="adminui:gift:preview",
+                )
+            )
+        elif url:
+            grouped.setdefault(row_key, []).append(InlineKeyboardButton(text=text, url=url))
         fallback_row += 1
     rows: list[list[InlineKeyboardButton]] = []
     for key in sorted(grouped.keys()):
@@ -1122,7 +1350,11 @@ def _build_broadcast_preview_keyboard(
         [
             InlineKeyboardButton(
                 text=_tr(locale, "Salir", "Exit"),
-                callback_data="adminui:broadcast:preview:close",
+                callback_data=(
+                    f"adminui:broadcast:preview:close:{int(linked_message_id)}"
+                    if linked_message_id
+                    else "adminui:broadcast:preview:close"
+                ),
             )
         ]
     )
@@ -1132,6 +1364,8 @@ def _build_broadcast_preview_keyboard(
 def _build_broadcast_step_keyboard(
     step: str,
     locale: str | None = "es",
+    *,
+    back_callback: str = "adminui:home",
 ) -> InlineKeyboardMarkup:
     target = "buttons" if step == "buttons" else "media"
     return InlineKeyboardMarkup(
@@ -1145,7 +1379,7 @@ def _build_broadcast_step_keyboard(
             [
                 InlineKeyboardButton(
                     text=_tr(locale, "⬅ volver", "⬅ back"),
-                    callback_data="adminui:home",
+                    callback_data=back_callback,
                 )
             ],
         ]
@@ -1160,6 +1394,8 @@ def _broadcast_media_label(media_kind: str | None, locale: str | None = "es") ->
         return "GIF"
     if media_kind_safe == "video":
         return _tr(locale, "Video", "Video")
+    if media_kind_safe == "sticker":
+        return _tr(locale, "Sticker", "Sticker")
     return _tr(locale, "Sin multimedia", "No media")
 
 
@@ -1482,11 +1718,12 @@ def _build_broadcast_review_text(
     media_kind: str | None,
     locale: str | None = "es",
 ) -> str:
+    gift_only = _buttons_have_wallet_gift(buttons)
     return (
         _tr(
             locale,
-            "✅ <b>Difusión lista para enviar</b>\n\n",
-            "✅ <b>Broadcast ready to send</b>\n\n",
+            "✅ <b>Difusión lista para enviar</b>\n\n" if not gift_only else "🎁 <b>Regalar saldo por Difusión</b>\n---------------------------------\n✅ <b>Difusión lista para enviar</b>\n\n",
+            "✅ <b>Broadcast ready to send</b>\n\n" if not gift_only else "🎁 <b>Gift balance by Broadcast</b>\n---------------------------------\n✅ <b>Broadcast ready to send</b>\n\n",
         )
         + f"📝 {_tr(locale, 'Texto', 'Text')}: <b>{_tr(locale, 'configurado', 'configured')}</b>\n"
         f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons)}</b>\n"
@@ -1499,7 +1736,11 @@ def _build_broadcast_review_text(
     )
 
 
-def _build_broadcast_review_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+def _build_broadcast_review_keyboard(
+    locale: str | None = "es",
+    *,
+    back_callback: str = "adminui:home",
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -1537,7 +1778,7 @@ def _build_broadcast_review_keyboard(locale: str | None = "es") -> InlineKeyboar
             [
                 InlineKeyboardButton(
                     text=_tr(locale, "⬅ volver", "⬅ back"),
-                    callback_data="adminui:home",
+                    callback_data=back_callback,
                 )
             ],
         ]
@@ -1567,12 +1808,678 @@ def _build_broadcast_menu_keyboard(locale: str | None = "es") -> InlineKeyboardM
             ],
             [
                 InlineKeyboardButton(
+                    text=_tr(locale, "🎁 Regalar saldo", "🎁 Gift balance"),
+                    callback_data="adminui:broadcast:newgift",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎁 Guardados", "🎁 Saved gifts"),
+                    callback_data="adminui:broadcast:savedgift",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
                     text=_tr(locale, "⬅ volver", "⬅ back"),
                     callback_data="adminui:home",
                 ),
             ],
         ]
     )
+
+
+def _build_publication_menu_text(locale: str | None = "es") -> str:
+    return _tr(
+        locale,
+        "📢 <b>Canales y Grupos</b>\n\n"
+        "Publica mensajes, imágenes y botones en los grupos y canales donde el bot es admin.",
+        "📢 <b>Channels & Groups</b>\n\n"
+        "Publish messages, images and buttons to groups and channels where the bot is admin.",
+    )
+
+
+def _build_publication_menu_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Crear mensaje", "➕ Create message"),
+                    callback_data="adminui:publication:new",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💾 Guardadas", "💾 Saved"),
+                    callback_data="adminui:publication:saved",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎁 Regalar saldo", "🎁 Gift balance"),
+                    callback_data="adminui:publication:newgift",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎁 Guardados", "🎁 Saved gifts"),
+                    callback_data="adminui:publication:savedgift",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📋 Chats", "📋 Chats"),
+                    callback_data="adminui:publication:targets",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_publication_text_step_keyboard(
+    locale: str | None = "es",
+    *,
+    back_callback: str = "adminui:publication",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data=back_callback,
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⏭ Saltar", "⏭ Skip"),
+                    callback_data="adminui:publication:skip:text",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
+
+
+def _build_broadcast_text_step_keyboard(
+    locale: str | None = "es",
+    *,
+    back_callback: str = "adminui:broadcast",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data=back_callback,
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⏭ Saltar", "⏭ Skip"),
+                    callback_data="adminui:broadcast:skip:text",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                )
+            ],
+        ]
+    )
+
+
+def _build_publication_step_keyboard(
+    step: str,
+    locale: str | None = "es",
+    *,
+    back_callback: str = "adminui:publication",
+) -> InlineKeyboardMarkup:
+    rows: list[list[InlineKeyboardButton]] = []
+    if step == "buttons":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⏭ Sin botones", "⏭ No buttons"),
+                    callback_data="adminui:publication:skip:buttons",
+                ),
+            ]
+        )
+    elif step == "media":
+        rows.append(
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⏭ Sin multimedia", "⏭ No media"),
+                    callback_data="adminui:publication:skip:media",
+                ),
+            ]
+        )
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅ volver", "⬅ back"),
+                callback_data=back_callback,
+            )
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=rows)
+
+
+def _publication_scope_label(scope: str, locale: str | None = "es") -> str:
+    normalized = str(scope or "all").strip().lower()
+    if normalized == "groups":
+        return _tr(locale, "Solo grupos", "Groups only")
+    if normalized == "channels":
+        return _tr(locale, "Solo canales", "Channels only")
+    return _tr(locale, "Todos", "All")
+
+
+def _build_publication_review_text(
+    text: str,
+    buttons: list[Dict[str, str]],
+    media_kind: str | None,
+    locale: str | None = "es",
+) -> str:
+    gift_only = _buttons_have_wallet_gift(buttons)
+    text_status = _tr(locale, "configurado", "configured") if str(text or "").strip() else _tr(locale, "sin texto", "no text")
+    return (
+        _tr(
+            locale,
+            "✅ <b>Publicación lista para enviar</b>\n\n" if not gift_only else "🎁 <b>Regalar saldo en Canales y Grupos</b>\n---------------------------------\n✅ <b>Publicación lista para enviar</b>\n\n",
+            "✅ <b>Publication ready to send</b>\n\n" if not gift_only else "🎁 <b>Gift balance in Channels & Groups</b>\n---------------------------------\n✅ <b>Publication ready to send</b>\n\n",
+        )
+        + f"📝 {_tr(locale, 'Texto', 'Text')}: <b>{text_status}</b>\n"
+        f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{len(buttons)}</b>\n"
+        f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n\n"
+        + _tr(
+            locale,
+            "Usa los botones para <b>ver previa</b>, <b>editar</b> o <b>enviar</b> a chats donde el bot sea admin.",
+            "Use the buttons to <b>preview</b>, <b>edit</b> or <b>send</b> to chats where the bot is admin.",
+        )
+    )
+
+
+def _build_publication_review_keyboard(
+    locale: str | None = "es",
+    *,
+    back_callback: str = "adminui:publication",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👁 Ver previa", "👁 Preview"),
+                    callback_data="adminui:publication:review:preview",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📣 A todos", "📣 Send all"),
+                    callback_data="adminui:publication:send:all",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "👥 Grupos", "👥 Groups"),
+                    callback_data="adminui:publication:send:groups",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📢 Canales", "📢 Channels"),
+                    callback_data="adminui:publication:send:channels",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Editar texto", "✏️ Edit text"),
+                    callback_data="adminui:publication:review:edit:text",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔗 Editar botones", "🔗 Edit buttons"),
+                    callback_data="adminui:publication:review:edit:buttons",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🖼 Editar multimedia", "🖼 Edit media"),
+                    callback_data="adminui:publication:review:edit:media",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "💾 Guardar", "💾 Save"),
+                    callback_data="adminui:publication:review:save",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data=back_callback,
+                )
+            ],
+        ]
+    )
+
+
+async def _build_saved_publications_view(
+    locale: str | None = "es",
+    page: int = 1,
+    *,
+    gift_only: bool = False,
+) -> tuple[str, InlineKeyboardMarkup, list[str]]:
+    response = await api_client.admin_list_publications(page=1, page_size=50)
+    items_all = response.get("items", []) or []
+    items = [
+        item for item in items_all
+        if _buttons_have_wallet_gift(item.get("buttons")) == gift_only
+    ]
+    total_items = len(items)
+    total_pages = max((total_items + 4) // 5, 1)
+    current_page = max(1, min(page, total_pages))
+    start_index = (current_page - 1) * 5
+    saved_items = items[start_index:start_index + 5]
+    if not saved_items:
+        text = _tr(
+            locale,
+            "🎁 <b>Regalos guardados</b>\n\nNo hay regalos guardados todavía." if gift_only
+            else "💾 <b>Publicaciones guardadas</b>\n\nNo hay publicaciones guardadas todavía.",
+            "🎁 <b>Saved gifts</b>\n\nThere are no saved gifts yet." if gift_only
+            else "💾 <b>Saved publications</b>\n\nThere are no saved publications yet.",
+        )
+        keyboard = InlineKeyboardMarkup(
+            inline_keyboard=[
+                [
+                    InlineKeyboardButton(
+                        text=_tr(locale, "⬅ volver", "⬅ back"),
+                        callback_data="adminui:publication",
+                    )
+                ]
+            ]
+        )
+        return text, keyboard, []
+
+    lines = [
+        _tr(locale, "🎁 <b>Regalos guardados</b>", "🎁 <b>Saved gifts</b>") if gift_only
+        else _tr(locale, "💾 <b>Publicaciones guardadas</b>", "💾 <b>Saved publications</b>"),
+        f"{_tr(locale, 'Página', 'Page')}: <b>{current_page}/{total_pages}</b>",
+        "",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    saved_ids: list[str] = []
+    for index, item in enumerate(saved_items, start=1):
+        publication_id = str(item.get("id") or "").strip()
+        if not publication_id:
+            continue
+        saved_ids.append(publication_id)
+        snippet = _escape_html(_broadcast_preview_snippet(item.get("message_text") or ""))
+        buttons_count = len(item.get("buttons") or [])
+        media_kind = _saved_broadcast_media_kind(item)
+        lines.append(
+            f"{index}. <b>{snippet}</b>\n"
+            f"   🖼 {_escape_html(_broadcast_media_label(media_kind, locale))} | "
+            f"🔗 {buttons_count} | "
+            f"🗓 {_fmt_dt(item.get('created_at'))}"
+        )
+        current_row.append(
+            InlineKeyboardButton(
+                text=f"{index}",
+                callback_data=f"adminui:publication:saved:pick:{index}",
+            )
+        )
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    nav_row: list[InlineKeyboardButton] = []
+    if current_page > 1:
+        nav_row.append(
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅ volver", "⬅ back"),
+                callback_data=f"adminui:publication:saved:page:{current_page - 1}",
+            )
+        )
+    if current_page < total_pages:
+        nav_row.append(
+            InlineKeyboardButton(
+                text=_tr(locale, "Siguiente ➡", "Next ➡"),
+                callback_data=f"adminui:publication:saved:page:{current_page + 1}",
+            )
+        )
+    if nav_row:
+        rows.append(nav_row)
+    rows.append(
+        [
+            InlineKeyboardButton(
+                text=_tr(locale, "🔄 Recargar", "🔄 Refresh"),
+                callback_data="adminui:publication:savedgift" if gift_only else "adminui:publication:saved",
+            ),
+            InlineKeyboardButton(
+                text=_tr(locale, "⬅ volver", "⬅ back"),
+                callback_data="adminui:publication",
+            ),
+        ]
+    )
+    return "\n\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows), saved_ids
+
+
+def _build_saved_publication_actions_keyboard(
+    locale: str | None = "es",
+    *,
+    gift_only: bool = False,
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👁 Ver previa", "👁 Preview"),
+                    callback_data="adminui:publication:saved:preview",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📣 A todos", "📣 Send all"),
+                    callback_data="adminui:publication:saved:send:all",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "👥 Grupos", "👥 Groups"),
+                    callback_data="adminui:publication:saved:send:groups",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📢 Canales", "📢 Channels"),
+                    callback_data="adminui:publication:saved:send:channels",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Editar texto", "✏️ Edit text"),
+                    callback_data="adminui:publication:saved:edit:text",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔗 Editar botones", "🔗 Edit buttons"),
+                    callback_data="adminui:publication:saved:edit:buttons",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🖼 Editar multimedia", "🖼 Edit media"),
+                    callback_data="adminui:publication:saved:edit:media",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🗑 Eliminar", "🗑 Delete"),
+                    callback_data="adminui:publication:saved:delete",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅ volver", "⬅ back"),
+                    callback_data="adminui:publication:savedgift" if gift_only else "adminui:publication:saved",
+                ),
+            ],
+        ]
+    )
+
+
+def _build_saved_publication_detail_text(
+    publication: Dict[str, Any],
+    locale: str | None = "es",
+) -> str:
+    gift_only = _buttons_have_wallet_gift(publication.get("buttons"))
+    publication_id = _escape_html(publication.get("id") or "-")
+    snippet = _escape_html(_broadcast_preview_snippet(publication.get("message_text") or "", 80))
+    buttons_count = len(publication.get("buttons") or [])
+    media_kind = _saved_broadcast_media_kind(publication)
+    return (
+        (_tr(locale, "🎁 <b>Regalo guardado</b>\n\n", "🎁 <b>Saved gift</b>\n\n") if gift_only
+         else _tr(locale, "💾 <b>Publicación guardada</b>\n\n", "💾 <b>Saved publication</b>\n\n"))
+        + f"🆔 ID: <code>{publication_id}</code>\n"
+        + f"📝 {_tr(locale, 'Texto', 'Text')}: <b>{snippet}</b>\n"
+        + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{buttons_count}</b>\n"
+        + f"🖼 {_tr(locale, 'Multimedia', 'Media')}: <b>{_escape_html(_broadcast_media_label(media_kind, locale))}</b>\n"
+        + f"🗓 {_tr(locale, 'Creada', 'Created')}: {_fmt_dt(publication.get('created_at'))}\n\n"
+        + _tr(
+            locale,
+            "Puedes ver la previa o enviarla directamente.",
+            "You can preview it or send it directly.",
+        )
+    )
+
+
+async def _save_current_publication_draft(
+    state: FSMContext,
+    locale: str | None = "es",
+) -> str:
+    data = await state.get_data()
+    message_text = str(
+        data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
+    ).strip()
+    message_entities = _normalize_broadcast_message_entities(data.get("admin_ui_broadcast_entities"))
+    buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+    media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+    media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+    selected_publication_id = str(data.get("admin_ui_selected_saved_publication_id") or "").strip()
+    current_signature = _build_broadcast_state_signature(
+        message_text,
+        message_entities,
+        buttons,
+        media_file_id,
+        media_kind,
+    )
+    saved_signature = str(data.get("admin_ui_saved_publication_signature") or "").strip()
+
+    if not message_text and not media_file_id:
+        return _tr(
+            locale,
+            "❌ <b>No hay contenido para guardar.</b>",
+            "❌ <b>There is no content to save.</b>",
+        )
+
+    if selected_publication_id and current_signature == saved_signature:
+        return _tr(
+            locale,
+            "ℹ️ <b>Esta publicación ya estaba guardada y no tiene cambios.</b>",
+            "ℹ️ <b>This publication was already saved and has no changes.</b>",
+        )
+
+    payload: Dict[str, Any] = {
+        "message": message_text,
+        "message_entities": message_entities,
+        "buttons": buttons,
+        "clear_image": not bool(media_file_id),
+    }
+    if media_file_id:
+        payload["media_file_id"] = media_file_id
+        payload["media_kind"] = media_kind
+
+    publication_id = selected_publication_id
+    if publication_id:
+        update_res = await api_client.admin_update_publication(publication_id, payload)
+        publication = update_res.get("publication", {})
+        publication_id = str(publication.get("id") or "").strip()
+    else:
+        create_res = await api_client.admin_create_publication(
+            message=message_text,
+            buttons=buttons,
+            media_file_id=media_file_id or None,
+            media_kind=media_kind or None,
+            message_entities=message_entities,
+        )
+        publication = create_res.get("publication", {})
+        publication_id = str(publication.get("id") or "").strip()
+        if publication_id:
+            update_res = await api_client.admin_update_publication(publication_id, payload)
+            publication = update_res.get("publication", {}) or publication
+            publication_id = str(publication.get("id") or "").strip()
+
+    if not publication_id:
+        return _tr(
+            locale,
+            "❌ <b>No se pudo guardar la publicación.</b>",
+            "❌ <b>Could not save the publication.</b>",
+        )
+
+    await state.update_data(
+        admin_ui_selected_saved_publication_id=publication_id,
+        admin_ui_saved_publication_signature=current_signature,
+    )
+    return _tr(
+        locale,
+        "💾 <b>Publicación guardada correctamente.</b>\n\n"
+        f"🆔 ID: <code>{_escape_html(publication_id)}</code>",
+        "💾 <b>Publication saved successfully.</b>\n\n"
+        f"🆔 ID: <code>{_escape_html(publication_id)}</code>",
+    )
+
+
+async def _load_saved_publication_for_state(
+    state: FSMContext,
+    publication_id: str,
+) -> Dict[str, Any]:
+    response = await api_client.admin_get_publication(publication_id)
+    publication = response.get("publication", {}) or {}
+    buttons = _normalize_broadcast_buttons_state(publication.get("buttons"))
+    media_file_id, media_kind = _extract_saved_broadcast_media(publication)
+    message_text = str(publication.get("message_text") or "").strip()
+    message_entities = _normalize_broadcast_message_entities(publication.get("message_entities"))
+    await state.update_data(
+        admin_ui_broadcast_text=message_text,
+        admin_ui_broadcast_plain_text=message_text,
+        admin_ui_broadcast_entities=message_entities,
+        admin_ui_broadcast_buttons=buttons,
+        admin_ui_broadcast_media_file_id=media_file_id or "",
+        admin_ui_broadcast_media_kind=media_kind or "",
+        admin_ui_selected_saved_publication_id=publication_id,
+        admin_ui_publication_flow_kind="gift" if _buttons_have_wallet_gift(buttons) else "message",
+        admin_ui_saved_publication_signature=_build_broadcast_state_signature(
+            message_text,
+            message_entities,
+            buttons,
+            media_file_id or "",
+            media_kind or "",
+        ),
+        admin_ui_saved_publication=publication,
+    )
+    return publication
+
+
+def _publication_target_type_label(chat_type: Any, locale: str | None = "es") -> str:
+    key = str(chat_type or "").strip().lower()
+    if key == "channel":
+        return _tr(locale, "Canal", "Channel")
+    if key == "supergroup":
+        return _tr(locale, "Supergrupo", "Supergroup")
+    return _tr(locale, "Grupo", "Group")
+
+
+def _build_publish_targets_text(
+    items: list[Dict[str, Any]],
+    summary: Dict[str, Any],
+    locale: str | None = "es",
+) -> str:
+    total = _safe_int(summary.get("total"), 0, 0, 10**6)
+    groups_total = _safe_int(summary.get("groups_total"), 0, 0, 10**6)
+    channels_total = _safe_int(summary.get("channels_total"), 0, 0, 10**6)
+    lines = [
+        _tr(locale, "📋 <b>Chats registrados</b>", "📋 <b>Registered chats</b>"),
+        "",
+        f"📦 {_tr(locale, 'Total activos', 'Active total')}: <b>{total}</b>",
+        f"👥 {_tr(locale, 'Grupos', 'Groups')}: <b>{groups_total}</b>",
+        f"📢 {_tr(locale, 'Canales', 'Channels')}: <b>{channels_total}</b>",
+        "",
+    ]
+    if not items:
+        lines.append(
+            _tr(
+                locale,
+                "No hay grupos o canales registrados todavía.\n\nAgrega el bot como admin y Telegram lo registrará automáticamente.",
+                "There are no registered groups or channels yet.\n\nAdd the bot as admin and Telegram will register them automatically.",
+            )
+        )
+    else:
+        lines.append(_tr(locale, "Últimos chats detectados:", "Latest detected chats:"))
+        lines.append("")
+        for item in items[:20]:
+            title = _escape_html(item.get("chat_title") or item.get("chat_username") or str(item.get("chat_id") or "-"))
+            username = str(item.get("chat_username") or "").strip()
+            username_text = f" · @{_escape_html(username)}" if username else ""
+            admin_badge = " ✅" if bool(item.get("bot_is_admin")) else " ⚠️"
+            lines.append(
+                f"• <b>{title}</b> ({_publication_target_type_label(item.get('chat_type'), locale)}){username_text}{admin_badge}"
+            )
+    return "\n".join(lines)
+
+
+async def _send_publication_and_build_result(
+    text: str,
+    *,
+    scope: str,
+    locale: str | None = "es",
+    buttons: Optional[list[Dict[str, str]]] = None,
+    media_file_id: str | None = None,
+    media_kind: str | None = None,
+    message_entities: Optional[list[Dict[str, Any]]] = None,
+) -> str:
+    message_text = text
+    if not str(message_text or "").strip() and buttons and not media_file_id:
+        message_text = "\u2063"
+    try:
+        response = await api_client.admin_send_publication(
+            scope=scope,
+            message=message_text,
+            buttons=buttons or [],
+            media_file_id=media_file_id,
+            media_kind=media_kind,
+            message_entities=_normalize_broadcast_message_entities(message_entities),
+        )
+    except httpx.HTTPStatusError as exc:
+        try:
+            payload = exc.response.json()
+        except Exception:
+            payload = {}
+        error_code = payload.get("error") if isinstance(payload, dict) else None
+        return _tr(
+            locale,
+            "❌ <b>No se pudo enviar el mensaje a Canales y Grupos.</b>\n\n"
+            f"Código: <b>{exc.response.status_code}</b>\n"
+            f"Detalle: <code>{_escape_html(error_code or 'ERROR')}</code>",
+            "❌ <b>Could not send the Channels & Groups message.</b>\n\n"
+            f"Code: <b>{exc.response.status_code}</b>\n"
+            f"Detail: <code>{_escape_html(error_code or 'ERROR')}</code>",
+        )
+    except Exception as exc:
+        return _tr(
+            locale,
+            "❌ <b>Error enviando el mensaje a Canales y Grupos.</b>\n\n"
+            f"<code>{_escape_html(exc)}</code>",
+            "❌ <b>Error sending the Channels & Groups message.</b>\n\n"
+            f"<code>{_escape_html(exc)}</code>",
+        )
+    result = response.get("result", {}) or {}
+    failures = result.get("failures") or []
+    lines = [
+        _tr(locale, "📢 <b>Mensaje enviado a Canales y Grupos</b>", "📢 <b>Channels & Groups message sent</b>"),
+        "",
+        f"🎯 {_tr(locale, 'Objetivo', 'Target')}: <b>{_escape_html(_publication_scope_label(scope, locale))}</b>",
+        f"📦 {_tr(locale, 'Chats', 'Chats')}: <b>{_safe_int(result.get('target_count'), 0, 0, 10**9)}</b>",
+        f"✅ {_tr(locale, 'Enviados', 'Sent')}: <b>{_safe_int(result.get('sent_count'), 0, 0, 10**9)}</b>",
+        f"❌ {_tr(locale, 'Fallidos', 'Failed')}: <b>{_safe_int(result.get('failed_count'), 0, 0, 10**9)}</b>",
+    ]
+    if failures:
+        lines.extend(
+            [
+                "",
+                _tr(locale, "Últimos fallos:", "Recent failures:"),
+            ]
+        )
+        for item in failures[:5]:
+            title = _escape_html(item.get("title") or item.get("chat_id") or "-")
+            error_text = _escape_html(item.get("error") or "SEND_FAILED")
+            lines.append(f"• <b>{title}</b>: <code>{error_text}</code>")
+    return "\n".join(lines)
 
 
 def _broadcast_preview_snippet(text: str, limit: int = 44) -> str:
@@ -1642,12 +2549,14 @@ def _build_broadcast_state_signature(
 async def _build_saved_broadcasts_view(
     locale: str | None = "es",
     page: int = 1,
+    *,
+    gift_only: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
     response = await api_client.admin_list_broadcasts(page=1, page_size=50)
     items = response.get("items", []) or []
     saved_items_all = [
         item for item in items
-        if bool(item.get("saved"))
+        if bool(item.get("saved")) and _buttons_have_wallet_gift(item.get("buttons")) == gift_only
     ]
     total_items = len(saved_items_all)
     total_pages = max((total_items + 4) // 5, 1)
@@ -1657,8 +2566,10 @@ async def _build_saved_broadcasts_view(
     if not saved_items:
         text = _tr(
             locale,
-            "💾 <b>Difusiones guardadas</b>\n\nNo hay difusiones guardadas todavía.",
-            "💾 <b>Saved broadcasts</b>\n\nThere are no saved broadcasts yet.",
+            "🎁 <b>Regalos guardados</b>\n\nNo hay regalos guardados todavía." if gift_only
+            else "💾 <b>Difusiones guardadas</b>\n\nNo hay difusiones guardadas todavía.",
+            "🎁 <b>Saved gifts</b>\n\nThere are no saved gifts yet." if gift_only
+            else "💾 <b>Saved broadcasts</b>\n\nThere are no saved broadcasts yet.",
         )
         keyboard = InlineKeyboardMarkup(
             inline_keyboard=[
@@ -1673,7 +2584,8 @@ async def _build_saved_broadcasts_view(
         return text, keyboard, []
 
     lines = [
-        _tr(locale, "💾 <b>Difusiones guardadas</b>", "💾 <b>Saved broadcasts</b>"),
+        _tr(locale, "🎁 <b>Regalos guardados</b>", "🎁 <b>Saved gifts</b>") if gift_only
+        else _tr(locale, "💾 <b>Difusiones guardadas</b>", "💾 <b>Saved broadcasts</b>"),
         f"{_tr(locale, 'Página', 'Page')}: <b>{current_page}/{total_pages}</b>",
         "",
     ]
@@ -1726,7 +2638,7 @@ async def _build_saved_broadcasts_view(
         [
             InlineKeyboardButton(
                 text=_tr(locale, "🔄 Recargar", "🔄 Refresh"),
-                callback_data="adminui:broadcast:saved",
+                callback_data="adminui:broadcast:savedgift" if gift_only else "adminui:broadcast:saved",
             ),
             InlineKeyboardButton(
                 text=_tr(locale, "⬅ volver", "⬅ back"),
@@ -1737,7 +2649,11 @@ async def _build_saved_broadcasts_view(
     return "\n\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows), saved_ids
 
 
-def _build_saved_broadcast_actions_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+def _build_saved_broadcast_actions_keyboard(
+    locale: str | None = "es",
+    *,
+    gift_only: bool = False,
+) -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
@@ -1775,7 +2691,7 @@ def _build_saved_broadcast_actions_keyboard(locale: str | None = "es") -> Inline
             [
                 InlineKeyboardButton(
                     text=_tr(locale, "⬅ volver", "⬅ back"),
-                    callback_data="adminui:broadcast:saved",
+                    callback_data="adminui:broadcast:savedgift" if gift_only else "adminui:broadcast:saved",
                 )
             ],
         ]
@@ -1786,12 +2702,14 @@ def _build_saved_broadcast_detail_text(
     broadcast: Dict[str, Any],
     locale: str | None = "es",
 ) -> str:
+    gift_only = _buttons_have_wallet_gift(broadcast.get("buttons"))
     broadcast_id = _escape_html(broadcast.get("id") or "-")
     snippet = _escape_html(_broadcast_preview_snippet(broadcast.get("message_text") or "", 80))
     buttons_count = len(broadcast.get("buttons") or [])
     media_kind = _saved_broadcast_media_kind(broadcast)
     return (
-        _tr(locale, "💾 <b>Difusión guardada</b>\n\n", "💾 <b>Saved broadcast</b>\n\n")
+        (_tr(locale, "🎁 <b>Regalo guardado</b>\n\n", "🎁 <b>Saved gift</b>\n\n") if gift_only
+         else _tr(locale, "💾 <b>Difusión guardada</b>\n\n", "💾 <b>Saved broadcast</b>\n\n"))
         + f"🆔 ID: <code>{broadcast_id}</code>\n"
         + f"📝 {_tr(locale, 'Texto', 'Text')}: <b>{snippet}</b>\n"
         + f"🔗 {_tr(locale, 'Botones', 'Buttons')}: <b>{buttons_count}</b>\n"
@@ -1814,10 +2732,11 @@ async def _send_broadcast_preview_message(
     message_entities: Optional[list[Dict[str, Any]]] = None,
     locale: str | None = "es",
 ) -> None:
-    preview_markup = _build_broadcast_preview_keyboard(buttons, locale)
     media_kind_safe = str(media_kind or "").strip().lower()
     media_id = str(media_file_id or "").strip()
     text_value = text.strip()
+    if not text_value and not media_id and buttons:
+        text_value = "\u2063"
     caption = text_value[:900] if text_value else ""
     normalized_entities = _normalize_broadcast_message_entities(message_entities)
     can_use_entities = bool(normalized_entities)
@@ -1825,6 +2744,25 @@ async def _send_broadcast_preview_message(
 
     try:
         if media_id:
+            if media_kind_safe == "sticker":
+                sticker_message = await message.answer_sticker(
+                    sticker=media_id,
+                    reply_markup=None if text_value else _build_broadcast_preview_keyboard(buttons, None, locale),
+                )
+                if text_value:
+                    preview_markup = _build_broadcast_preview_keyboard(
+                        buttons,
+                        sticker_message.message_id,
+                        locale,
+                    )
+                    message_kwargs: Dict[str, Any] = {"reply_markup": preview_markup}
+                    if can_use_entities:
+                        message_kwargs["entities"] = normalized_entities
+                    else:
+                        message_kwargs["parse_mode"] = "HTML"
+                    await message.answer(text_value, **message_kwargs)
+                return
+            preview_markup = _build_broadcast_preview_keyboard(buttons, None, locale)
             media_kwargs: Dict[str, Any] = {
                 "caption": (text_value if can_use_caption_entities else caption) or None,
                 "reply_markup": preview_markup,
@@ -1851,6 +2789,7 @@ async def _send_broadcast_preview_message(
             )
             return
 
+        preview_markup = _build_broadcast_preview_keyboard(buttons, None, locale)
         message_kwargs: Dict[str, Any] = {"reply_markup": preview_markup}
         if can_use_entities:
             message_kwargs["entities"] = normalized_entities
@@ -1859,6 +2798,23 @@ async def _send_broadcast_preview_message(
         await message.answer(text_value, **message_kwargs)
     except TelegramBadRequest:
         if media_id:
+            if media_kind_safe == "sticker":
+                sticker_message = await message.answer_sticker(
+                    sticker=media_id,
+                    reply_markup=None if text_value else _build_broadcast_preview_keyboard(buttons, None, locale),
+                )
+                if text_value:
+                    preview_markup = _build_broadcast_preview_keyboard(
+                        buttons,
+                        sticker_message.message_id,
+                        locale,
+                    )
+                    await message.answer(
+                        text_value,
+                        reply_markup=preview_markup,
+                    )
+                return
+            preview_markup = _build_broadcast_preview_keyboard(buttons, None, locale)
             if media_kind_safe == "video":
                 await message.answer_video(
                     video=media_id,
@@ -1879,6 +2835,7 @@ async def _send_broadcast_preview_message(
                 reply_markup=preview_markup,
             )
             return
+        preview_markup = _build_broadcast_preview_keyboard(buttons, None, locale)
         await message.answer(
             text_value,
             reply_markup=preview_markup,
@@ -1991,6 +2948,7 @@ async def _load_saved_broadcast_for_state(
         admin_ui_broadcast_media_file_id=media_file_id or "",
         admin_ui_broadcast_media_kind=media_kind or "",
         admin_ui_selected_saved_broadcast_id=broadcast_id,
+        admin_ui_broadcast_flow_kind="gift" if _buttons_have_wallet_gift(buttons) else "message",
         admin_ui_saved_broadcast_signature=_build_broadcast_state_signature(
             message_text,
             message_entities,
@@ -2431,6 +3389,21 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
                 "<code>Important update for all users.</code>",
             )
         ),
+        "publication": (
+            _tr(
+                locale,
+                "📢 <b>Canales y Grupos</b>\n"
+                "Paso 1/3 · Envía ahora el <b>texto</b> del mensaje que quieres publicar en grupos y canales.\n"
+                "También puedes escribir <code>sin</code> para publicar solo imagen o botones.\n\n"
+                "✍️ Ejemplo:\n"
+                "<code>Nuevo aviso para todos nuestros grupos y canales.</code>",
+                "📢 <b>Channels & Groups</b>\n"
+                "Step 1/3 · Send the <b>text</b> you want to publish to groups and channels.\n"
+                "You can also type <code>none</code> to publish only image or buttons.\n\n"
+                "✍️ Example:\n"
+                "<code>Important update for all our groups and channels.</code>",
+            )
+        ),
         "logs": (
             _tr(
                 locale,
@@ -2451,6 +3424,89 @@ def _guide_text(action: str, locale: str | None = "es") -> str:
                 "Consulta el estado general de la API y los contadores principales.",
                 "📊 <b>Status</b>\n"
                 "Check API health and the main counters.",
+            )
+        ),
+        "wallets": (
+            _tr(
+                locale,
+                "💼 <b>Wallets</b>\n"
+                "Gestiona recargas, consulta wallets y aplica ajustes manuales.",
+                "💼 <b>Wallets</b>\n"
+                "Manage top-ups, inspect wallets and apply manual adjustments.",
+            )
+        ),
+        "fileid": (
+            _tr(
+                locale,
+                "🆔 <b>Obtener File ID</b>\n\n"
+                "Envía ahora una <b>imagen</b> aquí mismo.\n\n"
+                "Puede ser <b>foto</b> o <b>documento de imagen</b>.\n"
+                "Te devolveré el <code>file_id</code> en monoespaciado para copiarlo.",
+                "🆔 <b>Get File ID</b>\n\n"
+                "Send an <b>image</b> now.\n\n"
+                "It can be a <b>photo</b> or an <b>image document</b>.\n"
+                "I will return the <code>file_id</code> in monospace so you can copy it.",
+            )
+        ),
+        "wallet_view": (
+            _tr(
+                locale,
+                "👤 <b>Ver wallet</b>\n\n"
+                "Envía ahora el <code>telegram_id</code> o el <code>@username</code> del usuario.\n\n"
+                "Ejemplos:\n<code>7621162350</code>\n<code>@NoroPayments</code>",
+                "👤 <b>View wallet</b>\n\n"
+                "Send the user's <code>telegram_id</code> or <code>@username</code> now.\n\n"
+                "Examples:\n<code>7621162350</code>\n<code>@NoroPayments</code>",
+            )
+        ),
+        "wallet_adjust": (
+            _tr(
+                locale,
+                "➕ <b>Ajustar saldo</b>\n\n"
+                "Envía una sola línea con este formato:\n"
+                "<code>telegram_id | monto | motivo opcional</code>\n\n"
+                "Ejemplos:\n"
+                "<code>7621162350 | 15 | Bono por soporte</code>\n"
+                "<code>7621162350 | -5</code>",
+                "➕ <b>Adjust balance</b>\n\n"
+                "Send one line using this format:\n"
+                "<code>telegram_id | amount | optional reason</code>\n\n"
+                "Examples:\n"
+                "<code>7621162350 | 15 | Support bonus</code>\n"
+                "<code>7621162350 | -5</code>",
+            )
+        ),
+        "wallet_approve": (
+            _tr(
+                locale,
+                "✅ <b>Aprobar recarga</b>\n\n"
+                "Envía la referencia de recarga.\n\n"
+                "Ejemplo:\n<code>R00001</code>",
+                "✅ <b>Approve top-up</b>\n\n"
+                "Send the top-up reference.\n\n"
+                "Example:\n<code>R00001</code>",
+            )
+        ),
+        "wallet_reject": (
+            _tr(
+                locale,
+                "❌ <b>Rechazar recarga</b>\n\n"
+                "Envía la referencia de recarga.\n\n"
+                "Ejemplo:\n<code>R00001</code>",
+                "❌ <b>Reject top-up</b>\n\n"
+                "Send the top-up reference.\n\n"
+                "Example:\n<code>R00001</code>",
+            )
+        ),
+        "wallet_scam": (
+            _tr(
+                locale,
+                "🚨 <b>Marcar recarga como Estafa</b>\n\n"
+                "Envía la referencia de recarga.\n\n"
+                "Ejemplo:\n<code>R00001</code>",
+                "🚨 <b>Mark top-up as Scam</b>\n\n"
+                "Send the top-up reference.\n\n"
+                "Example:\n<code>R00001</code>",
             )
         ),
         "product_add": (
@@ -2673,6 +3729,369 @@ async def _build_logs_text(category: str, limit: int, locale: str | None = "es")
             + "\n"
         )
     return "\n".join(lines)
+
+
+def _wallet_tx_label(tx_type: Any, locale: str | None = "es") -> str:
+    key = str(tx_type or "").upper().strip()
+    mapping = {
+        "TOPUP_APPROVED": _tr(locale, "Recarga aprobada", "Top-up approved"),
+        "ORDER_PAYMENT": _tr(locale, "Compra con saldo", "Wallet purchase"),
+        "ORDER_REFUND": _tr(locale, "Reembolso a saldo", "Refund to balance"),
+        "ADMIN_ADJUSTMENT": _tr(locale, "Ajuste manual", "Manual adjustment"),
+        "GIFT_CLAIM": _tr(locale, "Regalo Reclamado", "Claimed gift"),
+    }
+    return mapping.get(key, str(tx_type or "-"))
+
+
+async def _build_wallet_pending_text(limit: int = 10, locale: str | None = "es") -> str:
+    data = await api_client.admin_list_wallet_topups(status="SUBMITTED", page=1, page_size=limit)
+    items = data.get("items") or []
+    if not items:
+        return _tr(
+            locale,
+            "📥 <b>Recargas pendientes</b>\n\nNo hay recargas pendientes ahora mismo.",
+            "📥 <b>Pending top-ups</b>\n\nThere are no pending top-ups right now.",
+        )
+    lines = [_tr(locale, "📥 <b>Recargas pendientes</b>", "📥 <b>Pending top-ups</b>"), ""]
+    for item in items:
+        lines.append(
+            f"• <code>{_escape_html(item.get('topup_number_label') or item.get('id'))}</code>"
+            f" · {_escape_html(item.get('telegram_id'))}"
+            f" · <b>${_fmt_amount(item.get('amount_usd'), 0)}</b>"
+            f" · {_escape_html(item.get('payment_method') or '-')}"
+        )
+    lines.append("")
+    lines.append(_tr(locale, "Usa Aprobar/ Rechazar recarga para procesarlas.", "Use Approve/ Reject top-up to process them."))
+    return "\n".join(lines)
+
+
+def _wallet_gift_status_label(status: Any, locale: str | None = "es") -> str:
+    key = str(status or "").strip().upper()
+    mapping = {
+        "ACTIVE": _tr(locale, "Activo", "Active"),
+        "DEPLETED": _tr(locale, "Agotado", "Depleted"),
+        "EXPIRED": _tr(locale, "Expirado", "Expired"),
+        "CANCELLED": _tr(locale, "Cancelado", "Cancelled"),
+    }
+    return mapping.get(key, key or "-")
+
+
+def _wallet_gift_source_label(source_kind: Any, source_scope: Any, locale: str | None = "es") -> str:
+    kind = str(source_kind or "").strip().upper()
+    scope = str(source_scope or "").strip().upper()
+    if kind == "PUBLICATION":
+        return _tr(locale, "Canales y Grupos", "Channels & Groups")
+    if scope == "PRIVATE":
+        return _tr(locale, "Difusiones", "Broadcasts")
+    return kind or "-"
+
+
+def _build_wallet_gifts_list_keyboard(
+    current_page: int,
+    total_pages: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    previous_page = max(current_page - 1, 1)
+    next_page = min(current_page + 1, max(total_pages, 1))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="←",
+                    callback_data=(
+                        f"adminui:wallets:gifts:page:{previous_page}"
+                        if current_page > 1
+                        else "adminui:wallets:gifts:noop"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text=f"{current_page}/{max(total_pages, 1)}",
+                    callback_data="adminui:wallets:gifts:noop",
+                ),
+                InlineKeyboardButton(
+                    text="→",
+                    callback_data=(
+                        f"adminui:wallets:gifts:page:{next_page}"
+                        if current_page < total_pages
+                        else "adminui:wallets:gifts:noop"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔄 Recargar", "🔄 Refresh"),
+                    callback_data=f"adminui:wallets:gifts:page:{current_page}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💼 Wallets", "💼 Wallets"),
+                    callback_data="adminui:wallets",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+async def _build_wallet_gifts_list_text(
+    locale: str | None = "es",
+    *,
+    page: int = 1,
+) -> tuple[str, InlineKeyboardMarkup, list[str]]:
+    response = await api_client.admin_list_wallet_gifts(page=page, page_size=6)
+    items = response.get("items") or []
+    total_pages = max(_safe_int(response.get("total_pages"), 1, 1, 999), 1)
+    current_page = max(1, min(page, total_pages))
+    if not items:
+        return (
+            _tr(
+                locale,
+                "🎁 <b>Regalos de saldo</b>\n\nNo hay regalos creados todavía.",
+                "🎁 <b>Wallet gifts</b>\n\nThere are no gifts yet.",
+            ),
+            _build_wallet_gifts_list_keyboard(current_page, total_pages, locale),
+            [],
+        )
+    lines = [
+        _tr(locale, "🎁 <b>Regalos de saldo</b>", "🎁 <b>Wallet gifts</b>"),
+        f"{_tr(locale, 'Página', 'Page')}: <b>{current_page}/{total_pages}</b>",
+        "",
+    ]
+    rows: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    gift_ids: list[str] = []
+    for index, item in enumerate(items, start=1):
+        gift_id = str(item.get("id") or "").strip()
+        if not gift_id:
+            continue
+        gift_ids.append(gift_id)
+        claimed = _safe_int(item.get("claimed_count"), 0, 0, 10**9)
+        max_claims = _safe_int(item.get("max_claims"), 0, 0, 10**9)
+        amount = _fmt_amount(item.get("amount_usd"), 0)
+        lines.append(
+            f"{index}. <b>${amount}</b> · {_escape_html(_wallet_gift_status_label(item.get('status'), locale))}\n"
+            f"   👥 <b>{claimed}/{max_claims}</b> · {_escape_html(_wallet_gift_source_label(item.get('source_kind'), item.get('source_scope'), locale))}"
+        )
+        current_row.append(
+            InlineKeyboardButton(
+                text=str(index),
+                callback_data=f"adminui:wallets:gifts:pick:{index}",
+            )
+        )
+        if len(current_row) == 3:
+            rows.append(current_row)
+            current_row = []
+    if current_row:
+        rows.append(current_row)
+    keyboard = _build_wallet_gifts_list_keyboard(current_page, total_pages, locale)
+    rows.extend(keyboard.inline_keyboard)
+    return "\n\n".join(lines), InlineKeyboardMarkup(inline_keyboard=rows), gift_ids
+
+
+def _build_wallet_gift_detail_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎁 Regalos", "🎁 Gifts"),
+                    callback_data="adminui:wallets:gifts",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "💼 Wallets", "💼 Wallets"),
+                    callback_data="adminui:wallets",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+async def _build_wallet_gift_detail_text(gift_id: str, locale: str | None = "es") -> str:
+    response = await api_client.admin_get_wallet_gift(gift_id)
+    gift = response.get("gift") or {}
+    claims = gift.get("claims") or []
+    lines = [
+        _tr(locale, "🎁 <b>Detalle del regalo</b>", "🎁 <b>Gift detail</b>"),
+        "",
+        f"🆔 <code>{_escape_html(gift.get('id') or '-')}</code>",
+        f"💰 {_tr(locale, 'Monto por usuario', 'Amount per user')}: <b>${_fmt_amount(gift.get('amount_usd'), 0)} USD</b>",
+        f"📦 {_tr(locale, 'Cupos', 'Claims')}: <b>{_safe_int(gift.get('claimed_count'), 0, 0, 10**9)}/{_safe_int(gift.get('max_claims'), 0, 0, 10**9)}</b>",
+        f"📊 {_tr(locale, 'Estado', 'Status')}: <b>{_escape_html(_wallet_gift_status_label(gift.get('status'), locale))}</b>",
+        f"📣 {_tr(locale, 'Origen', 'Source')}: <b>{_escape_html(_wallet_gift_source_label(gift.get('source_kind'), gift.get('source_scope'), locale))}</b>",
+        f"💵 {_tr(locale, 'Total repartido', 'Total distributed')}: <b>${_fmt_amount(gift.get('total_distributed_usd'), 0)} USD</b>",
+        f"🕒 {_tr(locale, 'Creado', 'Created')}: <b>{_escape_html(_fmt_dt(gift.get('created_at')))}</b>",
+        f"⌛ {_tr(locale, 'Expira', 'Expires')}: <b>{_escape_html(_fmt_dt(gift.get('expires_at')))}</b>",
+        "",
+        _tr(locale, "🏆 <b>Ganadores</b>", "🏆 <b>Winners</b>"),
+        "",
+    ]
+    if not claims:
+        lines.append(_tr(locale, "Sin reclamos todavía.", "No claims yet."))
+    else:
+        for index, claim in enumerate(claims[:15], start=1):
+            username = str(claim.get("telegram_username") or claim.get("user_telegram_username") or "").strip()
+            username_text = f"@{username.lstrip('@')}" if username else "-"
+            lines.append(
+                f"{index}. {username_text} · <code>{_escape_html(claim.get('telegram_id'))}</code> · <b>${_fmt_amount(claim.get('amount_usd'), 0)}</b>"
+            )
+    return "\n".join(lines)
+
+
+def _build_wallet_user_keyboard(
+    lookup: str,
+    current_page: int,
+    total_pages: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    previous_page = max(current_page - 1, 1)
+    next_page = min(current_page + 1, max(total_pages, 1))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="←",
+                    callback_data=(
+                        f"adminui:wallets:viewpage:{previous_page}:{lookup}"
+                        if current_page > 1
+                        else "adminui:wallets:viewpage:noop"
+                    ),
+                ),
+                InlineKeyboardButton(
+                    text=f"{current_page}/{max(total_pages, 1)}",
+                    callback_data="adminui:wallets:viewpage:noop",
+                ),
+                InlineKeyboardButton(
+                    text="→",
+                    callback_data=(
+                        f"adminui:wallets:viewpage:{next_page}:{lookup}"
+                        if current_page < total_pages
+                        else "adminui:wallets:viewpage:noop"
+                    ),
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "💼 Wallets", "💼 Wallets"),
+                    callback_data="adminui:wallets",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+async def _build_wallet_user_text(
+    lookup: str,
+    locale: str | None = "es",
+    *,
+    page: int = 1,
+) -> tuple[str, InlineKeyboardMarkup]:
+    data = await api_client.admin_get_wallet_user(lookup, limit=100)
+    user = data.get("user") or {}
+    wallet = data.get("wallet") or {}
+    history = data.get("history") or []
+    page_size = 6
+    total_pages = max((len(history) + page_size - 1) // page_size, 1)
+    current_page = min(max(page, 1), total_pages)
+    start_index = (current_page - 1) * page_size
+    page_items = history[start_index:start_index + page_size]
+    lines = [
+        _tr(locale, "💼 <b>Wallet del usuario</b>", "💼 <b>User wallet</b>"),
+        "",
+        f"🆔 <code>{_escape_html(user.get('telegram_id'))}</code>",
+        f"👤 @{_escape_html(user.get('telegram_username') or '-')}",
+        f"💰 {_tr(locale, 'Saldo', 'Balance')}: <b>${_fmt_amount(wallet.get('balance'), 0)} USD</b>",
+        "",
+        _tr(locale, "📜 <b>Últimos movimientos</b>", "📜 <b>Latest movements</b>"),
+    ]
+    if not page_items:
+        lines.append(_tr(locale, "Sin movimientos.", "No movements yet."))
+    else:
+        lines.append("")
+        for item in page_items:
+            direction = "➕" if str(item.get("direction") or "").upper() == "CREDIT" else "➖"
+            note = str(item.get("note") or "").strip()
+            lines.append(
+                f"{direction} <b>{_escape_html(_wallet_tx_label(item.get('transaction_type'), locale))}</b>"
+                f" · ${_fmt_amount(item.get('amount'), 0)}"
+            )
+            if note:
+                lines.append(f"📝 {_escape_html(note)}")
+            lines.append("")
+    return "\n".join(lines).rstrip(), _build_wallet_user_keyboard(lookup, current_page, total_pages, locale)
+
+
+async def _build_wallet_adjust_text(
+    telegram_id: int,
+    amount: float,
+    reason: str | None,
+    locale: str | None = "es",
+) -> str:
+    response = await api_client.admin_adjust_wallet(telegram_id, amount, reason)
+    if response.get("status_code") == 409:
+        return _tr(
+            locale,
+            "❌ <b>No hay saldo suficiente para debitar ese monto.</b>",
+            "❌ <b>There is not enough balance to debit that amount.</b>",
+        )
+    wallet = response.get("wallet") or {}
+    tx = response.get("transaction") or {}
+    return (
+        _tr(locale, "✅ <b>Ajuste aplicado</b>\n\n", "✅ <b>Adjustment applied</b>\n\n")
+        + f"🆔 <code>{telegram_id}</code>\n"
+        + f"💸 {_tr(locale, 'Movimiento', 'Movement')}: <b>{'+' if amount > 0 else '-'}${_fmt_amount(abs(amount), 0)}</b>\n"
+        + f"💰 {_tr(locale, 'Saldo actual', 'Current balance')}: <b>${_fmt_amount(wallet.get('balance'), 0)} USD</b>\n"
+        + f"📝 {_tr(locale, 'Motivo', 'Reason')}: <b>{_escape_html(reason or '-') }</b>\n"
+        + f"🧾 ID: <code>{_escape_html(tx.get('id') or '-')}</code>"
+    )
+
+
+async def _build_wallet_topup_decision_text(
+    ref: str,
+    *,
+    mode: str,
+    reason: str | None = None,
+    locale: str | None = "es",
+) -> str:
+    if mode == "approve":
+        response = await api_client.admin_approve_wallet_topup(ref)
+        topup = response.get("topup") or {}
+        wallet = response.get("wallet") or {}
+        return (
+            _tr(locale, "✅ <b>Recarga aprobada</b>\n\n", "✅ <b>Top-up approved</b>\n\n")
+            + f"🧾 <code>{_escape_html(topup.get('topup_number_label') or ref)}</code>\n"
+            + f"💵 {_tr(locale, 'Monto', 'Amount')}: <b>${_fmt_amount(topup.get('amount_usd'), 0)}</b>\n"
+            + f"💰 {_tr(locale, 'Saldo actual', 'Current balance')}: <b>${_fmt_amount(wallet.get('balance'), 0)} USD</b>"
+        )
+    if mode == "scam":
+        response = await api_client.admin_scam_wallet_topup(ref, reason=reason)
+        topup = response.get("topup") or {}
+        return (
+            _tr(locale, "🚨 <b>Recarga marcada como Estafa</b>\n\n", "🚨 <b>Top-up marked as Scam</b>\n\n")
+            + f"🧾 <code>{_escape_html(topup.get('topup_number_label') or ref)}</code>\n"
+            + f"💵 {_tr(locale, 'Monto', 'Amount')}: <b>${_fmt_amount(topup.get('amount_usd'))}</b>\n"
+            + f"📝 {_tr(locale, 'Motivo', 'Reason')}: <b>{_escape_html(reason or topup.get('reason') or 'Marcada como estafa')}</b>"
+        )
+    response = await api_client.admin_reject_wallet_topup(ref, reason=reason)
+    topup = response.get("topup") or {}
+    return (
+        _tr(locale, "❌ <b>Recarga rechazada</b>\n\n", "❌ <b>Top-up rejected</b>\n\n")
+        + f"🧾 <code>{_escape_html(topup.get('topup_number_label') or ref)}</code>\n"
+        + f"💵 {_tr(locale, 'Monto', 'Amount')}: <b>${_fmt_amount(topup.get('amount_usd'))}</b>\n"
+        + f"📝 {_tr(locale, 'Motivo', 'Reason')}: <b>{_escape_html(reason or topup.get('reason') or '-')}</b>"
+    )
 
 
 def _build_earnings_keyboard(
@@ -3202,6 +4621,7 @@ async def _build_order_detail_text(order_ref: str, locale: str | None = "es") ->
         + f"• {_tr(locale, 'Revisión', 'Review')}: <b>{_escape_html(_payment_review_display(order, payment, locale))}</b>\n\n"
         + _tr(locale, "💰 <b>Totales</b>\n", "💰 <b>Totals</b>\n")
         + f"• USD: <b>${_fmt_amount(totals.get('total_usd'))}</b>\n"
+        + ("Pagado con saldo\n" if order.get("paid_with_wallet") else "")
         + f"• Markup: <b>{markup_text}</b>\n"
         + f"• Local: <b>{_fmt_amount(local_total.get('amount'))} {_escape_html(local_total.get('currency') or '-')}</b>\n\n"
         + _tr(locale, "🕒 <b>Fechas</b>\n", "🕒 <b>Dates</b>\n")
@@ -3463,6 +4883,45 @@ def _parse_broadcast_buttons_input(raw_text: str, locale: str | None = "es") -> 
             label = _sanitize_broadcast_button_text(label)
             if not label:
                 raise ValueError(_tr(locale, "Falta el texto del botón.", "Button text is required."))
+            normalized_target = str(url or "").strip()
+            gift_match = re.fullmatch(
+                r"(?i)(?:gift|regalo)\s*:\s*([0-9]+(?:[.,][0-9]{1,2})?)\s*:\s*([0-9]{1,4})",
+                normalized_target,
+            )
+            if gift_match:
+                amount_text = gift_match.group(1).replace(",", ".")
+                claims_text = gift_match.group(2)
+                try:
+                    gift_amount = round(float(amount_text), 2)
+                    gift_claims = int(claims_text)
+                except (TypeError, ValueError):
+                    raise ValueError(
+                        _tr(
+                            locale,
+                            "Formato de regalo inválido. Usa: texto | regalo:1:5",
+                            "Invalid gift format. Use: text | gift:1:5",
+                        )
+                    )
+                if gift_amount <= 0 or gift_claims <= 0:
+                    raise ValueError(
+                        _tr(
+                            locale,
+                            "El regalo debe tener monto y cupos mayores que 0.",
+                            "Gift amount and claims must be greater than 0.",
+                        )
+                    )
+                parsed.append(
+                    {
+                        "text": label[:64],
+                        "action": "gift",
+                        "gift_amount_usd": gift_amount,
+                        "gift_max_claims": gift_claims,
+                        "row": row_index,
+                    }
+                )
+                if len(parsed) >= 12:
+                    return parsed
+                continue
             if not (url.startswith("http://") or url.startswith("https://")):
                 raise ValueError(
                     _tr(
@@ -3545,18 +5004,26 @@ async def _send_order_detail(message: Message, order_ref: str) -> None:
             total = item.get("unit_price_usd") or 0
         item_lines.append(f"• {name} x{qty} — <b>${_fmt_amount(total)}</b>")
     items_block = "\n".join(item_lines) if item_lines else "- Sin items"
-    order_number = order.get("order_number")
-    order_number_text = str(order_number).zfill(5) if order_number is not None else "-"
+    order_number_text = _visible_order_number_text(order)
     order_id = _escape_html(order.get("id"))
-    status = _escape_html(order.get("status"))
+    status = _escape_html(_order_status_display(order, "es"))
     telegram_id = _escape_html(user.get("telegram_id"))
     username = _escape_html(user.get("telegram_username") or "-")
-    payment_method = _escape_html(payment.get("payment_method") or "-")
-    review_status = _escape_html(payment.get("review_status") or "-")
+    payment_method = _escape_html(_payment_method_text(payment.get("payment_method"), "es"))
+    review_status = _escape_html(_payment_review_display(order, payment, "es"))
     markup_percent = totals.get("markup_percent")
     markup_text = f"{markup_percent}%" if markup_percent is not None else "-"
     local_amount = _fmt_amount(local_total.get("amount"))
     local_currency = _escape_html(local_total.get("currency") or "-")
+    image_candidates = [
+        str(item.get("image_url") or "").strip()
+        for item in items
+        if str(item.get("image_url") or "").strip()
+    ]
+    product_image = random.choice(image_candidates) if image_candidates else str(
+        (data.get("product") or {}).get("image_url") or ""
+    ).strip()
+    paid_with_wallet_line = "Pagado con saldo\n" if order.get("paid_with_wallet") else ""
     text = (
         "🧾 <b>Detalle de la Orden</b>\n\n"
         f"🆔 ID: <code>{order_id}</code>\n"
@@ -3570,6 +5037,7 @@ async def _send_order_detail(message: Message, order_ref: str) -> None:
         f"• Revisión: <b>{review_status}</b>\n\n"
         "💰 <b>Totales</b>\n"
         f"• USD: <b>${_fmt_amount(totals.get('total_usd'))}</b>\n"
+        f"{paid_with_wallet_line}"
         f"• Markup: <b>{markup_text}</b>\n"
         f"• Local: <b>{local_amount} {local_currency}</b>\n\n"
         "🕒 <b>Fechas</b>\n"
@@ -3578,6 +5046,12 @@ async def _send_order_detail(message: Message, order_ref: str) -> None:
         "📦 <b>Productos</b>\n"
         f"{items_block}"
     )
+    if product_image:
+        try:
+            await message.answer_photo(product_image, caption=text, parse_mode="HTML")
+            return
+        except Exception:
+            pass
     await message.answer(text, parse_mode="HTML")
 
 
@@ -3754,6 +5228,14 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
     }
 
     try:
+        if action == "gift":
+            await _answer_callback_safe(
+                callback,
+                "🎁 El regalo se activa al enviar el mensaje real.",
+                show_alert=True,
+            )
+            return
+
         if action == "home":
             await state.clear()
             await _edit_panel_message(
@@ -3943,6 +5425,129 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             )
             return
 
+        if action == "wallets":
+            subaction = parts[2] if len(parts) > 2 else ""
+            if subaction == "pending":
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    await _build_wallet_pending_text(10, locale),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            if subaction == "view":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="wallet_user_view", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("wallet_view", locale),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            if subaction == "viewpage":
+                if len(parts) >= 5 and parts[3] != "noop":
+                    try:
+                        page = int(parts[3])
+                    except (TypeError, ValueError):
+                        page = 1
+                    lookup = parts[4]
+                    text, keyboard = await _build_wallet_user_text(lookup, locale, page=page)
+                    await state.clear()
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=keyboard,
+                    )
+                await callback.answer()
+                return
+            if subaction == "adjust":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="wallet_adjust_line", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("wallet_adjust", locale),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            if subaction == "approve":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="wallet_topup_approve_ref", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("wallet_approve", locale),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            if subaction == "reject":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="wallet_topup_reject_ref", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("wallet_reject", locale),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            if subaction == "scam":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="wallet_topup_scam_ref", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("wallet_scam", locale),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            if subaction == "gifts":
+                mode = parts[3] if len(parts) > 3 else ""
+                if mode == "noop":
+                    await callback.answer()
+                    return
+                if mode == "page":
+                    page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
+                    text, keyboard, gift_ids = await _build_wallet_gifts_list_text(locale, page=page)
+                    await state.update_data(admin_ui_wallet_gift_ids=gift_ids, admin_ui_wallet_gift_page=page, **panel_anchor)
+                    await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                    return
+                if mode == "pick":
+                    data = await state.get_data()
+                    gift_ids = data.get("admin_ui_wallet_gift_ids") or []
+                    page = _safe_int(data.get("admin_ui_wallet_gift_page"), 1, 1, 999)
+                    index = _safe_int(parts[4] if len(parts) > 4 else "0", 0, 0, 20)
+                    if index < 1 or index > len(gift_ids):
+                        text, keyboard, gift_ids = await _build_wallet_gifts_list_text(locale, page=page)
+                        await state.update_data(admin_ui_wallet_gift_ids=gift_ids, admin_ui_wallet_gift_page=page, **panel_anchor)
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    gift_id = str(gift_ids[index - 1]).strip()
+                    if not gift_id:
+                        return
+                    await _edit_panel_message(
+                        callback.message,
+                        await _build_wallet_gift_detail_text(gift_id, locale),
+                        reply_markup=_build_wallet_gift_detail_keyboard(locale),
+                    )
+                    return
+                text, keyboard, gift_ids = await _build_wallet_gifts_list_text(locale, page=1)
+                await state.update_data(admin_ui_wallet_gift_ids=gift_ids, admin_ui_wallet_gift_page=1, **panel_anchor)
+                await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                return
+            await state.clear()
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("wallets", locale),
+                reply_markup=_build_wallets_menu_keyboard(locale),
+            )
+            return
+
+        if action == "fileid":
+            await state.set_state(AdminUiStates.awaiting_value)
+            await state.update_data(admin_ui_action="file_id_lookup", **panel_anchor)
+            await _edit_panel_message(
+                callback.message,
+                _guide_text("fileid", locale),
+                reply_markup=_build_back_to_panel_keyboard(locale),
+            )
+            return
+
         if action == "orders":
             if len(parts) >= 4 and parts[2] == "list":
                 limit = _safe_int(parts[3], 10, 1, 30)
@@ -4085,6 +5690,623 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 )
             return
 
+        if action == "publication":
+            sub_action = parts[2] if len(parts) > 2 else ""
+            if not sub_action:
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _build_publication_menu_text(locale),
+                    reply_markup=_build_publication_menu_keyboard(locale),
+                )
+                return
+
+            if sub_action == "new":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="publication_text",
+                    admin_ui_publication_flow_kind="message",
+                    admin_ui_saved_publication_gift_only=False,
+                    admin_ui_selected_saved_publication_id="",
+                    admin_ui_saved_publication_signature="",
+                    admin_ui_saved_publication_ids=[],
+                    admin_ui_broadcast_buttons=[],
+                    admin_ui_broadcast_media_file_id="",
+                    admin_ui_broadcast_media_kind="",
+                    admin_ui_broadcast_text="",
+                    admin_ui_broadcast_plain_text="",
+                    admin_ui_broadcast_entities=[],
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _guide_text("publication", locale),
+                    reply_markup=_build_publication_text_step_keyboard(locale),
+                )
+                return
+
+            if sub_action == "newgift":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="publication_text",
+                    admin_ui_publication_flow_kind="gift",
+                    admin_ui_saved_publication_gift_only=True,
+                    admin_ui_selected_saved_publication_id="",
+                    admin_ui_saved_publication_signature="",
+                    admin_ui_saved_publication_ids=[],
+                    admin_ui_broadcast_buttons=[],
+                    admin_ui_broadcast_media_file_id="",
+                    admin_ui_broadcast_media_kind="",
+                    admin_ui_broadcast_text="",
+                    admin_ui_broadcast_plain_text="",
+                    admin_ui_broadcast_entities=[],
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🎁 <b>Regalar saldo en Canales y Grupos</b>\n"
+                        "---------------------------------\n"
+                        "Paso 1/3 · Envía ahora el <b>texto</b> del regalo.\n"
+                        "También puedes escribir <code>sin</code> para publicar solo multimedia y el botón regalo.\n\n"
+                        "✍️ Ejemplo:\n"
+                        "<code>🎁 Regalo de saldo para los más rápidos.</code>",
+                        "🎁 <b>Gift balance in Channels & Groups</b>\n"
+                        "---------------------------------\n"
+                        "Step 1/3 · Send the gift <b>text</b> now.\n"
+                        "You can also type <code>none</code> to publish only media and the gift button.\n\n"
+                        "✍️ Example:\n"
+                        "<code>🎁 Balance gift for the fastest users.</code>",
+                    ),
+                    reply_markup=_build_publication_text_step_keyboard(locale, back_callback="adminui:publication"),
+                )
+                return
+
+            if sub_action in {"saved", "savedgift"}:
+                mode = str(parts[3] if len(parts) > 3 else "").strip().lower()
+                if mode == "page":
+                    page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
+                    state_data = await state.get_data()
+                    gift_only = (
+                        sub_action == "savedgift"
+                        or bool(state_data.get("admin_ui_saved_publication_gift_only"))
+                    )
+                    text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                    await state.update_data(
+                        admin_ui_saved_publication_ids=saved_ids,
+                        admin_ui_saved_publication_page=page,
+                        admin_ui_saved_publication_gift_only=gift_only,
+                        admin_ui_selected_saved_publication_id="",
+                        admin_ui_saved_publication_signature="",
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                    return
+
+                if mode == "pick":
+                    data = await state.get_data()
+                    saved_ids = data.get("admin_ui_saved_publication_ids") or []
+                    index = _safe_int(parts[4] if len(parts) > 4 else "0", 0, 0, 99)
+                    if index <= 0 or index > len(saved_ids):
+                        page = _safe_int(data.get("admin_ui_saved_publication_page"), 1, 1, 999)
+                        gift_only = bool(data.get("admin_ui_saved_publication_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                        await state.update_data(
+                            admin_ui_saved_publication_ids=saved_ids,
+                            admin_ui_saved_publication_page=page,
+                            admin_ui_selected_saved_publication_id="",
+                            admin_ui_saved_publication_signature="",
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    publication_id = str(saved_ids[index - 1] or "").strip()
+                    publication = await _load_saved_publication_for_state(state, publication_id)
+                    await state.update_data(
+                        admin_ui_saved_publication_gift_only=_buttons_have_wallet_gift(publication.get("buttons")),
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_saved_publication_detail_text(publication, locale),
+                        reply_markup=_build_saved_publication_actions_keyboard(
+                            locale,
+                            gift_only=_buttons_have_wallet_gift(publication.get("buttons")),
+                        ),
+                    )
+                    return
+
+                if mode == "preview":
+                    data = await state.get_data()
+                    publication_id = str(data.get("admin_ui_selected_saved_publication_id") or "").strip()
+                    if not publication_id:
+                        page = _safe_int(data.get("admin_ui_saved_publication_page"), 1, 1, 999)
+                        gift_only = bool(data.get("admin_ui_saved_publication_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                        await state.update_data(
+                            admin_ui_saved_publication_ids=saved_ids,
+                            admin_ui_saved_publication_page=page,
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    publication = await _load_saved_publication_for_state(state, publication_id)
+                    buttons = _normalize_broadcast_buttons_state(publication.get("buttons"))
+                    media_file_id, media_kind = _extract_saved_broadcast_media(publication)
+                    await _send_broadcast_preview_message(
+                        callback.message,
+                        str(publication.get("message_text") or "").strip(),
+                        buttons,
+                        media_file_id,
+                        media_kind,
+                        _normalize_broadcast_message_entities(publication.get("message_entities")),
+                        locale=locale,
+                    )
+                    await callback.answer(_tr(locale, "Vista previa enviada.", "Preview sent."))
+                    return
+
+                if mode == "send":
+                    scope = str(parts[4] if len(parts) > 4 else "all").strip().lower()
+                    if scope not in {"all", "groups", "channels"}:
+                        scope = "all"
+                    data = await state.get_data()
+                    publication_id = str(data.get("admin_ui_selected_saved_publication_id") or "").strip()
+                    if not publication_id:
+                        page = _safe_int(data.get("admin_ui_saved_publication_page"), 1, 1, 999)
+                        gift_only = bool(data.get("admin_ui_saved_publication_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                        await state.update_data(
+                            admin_ui_saved_publication_ids=saved_ids,
+                            admin_ui_saved_publication_page=page,
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    await _answer_callback_safe(callback)
+                    response = await api_client.admin_send_saved_publication(
+                        publication_id,
+                        scope=scope,
+                    )
+                    result = response.get("result") or {}
+                    failures = result.get("failures") or []
+                    text = "\n".join(
+                        [
+                            _tr(
+                                locale,
+                                "📢 <b>Resultado de publicación</b>",
+                                "📢 <b>Publication result</b>",
+                            ),
+                            "",
+                            f"🎯 {_tr(locale, 'Objetivo', 'Target')}: <b>{_escape_html(_publication_scope_label(scope, locale))}</b>",
+                            f"📦 {_tr(locale, 'Chats', 'Chats')}: <b>{_safe_int(result.get('target_count'), 0, 0, 10**9)}</b>",
+                            f"✅ {_tr(locale, 'Enviados', 'Sent')}: <b>{_safe_int(result.get('sent_count'), 0, 0, 10**9)}</b>",
+                            f"❌ {_tr(locale, 'Fallidos', 'Failed')}: <b>{_safe_int(result.get('failed_count'), 0, 0, 10**9)}</b>",
+                        ]
+                    )
+                    if failures:
+                        text += "\n\n" + _tr(locale, "Últimos fallos:", "Recent failures:")
+                        for item in failures[:5]:
+                            title = _escape_html(item.get("title") or item.get("chat_id") or "-")
+                            error_text = _escape_html(item.get("error") or "SEND_FAILED")
+                            text += f"\n• <b>{title}</b>: <code>{error_text}</code>"
+                    await state.clear()
+                    await _edit_panel_message(
+                        callback.message,
+                        text,
+                        reply_markup=_build_publication_menu_keyboard(locale),
+                    )
+                    return
+
+                if mode == "edit":
+                    field = str(parts[4] if len(parts) > 4 else "").lower()
+                    data = await state.get_data()
+                    publication_id = str(data.get("admin_ui_selected_saved_publication_id") or "").strip()
+                    if not publication_id:
+                        page = _safe_int(data.get("admin_ui_saved_publication_page"), 1, 1, 999)
+                        gift_only = bool(data.get("admin_ui_saved_publication_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                        await state.update_data(
+                            admin_ui_saved_publication_ids=saved_ids,
+                            admin_ui_saved_publication_page=page,
+                            **panel_anchor,
+                        )
+                        await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                        return
+                    await _load_saved_publication_for_state(state, publication_id)
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(**panel_anchor)
+                    if field == "text":
+                        await state.update_data(admin_ui_action="publication_review_edit_text")
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "✏️ <b>Editar texto de Canales y Grupos</b>\n\nEnvía solo el nuevo texto. Se mantendrán tus botones y multimedia actuales.",
+                                "✏️ <b>Edit Channels & Groups text</b>\n\nSend only the new text. Your current buttons and media will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "buttons":
+                        await state.update_data(admin_ui_action="publication_review_edit_buttons")
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🔗 <b>Editar botones de Canales y Grupos</b>\n\n"
+                                "Envía solo los botones nuevos.\n"
+                                "Se mantendrán tu texto y multimedia actuales.\n\n"
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=bool(data.get("admin_ui_publication_flow_kind") == "gift"),
+                                    channels_mode=True,
+                                ),
+                                "🔗 <b>Edit Channels & Groups buttons</b>\n\n"
+                                "Send only the new buttons.\n"
+                                "Your current text and media will be preserved.\n\n"
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=bool(data.get("admin_ui_publication_flow_kind") == "gift"),
+                                    channels_mode=True,
+                                ),
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "media":
+                        await state.update_data(admin_ui_action="publication_review_edit_media")
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🖼 <b>Editar multimedia de Canales y Grupos</b>\n\n"
+                                "Envía una imagen, GIF, video o sticker para reemplazarla.\n"
+                                "Escribe <code>sin</code> para quitarla.\n"
+                                "Escribe <code>saltar</code> para mantener la actual.\n"
+                                "Se mantendrán tu texto y botones actuales.",
+                                "🖼 <b>Edit Channels & Groups media</b>\n\n"
+                                "Send an image, GIF, video or sticker to replace it.\n"
+                                "Type <code>none</code> to remove it.\n"
+                                "Type <code>skip</code> to keep current media.\n"
+                                "Your current text and buttons will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+
+                if mode == "delete":
+                    data = await state.get_data()
+                    publication_id = str(data.get("admin_ui_selected_saved_publication_id") or "").strip()
+                    page = _safe_int(data.get("admin_ui_saved_publication_page"), 1, 1, 999)
+                    if publication_id:
+                        await api_client.admin_delete_publication(publication_id)
+                    gift_only = bool(data.get("admin_ui_saved_publication_gift_only"))
+                    text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                    await state.update_data(
+                        admin_ui_saved_publication_ids=saved_ids,
+                        admin_ui_saved_publication_page=page,
+                        admin_ui_selected_saved_publication_id="",
+                        admin_ui_saved_publication_signature="",
+                        **panel_anchor,
+                    )
+                    success_header = _tr(
+                        locale,
+                        "🗑 <b>Publicación eliminada.</b>\n\n",
+                        "🗑 <b>Publication deleted.</b>\n\n",
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        success_header + text,
+                        reply_markup=keyboard,
+                    )
+                    return
+
+                page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
+                gift_only = bool((await state.get_data()).get("admin_ui_saved_publication_gift_only"))
+                text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
+                await state.update_data(
+                    admin_ui_saved_publication_ids=saved_ids,
+                    admin_ui_saved_publication_page=page,
+                    admin_ui_selected_saved_publication_id="",
+                    admin_ui_saved_publication_signature="",
+                    **panel_anchor,
+                )
+                await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+                return
+
+            if sub_action == "giftback":
+                mode = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+                media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower() or None
+                if mode == "text":
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(
+                            locale,
+                            "🎁 <b>Regalar saldo en Canales y Grupos</b>\n"
+                            "---------------------------------\n"
+                            "Paso 1/3 · Envía ahora el <b>texto</b> del regalo.\n"
+                            "También puedes escribir <code>sin</code> para publicar solo multimedia y el botón regalo.\n\n"
+                            "✍️ Ejemplo:\n"
+                            "<code>🎁 Regalo de saldo para los más rápidos.</code>",
+                            "🎁 <b>Gift balance in Channels & Groups</b>\n"
+                            "---------------------------------\n"
+                            "Step 1/3 · Send the gift <b>text</b> now.\n"
+                            "You can also type <code>none</code> to publish only media and the gift button.\n\n"
+                            "✍️ Example:\n"
+                            "<code>🎁 Balance gift for the fastest users.</code>",
+                        ),
+                        reply_markup=_build_publication_text_step_keyboard(locale, back_callback="adminui:publication"),
+                    )
+                    return
+                if mode == "buttons":
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_buttons_prompt_text(locale, gift_only=True, channels_mode=True),
+                        reply_markup=_build_publication_step_keyboard(
+                            "buttons",
+                            locale,
+                            back_callback="adminui:publication:giftback:text",
+                        ),
+                    )
+                    return
+                if mode == "media":
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_media_prompt_text(locale, gift_only=True, channels_mode=True),
+                        reply_markup=_build_publication_step_keyboard(
+                            "media",
+                            locale,
+                            back_callback="adminui:publication:giftback:buttons",
+                        ),
+                    )
+                    return
+                await _edit_panel_message(
+                    callback.message,
+                    _build_publication_review_text(message_text, buttons, media_kind, locale),
+                    reply_markup=_build_publication_review_keyboard(
+                        locale,
+                        back_callback="adminui:publication:giftback:media",
+                    ),
+                )
+                return
+
+            if sub_action == "targets":
+                response = await api_client.admin_list_publish_targets(scope="all")
+                items = response.get("items") or []
+                summary = response.get("summary") or {}
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _build_publish_targets_text(items, summary, locale),
+                    reply_markup=_build_publication_menu_keyboard(locale),
+                )
+                return
+
+            if sub_action == "skip":
+                step = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+                if step == "buttons":
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(
+                        admin_ui_action="publication_media",
+                        admin_ui_broadcast_buttons=[],
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_media_prompt_text(
+                            locale,
+                            gift_only=str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift",
+                            channels_mode=True,
+                        ),
+                        reply_markup=_build_publication_step_keyboard(
+                            "media",
+                            locale,
+                            back_callback=(
+                                "adminui:publication:giftback:buttons"
+                                if str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+                                else "adminui:publication"
+                            ),
+                        ),
+                    )
+                    return
+                if step == "media":
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(
+                        admin_ui_action="publication_review",
+                        admin_ui_broadcast_buttons=buttons,
+                        admin_ui_broadcast_media_file_id="",
+                        admin_ui_broadcast_media_kind="",
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_publication_review_text(
+                            message_text,
+                            buttons,
+                            None,
+                            locale,
+                        ),
+                        reply_markup=_build_publication_review_keyboard(locale),
+                    )
+                    return
+                if step == "text":
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(
+                        admin_ui_action="publication_buttons",
+                        admin_ui_broadcast_text="",
+                        admin_ui_broadcast_plain_text="",
+                        admin_ui_broadcast_entities=[],
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_buttons_prompt_text(
+                            locale,
+                            gift_only=str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift",
+                            channels_mode=True,
+                        ),
+                        reply_markup=_build_publication_step_keyboard(
+                            "buttons",
+                            locale,
+                            back_callback=(
+                                "adminui:publication:giftback:text"
+                                if str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+                                else "adminui:publication"
+                            ),
+                        ),
+                    )
+                    return
+
+            if sub_action == "review":
+                mode = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                message_plain_text = str(
+                    data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
+                ).strip()
+                buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+                message_entities = _normalize_broadcast_message_entities(data.get("admin_ui_broadcast_entities"))
+                media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+                media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+
+                if mode == "preview":
+                    await _send_broadcast_preview_message(
+                        callback.message,
+                        message_text,
+                        buttons,
+                        media_file_id or None,
+                        media_kind or None,
+                        message_entities,
+                        locale=locale,
+                    )
+                    await callback.answer(_tr(locale, "Vista previa enviada.", "Preview sent."))
+                    return
+
+                if mode == "edit":
+                    field = str(parts[4] if len(parts) > 4 else "").lower()
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    if field == "text":
+                        await state.update_data(admin_ui_action="publication_review_edit_text", **panel_anchor)
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "✏️ <b>Editar texto de Canales y Grupos</b>\n\nEnvía solo el nuevo texto. "
+                                "Se mantendrán tus botones y multimedia actuales.",
+                                "✏️ <b>Edit Channels & Groups text</b>\n\nSend only the new text. "
+                                "Your current buttons and media will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "buttons":
+                        await state.update_data(admin_ui_action="publication_review_edit_buttons", **panel_anchor)
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🔗 <b>Editar botones de Canales y Grupos</b>\n\n"
+                                "Envía solo los botones nuevos.\n"
+                                "Se mantendrán tu texto y multimedia actuales.\n\n"
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift",
+                                    channels_mode=True,
+                                ),
+                                "🔗 <b>Edit Channels & Groups buttons</b>\n\n"
+                                "Send only the new buttons.\n"
+                                "Your current text and media will be preserved.\n\n"
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift",
+                                    channels_mode=True,
+                                ),
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+                    if field == "media":
+                        await state.update_data(admin_ui_action="publication_review_edit_media", **panel_anchor)
+                        await _edit_panel_message(
+                            callback.message,
+                            _tr(
+                                locale,
+                                "🖼 <b>Editar multimedia de Canales y Grupos</b>\n\n"
+                                "Envía una imagen, GIF o video para reemplazarla.\n"
+                                "Escribe <code>sin</code> para quitarla.\n"
+                                "Escribe <code>saltar</code> para mantener la actual.\n"
+                                "Se mantendrán tu texto y botones actuales.",
+                                "🖼 <b>Edit Channels & Groups media</b>\n\n"
+                                "Send an image, GIF or video to replace it.\n"
+                                "Type <code>none</code> to remove it.\n"
+                                "Type <code>skip</code> to keep current media.\n"
+                                "Your current text and buttons will be preserved.",
+                            ),
+                            reply_markup=_build_back_to_panel_keyboard(locale),
+                        )
+                        return
+
+                if mode == "save":
+                    saved_text = await _save_current_publication_draft(state, locale)
+                    await _edit_panel_message(
+                        callback.message,
+                        saved_text + "\n\n" + _build_publication_review_text(message_text, buttons, media_kind or None, locale),
+                        reply_markup=_build_publication_review_keyboard(locale),
+                    )
+                    return
+
+                await _edit_panel_message(
+                    callback.message,
+                    _build_publication_review_text(message_text, buttons, media_kind or None, locale),
+                    reply_markup=_build_publication_review_keyboard(locale),
+                )
+                return
+
+            if sub_action == "send":
+                scope = str(parts[3] if len(parts) > 3 else "all").lower()
+                if scope not in {"all", "groups", "channels"}:
+                    scope = "all"
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                message_plain_text = str(
+                    data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
+                ).strip()
+                buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+                message_entities = _normalize_broadcast_message_entities(data.get("admin_ui_broadcast_entities"))
+                media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+                media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+                await _answer_callback_safe(callback)
+                text = await _send_publication_and_build_result(
+                    message_plain_text,
+                    scope=scope,
+                    locale=locale,
+                    buttons=buttons,
+                    media_file_id=media_file_id or None,
+                    media_kind=media_kind or None,
+                    message_entities=message_entities,
+                )
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    text,
+                    reply_markup=_build_publication_menu_keyboard(locale),
+                )
+                return
+
+            await _edit_panel_message(
+                callback.message,
+                _build_publication_menu_text(locale),
+                reply_markup=_build_publication_menu_keyboard(locale),
+            )
+            return
+
         if action == "broadcast":
             sub_action = parts[2] if len(parts) > 2 else ""
             if not sub_action:
@@ -4100,6 +6322,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 await state.set_state(AdminUiStates.awaiting_value)
                 await state.update_data(
                     admin_ui_action="broadcast_text",
+                    admin_ui_broadcast_flow_kind="message",
+                    admin_ui_saved_broadcast_gift_only=False,
                     admin_ui_selected_saved_broadcast_id="",
                     admin_ui_saved_broadcast_signature="",
                     admin_ui_saved_broadcast_ids=[],
@@ -4112,14 +6336,58 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 )
                 return
 
-            if sub_action == "saved":
+            if sub_action == "newgift":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="broadcast_text",
+                    admin_ui_broadcast_flow_kind="gift",
+                    admin_ui_saved_broadcast_gift_only=True,
+                    admin_ui_selected_saved_broadcast_id="",
+                    admin_ui_saved_broadcast_signature="",
+                    admin_ui_saved_broadcast_ids=[],
+                    admin_ui_broadcast_buttons=[],
+                    admin_ui_broadcast_media_file_id="",
+                    admin_ui_broadcast_media_kind="",
+                    admin_ui_broadcast_text="",
+                    admin_ui_broadcast_plain_text="",
+                    admin_ui_broadcast_entities=[],
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🎁 <b>Regalar saldo por Difusión</b>\n"
+                        "---------------------------------\n"
+                        "Paso 1/3 · Envía ahora el <b>texto</b> del regalo.\n"
+                        "También puedes escribir <code>sin</code> para enviar solo multimedia y el botón regalo.\n\n"
+                        "✍️ Ejemplo:\n"
+                        "<code>🎁 Regalo de saldo para los más rápidos.</code>",
+                        "🎁 <b>Gift balance by Broadcast</b>\n"
+                        "---------------------------------\n"
+                        "Step 1/3 · Send the gift <b>text</b> now.\n"
+                        "You can also type <code>none</code> to send only media and the gift button.\n\n"
+                        "✍️ Example:\n"
+                        "<code>🎁 Balance gift for the fastest users.</code>",
+                    ),
+                    reply_markup=_build_broadcast_text_step_keyboard(locale, back_callback="adminui:broadcast"),
+                )
+                return
+
+            if sub_action in {"saved", "savedgift"}:
                 mode = str(parts[3] if len(parts) > 3 else "").strip().lower()
                 if mode == "page":
                     page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
-                    text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                    state_data = await state.get_data()
+                    gift_only = (
+                        sub_action == "savedgift"
+                        or bool(state_data.get("admin_ui_saved_broadcast_gift_only"))
+                    )
+                    text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                     await state.update_data(
                         admin_ui_saved_broadcast_ids=saved_ids,
                         admin_ui_saved_broadcast_page=page,
+                        admin_ui_saved_broadcast_gift_only=gift_only,
                         admin_ui_selected_saved_broadcast_id="",
                         **panel_anchor,
                     )
@@ -4132,7 +6400,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     index = _safe_int(parts[4] if len(parts) > 4 else "0", 0, 0, 99)
                     if index <= 0 or index > len(saved_ids):
                         page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
-                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        gift_only = bool(data.get("admin_ui_saved_broadcast_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                         await state.update_data(
                             admin_ui_saved_broadcast_ids=saved_ids,
                             admin_ui_saved_broadcast_page=page,
@@ -4143,11 +6412,17 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         return
                     broadcast_id = str(saved_ids[index - 1] or "").strip()
                     broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
-                    await state.update_data(**panel_anchor)
+                    await state.update_data(
+                        admin_ui_saved_broadcast_gift_only=_buttons_have_wallet_gift(broadcast.get("buttons")),
+                        **panel_anchor,
+                    )
                     await _edit_panel_message(
                         callback.message,
                         _build_saved_broadcast_detail_text(broadcast, locale),
-                        reply_markup=_build_saved_broadcast_actions_keyboard(locale),
+                        reply_markup=_build_saved_broadcast_actions_keyboard(
+                            locale,
+                            gift_only=_buttons_have_wallet_gift(broadcast.get("buttons")),
+                        ),
                     )
                     return
 
@@ -4156,7 +6431,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
                     if not broadcast_id:
                         page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
-                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        gift_only = bool(data.get("admin_ui_saved_broadcast_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                         await state.update_data(
                             admin_ui_saved_broadcast_ids=saved_ids,
                             admin_ui_saved_broadcast_page=page,
@@ -4184,7 +6460,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
                     if not broadcast_id:
                         page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
-                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        gift_only = bool(data.get("admin_ui_saved_broadcast_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                         await state.update_data(
                             admin_ui_saved_broadcast_ids=saved_ids,
                             admin_ui_saved_broadcast_page=page,
@@ -4220,7 +6497,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
                     if not broadcast_id:
                         page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
-                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                        gift_only = bool(data.get("admin_ui_saved_broadcast_gift_only"))
+                        text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                         await state.update_data(
                             admin_ui_saved_broadcast_ids=saved_ids,
                             admin_ui_saved_broadcast_page=page,
@@ -4254,11 +6532,17 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                                 "🔗 <b>Editar botones de difusión</b>\n\n"
                                 "Envía solo los botones nuevos.\n"
                                 "Se mantendrán tu texto y multimedia actuales.\n\n"
-                                + _build_broadcast_buttons_prompt_text(locale),
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=bool(data.get("admin_ui_broadcast_flow_kind") == "gift"),
+                                ),
                                 "🔗 <b>Edit broadcast buttons</b>\n\n"
                                 "Send only the new buttons.\n"
                                 "Your current text and media will be preserved.\n\n"
-                                + _build_broadcast_buttons_prompt_text(locale),
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=bool(data.get("admin_ui_broadcast_flow_kind") == "gift"),
+                                ),
                             ),
                             reply_markup=_build_back_to_panel_keyboard(locale),
                         )
@@ -4290,7 +6574,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     page = _safe_int(data.get("admin_ui_saved_broadcast_page"), 1, 1, 999)
                     if broadcast_id:
                         await api_client.admin_delete_broadcast(broadcast_id)
-                    text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                    gift_only = bool(data.get("admin_ui_saved_broadcast_gift_only"))
+                    text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                     await state.update_data(
                         admin_ui_saved_broadcast_ids=saved_ids,
                         admin_ui_saved_broadcast_page=page,
@@ -4311,7 +6596,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     return
 
                 page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
-                text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page)
+                gift_only = bool((await state.get_data()).get("admin_ui_saved_broadcast_gift_only"))
+                text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                 await state.update_data(
                     admin_ui_saved_broadcast_ids=saved_ids,
                     admin_ui_saved_broadcast_page=page,
@@ -4321,9 +6607,77 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 await _edit_panel_message(callback.message, text, reply_markup=keyboard)
                 return
 
+            if sub_action == "giftback":
+                mode = str(parts[3] if len(parts) > 3 else "").lower()
+                data = await state.get_data()
+                message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+                buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+                media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower() or None
+                if mode == "text":
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(
+                            locale,
+                            "🎁 <b>Regalar saldo por Difusión</b>\n"
+                            "---------------------------------\n"
+                            "Paso 1/3 · Envía ahora el <b>texto</b> del regalo.\n"
+                            "También puedes escribir <code>sin</code> para enviar solo multimedia y el botón regalo.\n\n"
+                            "✍️ Ejemplo:\n"
+                            "<code>🎁 Regalo de saldo para los más rápidos.</code>",
+                            "🎁 <b>Gift balance by Broadcast</b>\n"
+                            "---------------------------------\n"
+                            "Step 1/3 · Send the gift <b>text</b> now.\n"
+                            "You can also type <code>none</code> to send only media and the gift button.\n\n"
+                            "✍️ Example:\n"
+                            "<code>🎁 Balance gift for the fastest users.</code>",
+                        ),
+                        reply_markup=_build_broadcast_text_step_keyboard(locale, back_callback="adminui:broadcast"),
+                    )
+                    return
+                if mode == "buttons":
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_buttons_prompt_text(locale, gift_only=True),
+                        reply_markup=_build_broadcast_step_keyboard(
+                            "buttons",
+                            locale,
+                            back_callback="adminui:broadcast:giftback:text",
+                        ),
+                    )
+                    return
+                if mode == "media":
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_media_prompt_text(locale, gift_only=True),
+                        reply_markup=_build_broadcast_step_keyboard(
+                            "media",
+                            locale,
+                            back_callback="adminui:broadcast:giftback:buttons",
+                        ),
+                    )
+                    return
+                await _edit_panel_message(
+                    callback.message,
+                    _build_broadcast_review_text(message_text, buttons, media_kind, locale),
+                    reply_markup=_build_broadcast_review_keyboard(
+                        locale,
+                        back_callback="adminui:broadcast:giftback:media",
+                    ),
+                )
+                return
+
             if sub_action == "preview":
                 mode = str(parts[3] if len(parts) > 3 else "").lower()
                 if mode == "close":
+                    linked_message_id = _safe_int(parts[4] if len(parts) > 4 else "0", 0, 0, 10**9)
+                    if linked_message_id > 0:
+                        try:
+                            await callback.bot.delete_message(
+                                chat_id=callback.message.chat.id,
+                                message_id=linked_message_id,
+                            )
+                        except Exception:
+                            pass
                     try:
                         await callback.message.delete()
                     except Exception:
@@ -4422,7 +6776,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 message_plain_text = str(
                     data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
                 ).strip()
-                if not message_text:
+                gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
+                if not message_text and not gift_flow:
                     await state.set_state(AdminUiStates.awaiting_value)
                     await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
                     await _edit_panel_message(
@@ -4435,6 +6790,29 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 buttons = _normalize_broadcast_buttons_state(
                     data.get("admin_ui_broadcast_buttons")
                 )
+                if step == "text":
+                    await state.set_state(AdminUiStates.awaiting_value)
+                    await state.update_data(
+                        admin_ui_action="broadcast_buttons",
+                        admin_ui_broadcast_text="",
+                        admin_ui_broadcast_plain_text="",
+                        admin_ui_broadcast_entities=[],
+                        **panel_anchor,
+                    )
+                    await _edit_panel_message(
+                        callback.message,
+                        _build_broadcast_buttons_prompt_text(locale, gift_only=gift_flow),
+                        reply_markup=_build_broadcast_step_keyboard(
+                            "buttons",
+                            locale,
+                            back_callback=(
+                                "adminui:broadcast:giftback:text"
+                                if gift_flow
+                                else "adminui:broadcast"
+                            ),
+                        ),
+                    )
+                    return
                 if step == "buttons":
                     await state.set_state(AdminUiStates.awaiting_value)
                     await state.update_data(
@@ -4444,8 +6822,16 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     )
                     await _edit_panel_message(
                         callback.message,
-                        _build_broadcast_media_prompt_text(locale),
-                        reply_markup=_build_broadcast_step_keyboard("media", locale),
+                        _build_broadcast_media_prompt_text(locale, gift_only=gift_flow),
+                        reply_markup=_build_broadcast_step_keyboard(
+                            "media",
+                            locale,
+                            back_callback=(
+                                "adminui:broadcast:giftback:buttons"
+                                if gift_flow
+                                else "adminui:broadcast"
+                            ),
+                        ),
                     )
                     return
                 if step == "media":
@@ -4465,7 +6851,14 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                             None,
                             locale,
                         ),
-                        reply_markup=_build_broadcast_review_keyboard(locale),
+                        reply_markup=_build_broadcast_review_keyboard(
+                            locale,
+                            back_callback=(
+                                "adminui:broadcast:giftback:media"
+                                if gift_flow
+                                else "adminui:broadcast"
+                            ),
+                        ),
                     )
                     return
 
@@ -4476,7 +6869,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 message_plain_text = str(
                     data.get("admin_ui_broadcast_plain_text") or data.get("admin_ui_broadcast_text") or ""
                 ).strip()
-                if not message_text:
+                gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
+                if not message_text and not gift_flow:
                     await state.set_state(AdminUiStates.awaiting_value)
                     await state.update_data(admin_ui_action="broadcast_text", **panel_anchor)
                     await _edit_panel_message(
@@ -4568,11 +6962,17 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                                 "🔗 <b>Editar botones de difusión</b>\n\n"
                                 "Envía solo los botones nuevos.\n"
                                 "Se mantendrán tu texto y multimedia actuales.\n\n"
-                                + _build_broadcast_buttons_prompt_text(locale),
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift",
+                                ),
                                 "🔗 <b>Edit broadcast buttons</b>\n\n"
                                 "Send only the new buttons.\n"
                                 "Your current text and media will be preserved.\n\n"
-                                + _build_broadcast_buttons_prompt_text(locale),
+                                + _build_broadcast_buttons_prompt_text(
+                                    locale,
+                                    gift_only=str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift",
+                                ),
                             ),
                             reply_markup=_build_back_to_panel_keyboard(locale),
                         )
@@ -5043,11 +7443,19 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
     raw_text = _extract_message_html_text(message)
     message_entities = _extract_message_entities(message)
     photo_file_id = message.photo[-1].file_id if message.photo else ""
+    document_file_id = message.document.file_id if message.document else ""
+    document_mime = str(message.document.mime_type or "").strip().lower() if message.document else ""
     animation_file_id = message.animation.file_id if message.animation else ""
     video_file_id = message.video.file_id if message.video else ""
+    sticker_file_id = message.sticker.file_id if message.sticker else ""
     data = await state.get_data()
     action = str(data.get("admin_ui_action") or "").strip()
-    if action in {"broadcast_buttons", "broadcast_review_edit_buttons"}:
+    if action in {
+        "broadcast_buttons",
+        "broadcast_review_edit_buttons",
+        "publication_buttons",
+        "publication_review_edit_buttons",
+    }:
         raw_text = plain_text
     panel_resume: Dict[str, Any] = {}
     panel_chat_id = data.get("admin_ui_panel_chat_id")
@@ -5068,6 +7476,9 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             "product_create_image",
             "broadcast_media",
             "broadcast_review_edit_media",
+            "publication_media",
+            "publication_review_edit_media",
+            "file_id_lookup",
         }
         if not allows_media_input and not raw_text:
             is_product_create_flow = action in {
@@ -5086,6 +7497,50 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "Send a valid value or write <code>/cancel</code>.",
                 ),
                 reply_markup=None if is_product_create_flow else _build_back_to_panel_keyboard(locale),
+            )
+            return
+
+        if action == "file_id_lookup":
+            media_file_id = ""
+            if photo_file_id:
+                media_file_id = photo_file_id
+            elif sticker_file_id:
+                media_file_id = sticker_file_id
+            elif document_file_id and document_mime.startswith("image/"):
+                media_file_id = document_file_id
+            elif animation_file_id:
+                media_file_id = animation_file_id
+            elif video_file_id:
+                media_file_id = video_file_id
+
+            if not media_file_id:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Entrada inválida</b>\n\n"
+                        "Envía una <b>foto</b>, <b>sticker</b>, <b>GIF</b>, <b>video</b> o un <b>documento de imagen</b> para extraer el <code>file_id</code>.",
+                        "⚠️ <b>Invalid input</b>\n\n"
+                        "Send a <b>photo</b>, <b>sticker</b>, <b>GIF</b>, <b>video</b> or an <b>image document</b> to extract the <code>file_id</code>.",
+                    ),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
+                )
+                return
+
+            await state.set_state(AdminUiStates.awaiting_value)
+            await state.update_data(admin_ui_action="file_id_lookup", **panel_resume)
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "🆔 <b>File ID detectado</b>\n\n"
+                    f"<code>{_escape_html(media_file_id)}</code>",
+                    "🆔 <b>Detected File ID</b>\n\n"
+                    f"<code>{_escape_html(media_file_id)}</code>",
+                ),
+                reply_markup=_build_back_to_panel_keyboard(locale),
             )
             return
 
@@ -5700,6 +8155,128 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             await state.clear()
             return
 
+        if action == "wallet_user_view":
+            lookup = raw_text.split()[0].strip()
+            if not lookup:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "❌ <b>Envía un telegram_id o @username válido.</b>\n\nEjemplos:\n<code>7621162350</code>\n<code>@NoroPayments</code>",
+                        "❌ <b>Send a valid telegram_id or @username.</b>\n\nExamples:\n<code>7621162350</code>\n<code>@NoroPayments</code>",
+                    ),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            text, keyboard = await _build_wallet_user_text(lookup, locale, page=1)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=keyboard,
+            )
+            await state.clear()
+            return
+
+        if action == "wallet_adjust_line":
+            parts_line = [part.strip() for part in raw_text.split("|")]
+            if len(parts_line) < 2:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "❌ <b>Formato inválido.</b>\n\nUsa:\n<code>telegram_id | monto | motivo opcional</code>",
+                        "❌ <b>Invalid format.</b>\n\nUse:\n<code>telegram_id | amount | optional reason</code>",
+                    ),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            try:
+                telegram_id = int(parts_line[0])
+                amount = float(parts_line[1].replace(",", "."))
+            except (TypeError, ValueError):
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "❌ <b>telegram_id o monto inválido.</b>",
+                        "❌ <b>Invalid telegram_id or amount.</b>",
+                    ),
+                    reply_markup=_build_wallets_menu_keyboard(locale),
+                )
+                return
+            reason = parts_line[2] if len(parts_line) > 2 else None
+            text = await _build_wallet_adjust_text(telegram_id, amount, reason, locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_wallets_menu_keyboard(locale),
+            )
+            await state.clear()
+            return
+
+        if action == "wallet_topup_approve_ref":
+            text = await _build_wallet_topup_decision_text(raw_text, mode="approve", locale=locale)
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_wallets_menu_keyboard(locale),
+            )
+            await state.clear()
+            return
+
+        if action == "wallet_topup_reject_ref":
+            await state.update_data(admin_ui_action="wallet_topup_reject_reason", admin_ui_wallet_topup_ref=raw_text)
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(
+                    locale,
+                    "📝 <b>Motivo del rechazo</b>\n\nEnvía el motivo para la recarga.",
+                    "📝 <b>Reject reason</b>\n\nSend the reason for the top-up.",
+                ),
+                reply_markup=_build_wallets_menu_keyboard(locale),
+            )
+            return
+
+        if action == "wallet_topup_reject_reason":
+            ref = str(data.get("admin_ui_wallet_topup_ref") or "").strip()
+            text = await _build_wallet_topup_decision_text(
+                ref,
+                mode="reject",
+                reason=raw_text or None,
+                locale=locale,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_wallets_menu_keyboard(locale),
+            )
+            await state.clear()
+            return
+
+        if action == "wallet_topup_scam_ref":
+            text = await _build_wallet_topup_decision_text(
+                raw_text,
+                mode="scam",
+                reason="Marcada como estafa",
+                locale=locale,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                text,
+                reply_markup=_build_wallets_menu_keyboard(locale),
+            )
+            await state.clear()
+            return
+
         if action == "ban_telegram_id":
             try:
                 telegram_id = int(raw_text.split()[0])
@@ -5774,24 +8351,43 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             await state.clear()
             return
 
-        if action == "broadcast_text":
+        if action == "publication_text":
+            normalized_text = plain_text
+            normalized_entities = message_entities
+            if raw_text and raw_text.lower() in _BROADCAST_SKIP_WORDS:
+                normalized_text = ""
+                normalized_entities = []
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
             await state.update_data(
-                admin_ui_action="broadcast_buttons",
-                admin_ui_broadcast_text=plain_text,
-                admin_ui_broadcast_plain_text=plain_text,
-                admin_ui_broadcast_entities=message_entities,
+                admin_ui_action="publication_buttons",
+                admin_ui_broadcast_text=normalized_text,
+                admin_ui_broadcast_plain_text=normalized_text,
+                admin_ui_broadcast_entities=normalized_entities,
             )
             await _edit_state_panel_message(
                 message,
                 state,
-                _build_broadcast_buttons_prompt_text(locale),
-                reply_markup=_build_broadcast_step_keyboard("buttons", locale),
+                _build_broadcast_buttons_prompt_text(locale, gift_only=gift_flow, channels_mode=True),
+                reply_markup=_build_publication_step_keyboard(
+                    "buttons",
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:text"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
             )
             return
 
-        if action == "broadcast_buttons":
+        if action == "publication_buttons":
             try:
                 buttons = _parse_broadcast_buttons_input(raw_text, locale)
+                buttons = _enforce_wallet_gift_flow_buttons(
+                    buttons,
+                    gift_only=str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift",
+                    locale=locale,
+                )
             except ValueError as exc:
                 await _edit_state_panel_message(
                     message,
@@ -5803,10 +8399,337 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                         f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
                         "Send the buttons again or type <code>none</code>.",
                     ),
-                    reply_markup=_build_broadcast_step_keyboard("buttons", locale),
+                    reply_markup=_build_publication_step_keyboard(
+                        "buttons",
+                        locale,
+                        back_callback=(
+                            "adminui:publication:giftback:text"
+                            if str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+                            else "adminui:publication"
+                        ),
+                    ),
                 )
                 return
 
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+            await state.update_data(
+                admin_ui_action="publication_media",
+                admin_ui_broadcast_buttons=buttons,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_media_prompt_text(locale, gift_only=gift_flow, channels_mode=True),
+                reply_markup=_build_publication_step_keyboard(
+                    "media",
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:buttons"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
+            )
+            return
+
+        if action == "publication_media":
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+
+            media_file_id: str | None = None
+            media_kind: str | None = None
+            if photo_file_id:
+                media_file_id = photo_file_id
+                media_kind = "photo"
+            elif sticker_file_id:
+                media_file_id = sticker_file_id
+                media_kind = "sticker"
+            elif animation_file_id:
+                media_file_id = animation_file_id
+                media_kind = "animation"
+            elif video_file_id:
+                media_file_id = video_file_id
+                media_kind = "video"
+            elif raw_text and raw_text.lower() in _BROADCAST_SKIP_WORDS:
+                media_file_id = None
+                media_kind = None
+            else:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Multimedia inválida.</b>\n\n"
+                        "Envía una imagen, sticker, GIF o video, o escribe <code>sin</code>.",
+                        "⚠️ <b>Invalid media.</b>\n\n"
+                        "Send an image, sticker, GIF or video, or type <code>none</code>.",
+                    ),
+                    reply_markup=_build_publication_step_keyboard(
+                        "media",
+                        locale,
+                        back_callback=(
+                            "adminui:publication:giftback:buttons"
+                            if str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+                            else "adminui:publication"
+                        ),
+                    ),
+                )
+                return
+
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+            await state.update_data(
+                admin_ui_action="publication_review",
+                admin_ui_broadcast_buttons=buttons,
+                admin_ui_broadcast_media_file_id=media_file_id or "",
+                admin_ui_broadcast_media_kind=media_kind or "",
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_publication_review_text(
+                    message_text,
+                    buttons=buttons,
+                    media_kind=media_kind,
+                    locale=locale,
+                ),
+                reply_markup=_build_publication_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:media"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
+            )
+            return
+
+        if action == "publication_review":
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+            media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_publication_review_text(message_text, buttons, media_kind, locale),
+                reply_markup=_build_publication_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:media"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
+            )
+            return
+
+        if action == "publication_review_edit_text":
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+            media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            normalized_text = plain_text
+            normalized_entities = message_entities
+            if raw_text and raw_text.lower() in _BROADCAST_SKIP_WORDS:
+                normalized_text = ""
+                normalized_entities = []
+            await state.update_data(
+                admin_ui_action="publication_review",
+                admin_ui_broadcast_text=normalized_text,
+                admin_ui_broadcast_plain_text=normalized_text,
+                admin_ui_broadcast_entities=normalized_entities,
+            )
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_publication_review_text(normalized_text, buttons, media_kind, locale),
+                reply_markup=_build_publication_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:media"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
+            )
+            return
+
+        if action == "publication_review_edit_buttons":
+            try:
+                buttons = _parse_broadcast_buttons_input(raw_text, locale)
+                buttons = _enforce_wallet_gift_flow_buttons(
+                    buttons,
+                    gift_only=str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift",
+                    locale=locale,
+                )
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Vuelve a enviar los botones.",
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Send the buttons again.",
+                    ),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
+                )
+                return
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            await state.update_data(
+                admin_ui_action="publication_review",
+                admin_ui_broadcast_buttons=buttons,
+            )
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_publication_review_text(message_text, buttons, media_kind, locale),
+                reply_markup=_build_publication_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:media"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
+            )
+            return
+
+        if action == "publication_review_edit_media":
+            message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
+            buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
+            current_media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
+            current_media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+
+            next_media_file_id = current_media_file_id
+            next_media_kind = current_media_kind
+            text_lower = raw_text.lower() if raw_text else ""
+            if photo_file_id:
+                next_media_file_id = photo_file_id
+                next_media_kind = "photo"
+            elif sticker_file_id:
+                next_media_file_id = sticker_file_id
+                next_media_kind = "sticker"
+            elif animation_file_id:
+                next_media_file_id = animation_file_id
+                next_media_kind = "animation"
+            elif video_file_id:
+                next_media_file_id = video_file_id
+                next_media_kind = "video"
+            elif text_lower in _BROADCAST_EDIT_KEEP_WORDS:
+                next_media_file_id = current_media_file_id
+                next_media_kind = current_media_kind
+            elif text_lower in _BROADCAST_SKIP_WORDS:
+                next_media_file_id = ""
+                next_media_kind = ""
+            else:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ <b>Multimedia inválida.</b>\n\n"
+                        "Envía una imagen, sticker, GIF o video.\n"
+                        "Escribe <code>sin</code> para quitar multimedia.\n"
+                        "Escribe <code>saltar</code> para mantener la actual.",
+                        "⚠️ <b>Invalid media.</b>\n\n"
+                        "Send an image, sticker, GIF or video.\n"
+                        "Type <code>none</code> to remove media.\n"
+                        "Type <code>skip</code> to keep current media.",
+                    ),
+                    reply_markup=_build_back_to_panel_keyboard(locale),
+                )
+                return
+
+            await state.update_data(
+                admin_ui_action="publication_review",
+                admin_ui_broadcast_media_file_id=next_media_file_id,
+                admin_ui_broadcast_media_kind=next_media_kind,
+            )
+            gift_flow = str(data.get("admin_ui_publication_flow_kind") or "").strip().lower() == "gift"
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_publication_review_text(
+                    message_text,
+                    buttons,
+                    next_media_kind,
+                    locale,
+                ),
+                reply_markup=_build_publication_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:publication:giftback:media"
+                        if gift_flow
+                        else "adminui:publication"
+                    ),
+                ),
+            )
+            return
+
+        if action == "broadcast_text":
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
+            normalized_text = plain_text
+            normalized_entities = message_entities
+            if gift_flow and raw_text and raw_text.lower() in _BROADCAST_SKIP_WORDS:
+                normalized_text = ""
+                normalized_entities = []
+            await state.update_data(
+                admin_ui_action="broadcast_buttons",
+                admin_ui_broadcast_text=normalized_text,
+                admin_ui_broadcast_plain_text=normalized_text,
+                admin_ui_broadcast_entities=normalized_entities,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _build_broadcast_buttons_prompt_text(locale, gift_only=gift_flow),
+                reply_markup=_build_broadcast_step_keyboard(
+                    "buttons",
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:text"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
+            )
+            return
+
+        if action == "broadcast_buttons":
+            try:
+                buttons = _parse_broadcast_buttons_input(raw_text, locale)
+                buttons = _enforce_wallet_gift_flow_buttons(
+                    buttons,
+                    gift_only=str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift",
+                    locale=locale,
+                )
+            except ValueError as exc:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Vuelve a enviar los botones o escribe <code>sin</code>.",
+                        f"⚠️ <b>{_escape_html(exc)}</b>\n\n"
+                        "Send the buttons again or type <code>none</code>.",
+                    ),
+                    reply_markup=_build_broadcast_step_keyboard(
+                        "buttons",
+                        locale,
+                        back_callback=(
+                            "adminui:broadcast:giftback:text"
+                            if str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
+                            else "adminui:broadcast"
+                        ),
+                    ),
+                )
+                return
+
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
             await state.update_data(
                 admin_ui_action="broadcast_media",
                 admin_ui_broadcast_buttons=buttons,
@@ -5814,14 +8737,23 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             await _edit_state_panel_message(
                 message,
                 state,
-                _build_broadcast_media_prompt_text(locale),
-                reply_markup=_build_broadcast_step_keyboard("media", locale),
+                _build_broadcast_media_prompt_text(locale, gift_only=gift_flow),
+                reply_markup=_build_broadcast_step_keyboard(
+                    "media",
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:buttons"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
             )
             return
 
         if action == "broadcast_media":
             message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
-            if not message_text:
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
+            if not message_text and not gift_flow:
                 await _edit_state_panel_message(
                     message,
                     state,
@@ -5842,6 +8774,9 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             if photo_file_id:
                 media_file_id = photo_file_id
                 media_kind = "photo"
+            elif sticker_file_id:
+                media_file_id = sticker_file_id
+                media_kind = "sticker"
             elif animation_file_id:
                 media_file_id = animation_file_id
                 media_kind = "animation"
@@ -5858,11 +8793,19 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     _tr(
                         locale,
                         "⚠️ <b>Multimedia inválida.</b>\n\n"
-                        "Envía una imagen, GIF o video, o escribe <code>sin</code>.",
+                        "Envía una imagen, sticker, GIF o video, o escribe <code>sin</code>.",
                         "⚠️ <b>Invalid media.</b>\n\n"
-                        "Send an image, GIF or video, or type <code>none</code>.",
+                        "Send an image, sticker, GIF or video, or type <code>none</code>.",
                     ),
-                    reply_markup=_build_broadcast_step_keyboard("media", locale),
+                    reply_markup=_build_broadcast_step_keyboard(
+                        "media",
+                        locale,
+                        back_callback=(
+                            "adminui:broadcast:giftback:buttons"
+                            if gift_flow
+                            else "adminui:broadcast"
+                        ),
+                    ),
                 )
                 return
 
@@ -5882,7 +8825,14 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 message,
                 state,
                 review_text,
-                reply_markup=_build_broadcast_review_keyboard(locale),
+                reply_markup=_build_broadcast_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:media"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
             )
             return
 
@@ -5890,34 +8840,60 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             message_text = str(data.get("admin_ui_broadcast_text") or "").strip()
             buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
             media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
             await _edit_state_panel_message(
                 message,
                 state,
                 _build_broadcast_review_text(message_text, buttons, media_kind, locale),
-                reply_markup=_build_broadcast_review_keyboard(locale),
+                reply_markup=_build_broadcast_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:media"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
             )
             return
 
         if action == "broadcast_review_edit_text":
             buttons = _normalize_broadcast_buttons_state(data.get("admin_ui_broadcast_buttons"))
             media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
+            normalized_text = plain_text
+            normalized_entities = message_entities
+            if gift_flow and raw_text and raw_text.lower() in _BROADCAST_SKIP_WORDS:
+                normalized_text = ""
+                normalized_entities = []
             await state.update_data(
                 admin_ui_action="broadcast_review",
-                admin_ui_broadcast_text=plain_text,
-                admin_ui_broadcast_plain_text=plain_text,
-                admin_ui_broadcast_entities=message_entities,
+                admin_ui_broadcast_text=normalized_text,
+                admin_ui_broadcast_plain_text=normalized_text,
+                admin_ui_broadcast_entities=normalized_entities,
             )
             await _edit_state_panel_message(
                 message,
                 state,
-                _build_broadcast_review_text(plain_text, buttons, media_kind, locale),
-                reply_markup=_build_broadcast_review_keyboard(locale),
+                _build_broadcast_review_text(normalized_text, buttons, media_kind, locale),
+                reply_markup=_build_broadcast_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:media"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
             )
             return
 
         if action == "broadcast_review_edit_buttons":
             try:
                 buttons = _parse_broadcast_buttons_input(raw_text, locale)
+                buttons = _enforce_wallet_gift_flow_buttons(
+                    buttons,
+                    gift_only=str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift",
+                    locale=locale,
+                )
             except ValueError as exc:
                 await _edit_state_panel_message(
                     message,
@@ -5938,11 +8914,19 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 admin_ui_action="broadcast_review",
                 admin_ui_broadcast_buttons=buttons,
             )
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
             await _edit_state_panel_message(
                 message,
                 state,
                 _build_broadcast_review_text(message_text, buttons, media_kind, locale),
-                reply_markup=_build_broadcast_review_keyboard(locale),
+                reply_markup=_build_broadcast_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:media"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
             )
             return
 
@@ -5958,6 +8942,9 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             if photo_file_id:
                 next_media_file_id = photo_file_id
                 next_media_kind = "photo"
+            elif sticker_file_id:
+                next_media_file_id = sticker_file_id
+                next_media_kind = "sticker"
             elif animation_file_id:
                 next_media_file_id = animation_file_id
                 next_media_kind = "animation"
@@ -5977,11 +8964,11 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     _tr(
                         locale,
                         "⚠️ <b>Multimedia inválida.</b>\n\n"
-                        "Envía una imagen, GIF o video.\n"
+                        "Envía una imagen, sticker, GIF o video.\n"
                         "Escribe <code>sin</code> para quitar multimedia.\n"
                         "Escribe <code>saltar</code> para mantener la actual.",
                         "⚠️ <b>Invalid media.</b>\n\n"
-                        "Send an image, GIF or video.\n"
+                        "Send an image, sticker, GIF or video.\n"
                         "Type <code>none</code> to remove media.\n"
                         "Type <code>skip</code> to keep current media.",
                     ),
@@ -5994,6 +8981,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 admin_ui_broadcast_media_file_id=next_media_file_id,
                 admin_ui_broadcast_media_kind=next_media_kind,
             )
+            gift_flow = str(data.get("admin_ui_broadcast_flow_kind") or "").strip().lower() == "gift"
             await _edit_state_panel_message(
                 message,
                 state,
@@ -6003,7 +8991,14 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     next_media_kind,
                     locale,
                 ),
-                reply_markup=_build_broadcast_review_keyboard(locale),
+                reply_markup=_build_broadcast_review_keyboard(
+                    locale,
+                    back_callback=(
+                        "adminui:broadcast:giftback:media"
+                        if gift_flow
+                        else "adminui:broadcast"
+                    ),
+                ),
             )
             return
 
@@ -6390,8 +9385,8 @@ async def cmd_order(message: Message) -> None:
             f"Número: {visible_number}\n"
             f"Estado: {_order_status_display(order, locale)}\n"
             f"Usuario: {user.get('telegram_id')} (@{user.get('telegram_username') or '-'})\n"
-            f"Método: {payment.get('payment_method') or '-'}\n"
-            f"Revisión pago: {payment.get('review_status') or '-'}\n"
+            f"Método: {_payment_method_text(payment.get('payment_method'), locale)}\n"
+            f"Revisión pago: {_payment_review_display(order, payment, locale)}\n"
             f"Total USD: ${totals.get('total_usd')}\n"
             f"Markup: {totals.get('markup_percent') if totals.get('markup_percent') is not None else '-'}\n"
             f"Total local: {local_total.get('amount')} {local_total.get('currency')}\n"

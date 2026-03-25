@@ -1,6 +1,25 @@
 const path = require("path");
 const { getPool } = require("../../db");
 const { sendMessage, sendPhoto } = require("../../services/telegram");
+const {
+  ensureUserWalletSchema,
+  ensureWalletGiftSchema,
+  getUserWalletByTelegramId,
+  getUserWalletHistoryByUserId,
+  createWalletTopup,
+  resolveWalletTopupId,
+  getWalletTopupById,
+  submitWalletTopupProof,
+  syncExpiredWalletTopups,
+  syncWalletGifts,
+  formatWalletTopupNumber,
+  recordWalletTopupAdminNotification,
+  buildWalletTopupAdminCaption,
+  claimWalletGift,
+  cleanupWalletGiftMessages,
+  finalizeWalletGiftStatus,
+  formatGiftUsd,
+} = require("../../services/userWallets");
 const AFFILIATE_MESSAGES = {
   es: {
     approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
@@ -23,6 +42,7 @@ const MAIN_MENU_MESSAGES = {
     menu_affiliates: "📢 Afiliados",
     menu_community: "👥 Comunidad",
     menu_support: "🆘 Soporte",
+    menu_wallet: "💰 Mi saldo",
     menu_language: "🌐 Idioma",
   },
   en: {
@@ -36,6 +56,7 @@ const MAIN_MENU_MESSAGES = {
     menu_affiliates: "📢 Affiliates",
     menu_community: "👥 Community",
     menu_support: "🆘 Support",
+    menu_wallet: "💰 My balance",
     menu_language: "🌐 Language",
   },
 };
@@ -104,6 +125,7 @@ function buildMainMenuKeyboard(locale) {
         { text: text.menu_community, callback_data: "home:community" },
         { text: text.menu_support, callback_data: "home:support" },
       ],
+      [{ text: text.menu_wallet, callback_data: "home:wallet" }],
       [{ text: text.menu_language, callback_data: "home:soon:idioma" }],
     ],
   };
@@ -392,6 +414,321 @@ async function getUserByTelegramId(req, res, next) {
     return res.status(200).json({ user: result.rows[0] });
   } catch (error) {
     return next(error);
+  }
+}
+
+async function getUserWallet(req, res, next) {
+  const telegramId = Number(req.params.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  try {
+    const pool = getPool();
+    await ensureUserWalletSchema(pool);
+    await syncExpiredWalletTopups(pool);
+    const result = await getUserWalletByTelegramId(pool, telegramId);
+    if (!result) {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    return res.json({
+      user: result.user,
+      wallet: result.wallet,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getUserWalletHistory(req, res, next) {
+  const telegramId = Number(req.params.telegram_id);
+  const parsedLimit = Number.parseInt(String(req.query.limit || "20"), 10);
+  const limit = Number.isFinite(parsedLimit)
+    ? Math.min(Math.max(parsedLimit, 1), 100)
+    : 20;
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  try {
+    const pool = getPool();
+    await ensureUserWalletSchema(pool);
+    const result = await getUserWalletByTelegramId(pool, telegramId);
+    if (!result) {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    const items = await getUserWalletHistoryByUserId(pool, result.user.id, {
+      limit,
+      visibleToUserOnly: true,
+    });
+    return res.json({
+      user: result.user,
+      wallet: result.wallet,
+      items,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function createUserWalletTopup(req, res, next) {
+  const telegramId = Number(req.params.telegram_id);
+  const amountUsd = Number(req.body?.amount_usd);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  if (!Number.isFinite(amountUsd) || amountUsd < 15) {
+    return res.status(400).json({ error: "MIN_TOPUP_15_USD" });
+  }
+  try {
+    const pool = getPool();
+    await ensureUserWalletSchema(pool);
+    const walletData = await getUserWalletByTelegramId(pool, telegramId);
+    if (!walletData) {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    const topup = await createWalletTopup(pool, {
+      userId: walletData.user.id,
+      amountUsd,
+    });
+    return res.status(201).json({
+      topup: {
+        ...topup,
+        topup_number_label: formatWalletTopupNumber(topup?.topup_number),
+      },
+      wallet: walletData.wallet,
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function getUserWalletTopup(req, res, next) {
+  const rawRef = req.params.id;
+  const telegramId = Number(req.query.telegram_id || req.body?.telegram_id);
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  try {
+    const pool = getPool();
+    await ensureUserWalletSchema(pool);
+    await syncExpiredWalletTopups(pool);
+    const resolvedId = await resolveWalletTopupId(pool, rawRef);
+    if (!resolvedId) {
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const topup = await getWalletTopupById(pool, resolvedId);
+    if (!topup || Number(topup.telegram_id) !== telegramId) {
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    return res.json({
+      topup: {
+        ...topup,
+        topup_number_label: formatWalletTopupNumber(topup.topup_number),
+      },
+    });
+  } catch (error) {
+    return next(error);
+  }
+}
+
+async function submitUserWalletTopupProof(req, res, next) {
+  const rawRef = req.params.id;
+  const telegramId = Number(req.body?.telegram_id);
+  const screenshotFileId = req.body?.screenshot_file_id;
+  const screenshotUniqueId = req.body?.screenshot_unique_id;
+  const paymentMethod = req.body?.payment_method || null;
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  if (!screenshotFileId || !screenshotUniqueId) {
+    return res.status(400).json({ error: "SCREENSHOT_REQUIRED" });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureUserWalletSchema(client);
+    await syncExpiredWalletTopups(client);
+    const resolvedId = await resolveWalletTopupId(client, rawRef);
+    if (!resolvedId) {
+      await client.query("ROLLBACK");
+      return res.status(404).json({ error: "WALLET_TOPUP_NOT_FOUND" });
+    }
+    const topup = await submitWalletTopupProof(client, {
+      topupId: resolvedId,
+      telegramId,
+      screenshotFileId,
+      screenshotUniqueId,
+      paymentMethod,
+    });
+    await client.query("COMMIT");
+
+    try {
+      const admins = parseAdminTelegramIds();
+      if (admins.length > 0) {
+        const caption = await buildWalletTopupAdminCaption(topup);
+        const keyboard = {
+          inline_keyboard: [
+            [
+              { text: "Panel web", callback_data: `admin_panel:${resolvedId}` },
+              { text: "Panel Bot", callback_data: "adminui:wallets" },
+            ],
+            [
+              { text: "Banear Usuario", callback_data: `admin_ban:${telegramId}:${resolvedId}` },
+            ],
+          ],
+        };
+        await Promise.all(
+          admins.map(async (adminId) => {
+            try {
+              if (screenshotFileId) {
+                const result = await sendPhoto(adminId, {
+                  file_id: screenshotFileId,
+                  caption,
+                  parse_mode: "HTML",
+                  reply_markup: keyboard,
+                });
+                if (result?.message_id) {
+                  await recordWalletTopupAdminNotification(
+                    pool,
+                    resolvedId,
+                    adminId,
+                    result.message_id,
+                    "photo"
+                  );
+                }
+                return;
+              }
+              const result = await sendMessage(adminId, caption, {
+                parse_mode: "HTML",
+                reply_markup: keyboard,
+              });
+              if (result?.message_id) {
+                await recordWalletTopupAdminNotification(
+                  pool,
+                  resolvedId,
+                  adminId,
+                  result.message_id,
+                  "text"
+                );
+              }
+            } catch (_error) {
+              try {
+                const result = await sendMessage(adminId, caption, {
+                  parse_mode: "HTML",
+                  reply_markup: keyboard,
+                });
+                if (result?.message_id) {
+                  await recordWalletTopupAdminNotification(
+                    pool,
+                    resolvedId,
+                    adminId,
+                    result.message_id,
+                    "text"
+                  );
+                }
+              } catch (notifyError) {
+                console.error("wallet_topup_admin_notify_failed", notifyError);
+              }
+            }
+          })
+        );
+      }
+    } catch (notifyError) {
+      console.error("wallet_topup_admin_notify_failed", notifyError);
+    }
+
+    return res.json({
+      topup: {
+        ...topup,
+        topup_number_label: formatWalletTopupNumber(topup?.topup_number),
+      },
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "NOT_ALLOWED") {
+      return res.status(403).json({ error: "NOT_ALLOWED" });
+    }
+    if (error.code === "SCREENSHOT_ALREADY_SUBMITTED") {
+      return res.status(409).json({ error: "SCREENSHOT_ALREADY_SUBMITTED" });
+    }
+    if (error.code === "DUPLICATE_IMAGE") {
+      return res.status(409).json({ error: "DUPLICATE_IMAGE" });
+    }
+    if (error.code === "TOPUP_EXPIRED") {
+      return res.status(409).json({ error: "TOPUP_EXPIRED" });
+    }
+    if (error.code === "TOPUP_NOT_PAYABLE") {
+      return res.status(409).json({ error: "TOPUP_NOT_PAYABLE" });
+    }
+    if (error.code === "PAYMENT_PROOF_NOT_VALID") {
+      return res.status(422).json({
+        error: "PAYMENT_PROOF_NOT_VALID",
+        message:
+          error.messageToUser
+          || "⚠️ La imagen no parece un comprobante de pago. Envía una captura donde se vea método y monto.",
+        details: error.details || null,
+      });
+    }
+    return next(error);
+  } finally {
+    client.release();
+  }
+}
+
+async function claimUserWalletGift(req, res, next) {
+  const telegramId = Number(req.body?.telegram_id);
+  const claimToken = String(req.body?.claim_token || "").trim();
+  if (!Number.isFinite(telegramId)) {
+    return res.status(400).json({ error: "telegram_id is required" });
+  }
+  if (!claimToken) {
+    return res.status(400).json({ error: "claim_token is required" });
+  }
+  const pool = getPool();
+  const client = await pool.connect();
+  try {
+    await client.query("BEGIN");
+    await ensureWalletGiftSchema(client);
+    await syncWalletGifts(client);
+    const result = await claimWalletGift(client, { telegramId, claimToken });
+    await client.query("COMMIT");
+
+    try {
+      await cleanupWalletGiftMessages(pool, result.gift.id, telegramId);
+      if (result.depleted) {
+        await finalizeWalletGiftStatus(pool, result.gift.id);
+      }
+    } catch (giftFinalizeError) {
+      console.error("wallet_gift_post_claim_finalize_failed", giftFinalizeError);
+    }
+
+    return res.json({
+      ok: true,
+      gift: result.gift,
+      claim: result.claim,
+      wallet: result.wallet,
+      user: result.user,
+    });
+  } catch (error) {
+    await client.query("ROLLBACK");
+    if (error.code === "USER_NOT_FOUND") {
+      return res.status(404).json({ error: "USER_NOT_FOUND" });
+    }
+    if (error.code === "WALLET_GIFT_NOT_FOUND") {
+      return res.status(404).json({ error: "WALLET_GIFT_NOT_FOUND" });
+    }
+    if (error.code === "WALLET_GIFT_ALREADY_CLAIMED") {
+      return res.status(409).json({ error: "WALLET_GIFT_ALREADY_CLAIMED" });
+    }
+    if (error.code === "WALLET_GIFT_DEPLETED") {
+      return res.status(409).json({ error: "WALLET_GIFT_DEPLETED" });
+    }
+    if (error.code === "WALLET_GIFT_EXPIRED") {
+      return res.status(409).json({ error: "WALLET_GIFT_EXPIRED" });
+    }
+    return next(error);
+  } finally {
+    client.release();
   }
 }
 
@@ -1488,6 +1825,12 @@ async function decideAffiliateInvoice(req, res, next) {
 module.exports = {
   upsertTelegramUser,
   getUserByTelegramId,
+  getUserWallet,
+  getUserWalletHistory,
+  createUserWalletTopup,
+  getUserWalletTopup,
+  submitUserWalletTopupProof,
+  claimUserWalletGift,
   updateUserLocale,
   getUserBanStatus,
   banUserFromBot,

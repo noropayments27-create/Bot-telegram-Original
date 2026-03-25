@@ -2,6 +2,12 @@ const express = require("express");
 const {
   upsertTelegramUser,
   getUserByTelegramId,
+  getUserWallet,
+  getUserWalletHistory,
+  createUserWalletTopup,
+  getUserWalletTopup,
+  submitUserWalletTopupProof,
+  claimUserWalletGift,
   updateUserLocale,
   getUserBanStatus,
   banUserFromBot,
@@ -32,6 +38,12 @@ router.post("/affiliates/code/assign", requireBotSecret, assignAffiliateCode);
 router.post("/affiliates/withdraw", requireBotSecret, requestAffiliatePayout);
 router.post("/affiliates/invoices/decision", requireBotSecret, decideAffiliateInvoice);
 router.post("/affiliates/:id/decision", requireBotSecret, decideAffiliateStatus);
+router.get("/:telegram_id/wallet", requireBotSecret, getUserWallet);
+router.get("/:telegram_id/wallet/history", requireBotSecret, getUserWalletHistory);
+router.post("/:telegram_id/wallet/topups", requireBotSecret, createUserWalletTopup);
+router.get("/wallet-topups/:id", requireBotSecret, getUserWalletTopup);
+router.post("/wallet-topups/:id/payment-proof", requireBotSecret, submitUserWalletTopupProof);
+router.post("/wallet-gifts/claim", requireBotSecret, claimUserWalletGift);
 router.post("/:telegram_id/ban", requireBotSecret, banUserFromBot);
 router.post("/telegram/upsert", upsertTelegramUser);
 router.get("/:telegram_id", getUserByTelegramId);
