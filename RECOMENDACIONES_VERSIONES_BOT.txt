@@ -1,0 +1,329 @@
+RECOMENDACIONES PARA VERSIONES DEL BOT
+======================================
+
+Objetivo
+--------
+Separar el producto en tres niveles comerciales:
+
+1. Bot Basico
+2. Bot Avanzado
+3. Bot Pro
+
+El proyecto actual corresponde a la version Pro, porque incluye bot de Telegram,
+API, panel web, inventario avanzado, pagos, comprobantes, entregas, afiliados,
+wallets, broadcasts, backups, seguridad y herramientas administrativas.
+
+
+VERSION BASICA
+==============
+
+Enfoque recomendado
+-------------------
+La version Basica debe ser una version simple, rapida de instalar y facil de
+operar para negocios pequenos que solo necesitan vender por Telegram sin panel
+administrativo complejo.
+
+Debe resolver el flujo principal:
+- mostrar productos
+- permitir comprar
+- recibir comprobante
+- notificar al admin
+- entregar el producto o dejarlo listo para entrega manual
+
+Funciones recomendadas
+----------------------
+- Bot de Telegram con /start y menu principal.
+- Catalogo simple de productos.
+- Categorias basicas: Tienda, Metodos, VIP o Programas, segun el cliente.
+- Ficha de producto con nombre, descripcion, precio y disponibilidad.
+- Compra directa de un producto.
+- Metodos de pago fijos configurados por .env o archivo simple.
+- Recepcion de comprobante por foto o imagen.
+- Notificacion al admin por Telegram cuando llega una orden.
+- Aprobacion manual del pago desde Telegram.
+- Entrega por texto o link despues de aprobar.
+- Soporte basico: mensaje directo o ticket simple.
+- Bloqueo basico de usuarios.
+- Configuracion minima de idioma, preferiblemente solo Espanol al inicio.
+- Comandos admin minimos: ver orden, aprobar, rechazar, banear.
+
+Funciones que recomiendo NO incluir en Basica
+---------------------------------------------
+- Panel web completo.
+- Sistema de afiliados.
+- Wallet interna.
+- Recargas de saldo.
+- Regalos de saldo.
+- Broadcasts segmentados.
+- Publicaciones a canales y grupos.
+- OCR de comprobantes.
+- Backups automaticos a Google Drive o Telegram.
+- Recibos en imagen con Playwright.
+- Stock por unidades.
+- CSV/XLSX de estadisticas.
+- Recuperacion avanzada de contrasena.
+- Control de layouts desde panel.
+- Multiples administradores con auditoria.
+
+Modelo de inventario recomendado
+--------------------------------
+Usar solo inventario SIMPLE:
+- stock ilimitado
+- stock numerico basico
+- producto activo/inactivo
+
+Evitar en Basica:
+- stock UNITS
+- holds de stock
+- unidades individuales con usuario/password
+- compra unica por usuario
+- plantillas de entrega avanzadas
+
+Modelo de entrega recomendado
+-----------------------------
+Mantener solo:
+- entrega por texto
+- entrega por link
+
+Opcional:
+- entrega por archivo o imagen si el cliente lo necesita.
+
+No incluir:
+- link con expiracion
+- plantillas por unidad
+- entregas multiidioma
+- entrega avanzada por tipo de media
+
+Panel recomendado
+-----------------
+Para Basica recomiendo NO incluir panel web completo.
+
+Alternativa:
+- usar comandos de Telegram para administracion basica
+- usar archivos de configuracion simples
+- usar una semilla de productos sencilla
+
+Esto reduce instalacion, soporte y mantenimiento.
+
+Cliente ideal
+-------------
+- vendedor pequeno
+- catalogo corto
+- pocas ventas al dia
+- no necesita afiliados
+- no necesita equipo administrativo
+- quiere empezar rapido con bajo costo
+
+Posicionamiento recomendado
+---------------------------
+Venderla como:
+"Bot de ventas en Telegram para empezar rapido con catalogo, pedidos, pagos y entrega basica."
+
+
+VERSION AVANZADA
+================
+
+Enfoque recomendado
+-------------------
+La version Avanzada debe estar entre Basica y Pro. Debe incluir el panel web y
+herramientas serias de operacion, pero sin todo el ecosistema completo de
+afiliados, wallets, backups y automatizaciones premium.
+
+Debe resolver:
+- ventas mas ordenadas
+- control de productos desde panel
+- control de pedidos
+- soporte
+- broadcasts simples
+- seguridad basica para admin
+
+Funciones recomendadas
+----------------------
+- Todo lo de la version Basica.
+- API separada con base de datos PostgreSQL.
+- Panel web admin.
+- Login de admin.
+- Dashboard con metricas principales.
+- Gestion de productos desde panel.
+- Gestion de pedidos desde panel.
+- Aprobacion, rechazo y reembolso de ordenes.
+- Visualizacion de comprobantes.
+- Recibos basicos para ordenes.
+- Inventario SIMPLE completo.
+- Inventario UNITS opcional, si el cliente vende cuentas/licencias.
+- Carrito de compras.
+- Metodos de pago editables desde panel.
+- Activar/desactivar metodos de pago.
+- Soporte por tickets.
+- Permitir una imagen en tickets.
+- Banear usuarios desde panel o Telegram.
+- Modo mantenimiento.
+- Broadcast simple a todos los usuarios.
+- Logs basicos.
+- Idiomas Espanol/Ingles, si el cliente lo necesita.
+
+Funciones que recomiendo dejar solo en Pro
+------------------------------------------
+- Sistema completo de afiliados.
+- Comisiones por afiliado.
+- Facturas internas de afiliados.
+- Payouts/retiros de afiliados.
+- Ajustes manuales de saldo de afiliado.
+- Boost global de comisiones.
+- Wallet interna de usuario.
+- Recargas de wallet.
+- Pago de orden con wallet.
+- Regalos de saldo por broadcast.
+- Broadcasts con pausa/reanudar/detener y segmentacion avanzada.
+- Publicaciones a canales y grupos.
+- Backups manuales/automaticos desde panel.
+- Upload de backups a Google Drive o Telegram.
+- Restauracion de backups desde panel.
+- Recuperacion avanzada de cuenta admin por email.
+- Auditoria administrativa completa.
+- OCR configurable de comprobantes.
+- Estadisticas y exports CSV/XLSX avanzados.
+- Configuracion visual completa del home/menu desde panel.
+- Gestion avanzada de imagenes/assets del bot.
+
+Modelo de inventario recomendado
+--------------------------------
+Incluir:
+- productos activos/inactivos
+- stock SIMPLE
+- stock ilimitado
+- stock numerico
+- compra unica por usuario
+- marcar agotado
+
+Opcional:
+- stock UNITS si el cliente vende cuentas, codigos o licencias.
+
+Modelo de entrega recomendado
+-----------------------------
+Incluir:
+- texto
+- link
+- archivo
+- imagen
+- video
+
+Opcional:
+- link con expiracion
+- plantillas de entrega
+
+Panel recomendado
+-----------------
+El panel de la version Avanzada debe tener:
+- Dashboard
+- Ordenes
+- Inventario
+- Metodos de pago
+- Tickets
+- Broadcasts simples
+- Login
+
+No incluir en el menu:
+- Afiliados
+- Payouts
+- Wallets
+- Backups avanzados
+- Recovery profile avanzado
+
+Cliente ideal
+-------------
+- tienda digital con ventas constantes
+- necesita panel y equipo admin
+- maneja catalogo mediano
+- necesita control de pedidos y soporte
+- no necesita programa de afiliados ni wallet interna
+
+Posicionamiento recomendado
+---------------------------
+Venderla como:
+"Sistema avanzado de ventas en Telegram con panel web, inventario, pedidos, pagos, soporte y difusiones."
+
+
+VERSION PRO
+===========
+
+Enfoque recomendado
+-------------------
+La version Pro debe ser la version actual del proyecto, pensada para operacion
+comercial real y escalable.
+
+Debe mantenerse como el paquete mas completo.
+
+Funciones Pro actuales
+----------------------
+- Bot de Telegram para clientes, afiliados y admins.
+- API Node.js/Express.
+- Base de datos PostgreSQL.
+- Panel web Next.js.
+- Catalogo y categorias.
+- Carrito de compras.
+- Compra directa.
+- Multiples metodos de pago.
+- Conversion local para fiat y cripto.
+- Comprobantes de pago.
+- Validacion OCR configurable de comprobantes.
+- Aprobacion, rechazo, reintento, reembolso y estafa.
+- Entrega automatica.
+- Stock SIMPLE y UNITS.
+- Holds de stock y expiracion de ordenes.
+- Productos gratis y compra unica.
+- Recibos en imagen.
+- Soporte por tickets.
+- Baneos.
+- Modo mantenimiento.
+- Sistema de afiliados.
+- Comisiones.
+- Retiros/payouts.
+- Facturas internas.
+- Wallet interna.
+- Recargas de wallet.
+- Pago con wallet.
+- Regalos de saldo por broadcast.
+- Broadcasts segmentados.
+- Publicaciones a canales y grupos.
+- Panel de imagenes/assets.
+- Editor de home/menu.
+- Backups, restore y subida a Drive/Telegram.
+- Logs, auditoria y reporte de errores.
+- Exportaciones CSV/XLSX.
+- Login seguro con aprobacion por Telegram.
+- Recuperacion de cuenta admin por email.
+- Idioma Espanol/Ingles.
+
+Recomendacion comercial
+-----------------------
+Mantener Pro como la version para clientes que quieren:
+- escalar ventas
+- manejar afiliados
+- automatizar entregas
+- tener panel completo
+- operar con varios metodos de pago
+- hacer difusiones y promociones
+- tener backups y herramientas de seguridad
+
+
+RESUMEN DE DIFERENCIACION
+=========================
+
+Basica:
+- vender rapido
+- poco mantenimiento
+- sin panel complejo
+- ideal para empezar
+
+Avanzada:
+- operacion ordenada con panel
+- inventario y pedidos
+- soporte y broadcasts simples
+- ideal para tiendas en crecimiento
+
+Pro:
+- ecosistema completo
+- afiliados, wallet, backups, broadcasts avanzados
+- ideal para operacion comercial seria y escalable
+
