@@ -3,6 +3,15 @@ const { getPool } = require("../db");
 
 const router = express.Router();
 
+function requireBotSecret(req, res, next) {
+  const secret = req.header("x-bot-secret");
+  const expectedSecret = process.env.BOT_TO_API_SECRET;
+  if (!expectedSecret || secret !== expectedSecret) {
+    return res.status(401).json({ error: "UNAUTHORIZED" });
+  }
+  return next();
+}
+
 let ticketSchemaReady = false;
 async function ensureTicketSchema(pool) {
   if (ticketSchemaReady) {
@@ -61,7 +70,7 @@ async function getOrCreateUser(client, telegramId, telegramUsername) {
   return insertRes.rows[0];
 }
 
-router.post("/open-or-create", async (req, res, next) => {
+router.post("/open-or-create", requireBotSecret, async (req, res, next) => {
   const telegramId = Number(req.body.telegram_id);
   const telegramUsername = req.body.telegram_username || req.body.username || null;
   const subject = (req.body.subject || "Soporte").trim();
@@ -177,7 +186,7 @@ router.post("/open-or-create", async (req, res, next) => {
   }
 });
 
-router.post("/:id/message", async (req, res, next) => {
+router.post("/:id/message", requireBotSecret, async (req, res, next) => {
   const ticketId = req.params.id;
   const telegramId = Number(req.body.telegram_id);
   const messageText = req.body.message ? String(req.body.message).trim() : "";
@@ -288,7 +297,7 @@ router.post("/:id/message", async (req, res, next) => {
   }
 });
 
-router.get("/active", async (req, res, next) => {
+router.get("/active", requireBotSecret, async (req, res, next) => {
   const telegramId = Number(req.query.telegram_id);
   if (!Number.isFinite(telegramId)) {
     return res.status(400).json({ error: "telegram_id is required" });

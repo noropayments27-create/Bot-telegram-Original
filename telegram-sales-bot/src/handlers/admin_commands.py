@@ -2066,8 +2066,7 @@ async def _build_saved_publications_view(
     *,
     gift_only: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
-    response = await api_client.admin_list_publications(page=1, page_size=50)
-    items_all = response.get("items", []) or []
+    items_all = await _collect_all_paginated_items(api_client.admin_list_publications)
     items = [
         item for item in items_all
         if _buttons_have_wallet_gift(item.get("buttons")) == gift_only
@@ -2546,14 +2545,41 @@ def _build_broadcast_state_signature(
     return repr(payload)
 
 
+async def _collect_all_paginated_items(
+    fetch_page,
+    *,
+    page_size: int = 100,
+    max_pages: int = 100,
+) -> list[Dict[str, Any]]:
+    items: list[Dict[str, Any]] = []
+    page = 1
+    total_pages = 1
+
+    while page <= total_pages and page <= max_pages:
+        response = await fetch_page(page=page, page_size=page_size)
+        page_items = response.get("items", []) or []
+        if not isinstance(page_items, list):
+            page_items = []
+        items.extend(page_items)
+
+        raw_total_pages = response.get("total_pages")
+        try:
+            parsed_total_pages = int(raw_total_pages)
+        except (TypeError, ValueError):
+            parsed_total_pages = 0
+        total_pages = max(parsed_total_pages, 1)
+        page += 1
+
+    return items
+
+
 async def _build_saved_broadcasts_view(
     locale: str | None = "es",
     page: int = 1,
     *,
     gift_only: bool = False,
 ) -> tuple[str, InlineKeyboardMarkup, list[str]]:
-    response = await api_client.admin_list_broadcasts(page=1, page_size=50)
-    items = response.get("items", []) or []
+    items = await _collect_all_paginated_items(api_client.admin_list_broadcasts)
     saved_items_all = [
         item for item in items
         if bool(item.get("saved")) and _buttons_have_wallet_gift(item.get("buttons")) == gift_only

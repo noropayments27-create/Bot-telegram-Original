@@ -45,9 +45,9 @@ router.get("/wallet-topups/:id", requireBotSecret, getUserWalletTopup);
 router.post("/wallet-topups/:id/payment-proof", requireBotSecret, submitUserWalletTopupProof);
 router.post("/wallet-gifts/claim", requireBotSecret, claimUserWalletGift);
 router.post("/:telegram_id/ban", requireBotSecret, banUserFromBot);
-router.post("/telegram/upsert", upsertTelegramUser);
-router.get("/:telegram_id", getUserByTelegramId);
-router.get("/:telegram_id/ban", getUserBanStatus);
-router.patch("/:telegram_id/locale", updateUserLocale);
+router.post("/telegram/upsert", requireBotSecret, upsertTelegramUser);
+router.get("/:telegram_id", requireBotSecret, getUserByTelegramId);
+router.get("/:telegram_id/ban", requireBotSecret, getUserBanStatus);
+router.patch("/:telegram_id/locale", requireBotSecret, updateUserLocale);
 
 module.exports = router;

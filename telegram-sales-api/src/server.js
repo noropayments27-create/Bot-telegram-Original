@@ -4,6 +4,7 @@ const { connectDb, getPool } = require('./db');
 const { startOrderExpiryJob } = require('./services/orderExpiryJob');
 const { ensureOrderNumberSchema } = require('./services/orderNumbers');
 const { ensureUserWalletSchema, ensureWalletGiftSchema, syncWalletGifts } = require('./services/userWallets');
+const adminRoutes = require('./routes/admin.routes');
 
 // Puerto dinámico (Koyeb lo inyecta)
 const PORT = env.PORT || 3001;
@@ -24,6 +25,9 @@ async function bootstrap() {
   }
 
   startOrderExpiryJob();
+  if (typeof adminRoutes.startBroadcastRecoveryLoop === "function") {
+    adminRoutes.startBroadcastRecoveryLoop();
+  }
   setInterval(async () => {
     try {
       await syncWalletGifts(getPool());

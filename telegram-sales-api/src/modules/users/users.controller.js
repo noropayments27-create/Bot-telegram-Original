@@ -11,7 +11,6 @@ const {
   getWalletTopupById,
   submitWalletTopupProof,
   syncExpiredWalletTopups,
-  syncWalletGifts,
   formatWalletTopupNumber,
   recordWalletTopupAdminNotification,
   buildWalletTopupAdminCaption,
@@ -687,9 +686,8 @@ async function claimUserWalletGift(req, res, next) {
   const pool = getPool();
   const client = await pool.connect();
   try {
+    await ensureWalletGiftSchema(pool);
     await client.query("BEGIN");
-    await ensureWalletGiftSchema(client);
-    await syncWalletGifts(client);
     const result = await claimWalletGift(client, { telegramId, claimToken });
     await client.query("COMMIT");
 
@@ -710,7 +708,11 @@ async function claimUserWalletGift(req, res, next) {
       user: result.user,
     });
   } catch (error) {
-    await client.query("ROLLBACK");
+    try {
+      await client.query("ROLLBACK");
+    } catch (rollbackError) {
+      console.error("wallet_gift_claim_rollback_failed", rollbackError);
+    }
     if (error.code === "USER_NOT_FOUND") {
       return res.status(404).json({ error: "USER_NOT_FOUND" });
     }

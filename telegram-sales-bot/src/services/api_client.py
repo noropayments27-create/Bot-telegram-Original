@@ -1347,6 +1347,7 @@ class ApiClient:
             "POST",
             url,
             json=payload,
+            headers=self._headers(),
             timeout=5,
         )
         if response.status_code in (400, 403, 409):
@@ -1403,7 +1404,9 @@ class ApiClient:
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/tickets/{ticket_id}/message"
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=5)
+            response = await client.post(
+                url, json=payload, headers=self._headers(), timeout=5
+            )
             if response.status_code in (403, 409):
                 return {"status_code": response.status_code, "data": response.json()}
             response.raise_for_status()
@@ -1415,6 +1418,7 @@ class ApiClient:
             "GET",
             url,
             params={"telegram_id": telegram_id},
+            headers=self._headers(),
             timeout=5,
         )
         response.raise_for_status()

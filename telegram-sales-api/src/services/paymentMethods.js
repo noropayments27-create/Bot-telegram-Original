@@ -6,21 +6,15 @@ const DEFAULT_METHODS = [
   { key: "PAYPAL", label: "Paypal", sort_order: 5 },
 ];
 
-const FALLBACK_NEQUI_NUMBER = process.env.NEQUI_NUMBER || "3009545964";
-const FALLBACK_NEQUI_NAME = process.env.NEQUI_NAME || "Jos**** Mar**";
-const FALLBACK_BINANCE_ID = process.env.BINANCE_ID || "65088471";
-const FALLBACK_MERCADOPAGO_ACCOUNT =
-  process.env.MERCADOPAGO_ACCOUNT || "CLABE: 722969013143608335";
-const FALLBACK_PAYPAL_ACCOUNT =
-  process.env.PAYPAL_ACCOUNT || "Noropayments@gmail.com";
-const FALLBACK_CRYPTO_BTC =
-  process.env.CRYPTO_WALLET_BTC || "15EedPYZDUXezTGoN9CSUfueFdRUm5yYGr";
-const FALLBACK_CRYPTO_USDT_TRON =
-  process.env.CRYPTO_WALLET_USDT_TRON || "TZFPjLa8j1FSXD95tY6x5pVZuCPWp5R8pn";
-const FALLBACK_CRYPTO_USDT_BSC =
-  process.env.CRYPTO_WALLET_USDT_BSC || "0xa39b3bb9a576f9d4c11761fbef01d383fae3443d";
-const FALLBACK_CRYPTO_LTC =
-  process.env.CRYPTO_WALLET_LTC || "LM7pkJYTequoTAKMHodp6Z7yg4RTwNfSeY";
+const FALLBACK_NEQUI_NUMBER = process.env.NEQUI_NUMBER || "";
+const FALLBACK_NEQUI_NAME = process.env.NEQUI_NAME || "";
+const FALLBACK_BINANCE_ID = process.env.BINANCE_ID || "";
+const FALLBACK_MERCADOPAGO_ACCOUNT = process.env.MERCADOPAGO_ACCOUNT || "";
+const FALLBACK_PAYPAL_ACCOUNT = process.env.PAYPAL_ACCOUNT || "";
+const FALLBACK_CRYPTO_BTC = process.env.CRYPTO_WALLET_BTC || "";
+const FALLBACK_CRYPTO_USDT_TRON = process.env.CRYPTO_WALLET_USDT_TRON || "";
+const FALLBACK_CRYPTO_USDT_BSC = process.env.CRYPTO_WALLET_USDT_BSC || "";
+const FALLBACK_CRYPTO_LTC = process.env.CRYPTO_WALLET_LTC || "";
 
 function buildMethodFallbackDestination(methodKey) {
   const key = normalizeMethodKey(methodKey);

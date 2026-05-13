@@ -5,7 +5,7 @@ const net = require("net");
 const { randomUUID } = require("crypto");
 const { execFile } = require("child_process");
 const { promisify } = require("util");
-const XLSX = require("xlsx");
+const ExcelJS = require("exceljs");
 const bcrypt = require("bcryptjs");
 const { getPool } = require("../db");
 const requireAdmin = require("../middlewares/requireAdmin");
@@ -7996,10 +7996,10 @@ router.get("/stats/sales-export.xlsx", async (req, res, next) => {
 
     rows.push(["TOTAL GANANCIAS", "", "", "", "", "", "", "", `$${totalRevenue.toFixed(2)}`, ""]);
 
-    const workbook = XLSX.utils.book_new();
-    const worksheet = XLSX.utils.aoa_to_sheet(rows);
-    XLSX.utils.book_append_sheet(workbook, worksheet, "Ganancias");
-    const buffer = XLSX.write(workbook, { type: "buffer", bookType: "xlsx" });
+    const workbook = new ExcelJS.Workbook();
+    const worksheet = workbook.addWorksheet("Ganancias");
+    worksheet.addRows(rows);
+    const buffer = await workbook.xlsx.writeBuffer();
 
     const filenamePeriod = exportData.period === "week" ? "semana" : "mes";
     const filename = `ganancias-${filenamePeriod}-${exportData.startDate}.xlsx`;
@@ -12414,6 +12414,5 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
   }
 });
 
-startBroadcastRecoveryLoop();
-
+router.startBroadcastRecoveryLoop = startBroadcastRecoveryLoop;
 module.exports = router;
