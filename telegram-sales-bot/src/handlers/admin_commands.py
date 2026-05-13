@@ -2531,7 +2531,7 @@ def _extract_saved_broadcast_media(
         media_kind = ""
         if image_mime.startswith("tg:"):
             media_kind = image_mime[3:].strip().lower()
-        if media_kind not in {"photo", "animation", "video"}:
+        if media_kind not in {"photo", "animation", "video", "sticker"}:
             media_kind = "photo"
         return (file_id or None), media_kind
     return None, None
@@ -2546,6 +2546,8 @@ def _saved_broadcast_media_kind(broadcast: Dict[str, Any]) -> str | None:
         return "animation"
     if image_mime.startswith("video/") or image_mime == "tg:video":
         return "video"
+    if image_mime == "tg:sticker":
+        return "sticker"
     if broadcast.get("image_path"):
         return "photo"
     return None
@@ -2800,25 +2802,28 @@ async def _send_broadcast_preview_message(
     can_use_entities = bool(normalized_entities)
     can_use_caption_entities = can_use_entities and len(text_value) <= 1024
 
+    async def _send_sticker_preview() -> None:
+        sticker_message = await message.answer_sticker(
+            sticker=media_id,
+            reply_markup=None if text_value else _build_broadcast_preview_keyboard(buttons, None, locale),
+        )
+        if text_value:
+            preview_markup = _build_broadcast_preview_keyboard(
+                buttons,
+                sticker_message.message_id,
+                locale,
+            )
+            message_kwargs: Dict[str, Any] = {"reply_markup": preview_markup}
+            if can_use_entities:
+                message_kwargs["entities"] = normalized_entities
+            else:
+                message_kwargs["parse_mode"] = "HTML"
+            await message.answer(text_value, **message_kwargs)
+
     try:
         if media_id:
             if media_kind_safe == "sticker":
-                sticker_message = await message.answer_sticker(
-                    sticker=media_id,
-                    reply_markup=None if text_value else _build_broadcast_preview_keyboard(buttons, None, locale),
-                )
-                if text_value:
-                    preview_markup = _build_broadcast_preview_keyboard(
-                        buttons,
-                        sticker_message.message_id,
-                        locale,
-                    )
-                    message_kwargs: Dict[str, Any] = {"reply_markup": preview_markup}
-                    if can_use_entities:
-                        message_kwargs["entities"] = normalized_entities
-                    else:
-                        message_kwargs["parse_mode"] = "HTML"
-                    await message.answer(text_value, **message_kwargs)
+                await _send_sticker_preview()
                 return
             preview_markup = _build_broadcast_preview_keyboard(buttons, None, locale)
             media_kwargs: Dict[str, Any] = {
@@ -2854,23 +2859,14 @@ async def _send_broadcast_preview_message(
         else:
             message_kwargs["parse_mode"] = "HTML"
         await message.answer(text_value, **message_kwargs)
-    except TelegramBadRequest:
+    except TelegramBadRequest as exc:
         if media_id:
             if media_kind_safe == "sticker":
-                sticker_message = await message.answer_sticker(
-                    sticker=media_id,
-                    reply_markup=None if text_value else _build_broadcast_preview_keyboard(buttons, None, locale),
-                )
-                if text_value:
-                    preview_markup = _build_broadcast_preview_keyboard(
-                        buttons,
-                        sticker_message.message_id,
-                        locale,
-                    )
-                    await message.answer(
-                        text_value,
-                        reply_markup=preview_markup,
-                    )
+                await _send_sticker_preview()
+                return
+            error_text = str(exc).lower()
+            if "sticker" in error_text and "photo" in error_text:
+                await _send_sticker_preview()
                 return
             preview_markup = _build_broadcast_preview_keyboard(buttons, None, locale)
             if media_kind_safe == "video":
