@@ -6,6 +6,31 @@ const { calculateLocalAmount } = require("./adminOrderNotification");
 
 let walletSchemaReady = false;
 let walletSchemaPromise = null;
+let walletGiftSyncLastAt = 0;
+let walletGiftSyncPromise = null;
+let walletTopupSyncLastAt = 0;
+let walletTopupSyncPromise = null;
+
+function getWalletSyncThrottleMs() {
+  return Math.max(
+    Number.parseInt(process.env.WALLET_SYNC_THROTTLE_MS || "", 10) || 30000,
+    1000
+  );
+}
+
+function getWalletSyncBatchLimit() {
+  return Math.max(
+    Number.parseInt(process.env.WALLET_SYNC_BATCH_LIMIT || "", 10) || 50,
+    1
+  );
+}
+
+function shouldThrottleWalletSync(executor, lastAt) {
+  if (!executor || typeof executor.connect !== "function") {
+    return false;
+  }
+  return Date.now() - lastAt < getWalletSyncThrottleMs();
+}
 
 function getWalletTopupExpirySeconds() {
   return Math.max(
@@ -405,6 +430,16 @@ async function ensureWalletGiftSchema(executor = null) {
        ON wallet_gifts(status, expires_at)`
     );
     await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_gifts_finalize_pending
+       ON wallet_gifts(status, updated_at)
+       WHERE status IN ('DEPLETED','EXPIRED') AND winners_notice_sent_at IS NULL`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_gifts_cleanup_pending
+       ON wallet_gifts(cleanup_after_at)
+       WHERE cleanup_after_at IS NOT NULL AND cleanup_completed_at IS NULL`
+    );
+    await db.query(
       `CREATE TABLE IF NOT EXISTS wallet_gift_claims (
          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
          gift_id uuid NOT NULL REFERENCES wallet_gifts(id) ON DELETE CASCADE,
@@ -421,6 +456,10 @@ async function ensureWalletGiftSchema(executor = null) {
        ON wallet_gift_claims(gift_id, claimed_at ASC)`
     );
     await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_gift_claims_user
+       ON wallet_gift_claims(user_id, claimed_at DESC)`
+    );
+    await db.query(
       `CREATE TABLE IF NOT EXISTS wallet_gift_messages (
          id uuid PRIMARY KEY DEFAULT gen_random_uuid(),
          gift_id uuid NOT NULL REFERENCES wallet_gifts(id) ON DELETE CASCADE,
@@ -433,6 +472,10 @@ async function ensureWalletGiftSchema(executor = null) {
          updated_at timestamptz NOT NULL DEFAULT now(),
          UNIQUE (gift_id, chat_id, message_id)
        )`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_gift_messages_gift
+       ON wallet_gift_messages(gift_id, chat_id)`
     );
   })();
   try {
@@ -1027,51 +1070,75 @@ async function cleanupWalletGiftMessages(executor, giftId, chatId = null) {
 
 async function syncWalletGifts(executor = null) {
   const db = executor || getPool();
-  await ensureWalletGiftSchema(db);
-  await db.query(
-    `UPDATE wallet_gifts
-     SET status = 'EXPIRED',
-         updated_at = now(),
-         cleanup_after_at = CASE
-           WHEN source_scope = 'CHAT' THEN COALESCE(cleanup_after_at, now() + interval '5 minutes')
-           ELSE cleanup_after_at
-         END
-     WHERE status = 'ACTIVE'
-       AND expires_at <= now()`
-  );
-  const pendingRes = await db.query(
-    `SELECT id
-     FROM wallet_gifts
-     WHERE status IN ('DEPLETED','EXPIRED')
-       AND winners_notice_sent_at IS NULL`
-  );
-  for (const row of pendingRes.rows || []) {
-    try {
-      await finalizeWalletGiftStatus(db, row.id);
-    } catch (error) {
-      console.error("wallet_gift_finalize_failed", {
-        giftId: row.id,
-        error: error?.message || String(error),
-      });
-    }
+  if (shouldThrottleWalletSync(executor, walletGiftSyncLastAt)) {
+    return [];
   }
-  const cleanupRes = await db.query(
-    `SELECT id
-     FROM wallet_gifts
-     WHERE cleanup_after_at IS NOT NULL
-       AND cleanup_after_at <= now()
-       AND cleanup_completed_at IS NULL`
-  );
-  for (const row of cleanupRes.rows || []) {
-    try {
-      await cleanupWalletGiftMessages(db, row.id);
-    } catch (error) {
-      console.error("wallet_gift_cleanup_failed", {
-        giftId: row.id,
-        error: error?.message || String(error),
-      });
-    }
+  if (executor && typeof executor.connect === "function" && walletGiftSyncPromise) {
+    return walletGiftSyncPromise;
   }
+  const runSync = async () => {
+    const batchLimit = getWalletSyncBatchLimit();
+    await ensureWalletGiftSchema(db);
+    await db.query(
+      `UPDATE wallet_gifts
+       SET status = 'EXPIRED',
+           updated_at = now(),
+           cleanup_after_at = CASE
+             WHEN source_scope = 'CHAT' THEN COALESCE(cleanup_after_at, now() + interval '5 minutes')
+             ELSE cleanup_after_at
+           END
+       WHERE status = 'ACTIVE'
+         AND expires_at <= now()`
+    );
+    const pendingRes = await db.query(
+      `SELECT id
+       FROM wallet_gifts
+       WHERE status IN ('DEPLETED','EXPIRED')
+         AND winners_notice_sent_at IS NULL
+       ORDER BY updated_at ASC
+       LIMIT $1`,
+      [batchLimit]
+    );
+    for (const row of pendingRes.rows || []) {
+      try {
+        await finalizeWalletGiftStatus(db, row.id);
+      } catch (error) {
+        console.error("wallet_gift_finalize_failed", {
+          giftId: row.id,
+          error: error?.message || String(error),
+        });
+      }
+    }
+    const cleanupRes = await db.query(
+      `SELECT id
+       FROM wallet_gifts
+       WHERE cleanup_after_at IS NOT NULL
+         AND cleanup_after_at <= now()
+         AND cleanup_completed_at IS NULL
+       ORDER BY cleanup_after_at ASC
+       LIMIT $1`,
+      [batchLimit]
+    );
+    for (const row of cleanupRes.rows || []) {
+      try {
+        await cleanupWalletGiftMessages(db, row.id);
+      } catch (error) {
+        console.error("wallet_gift_cleanup_failed", {
+          giftId: row.id,
+          error: error?.message || String(error),
+        });
+      }
+    }
+    walletGiftSyncLastAt = Date.now();
+    return [];
+  };
+  if (executor && typeof executor.connect === "function") {
+    walletGiftSyncPromise = runSync().finally(() => {
+      walletGiftSyncPromise = null;
+    });
+    return walletGiftSyncPromise;
+  }
+  return runSync();
 }
 
 async function ensureUserWalletSchema(executor = null) {
@@ -1170,10 +1237,25 @@ async function ensureUserWalletSchema(executor = null) {
       `CREATE INDEX IF NOT EXISTS idx_wallet_topups_status_created
        ON wallet_topups(status, created_at DESC)`
     );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_topups_created_expired
+       ON wallet_topups(expires_at)
+       WHERE status = 'CREATED'`
+    );
 
     await db.query(
       `CREATE INDEX IF NOT EXISTS idx_wallet_topups_user_created
        ON wallet_topups(user_id, created_at DESC)`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_topups_released_number
+       ON wallet_topups(released_topup_number)
+       WHERE released_topup_number IS NOT NULL`
+    );
+    await db.query(
+      `CREATE INDEX IF NOT EXISTS idx_wallet_topups_releasable
+       ON wallet_topups(created_at)
+       WHERE status IN ('EXPIRED','REJECTED','SCAM') AND topup_number IS NOT NULL`
     );
 
     await db.query(
@@ -1795,7 +1877,10 @@ async function normalizeReleasedWalletTopups(executor = null) {
     `SELECT *
      FROM wallet_topups
      WHERE status IN ('EXPIRED','REJECTED','SCAM')
-       AND topup_number IS NOT NULL`
+       AND topup_number IS NOT NULL
+     ORDER BY created_at ASC
+     LIMIT $1`,
+    [getWalletSyncBatchLimit()]
   );
   const normalized = [];
   for (const row of affectedRes.rows || []) {
@@ -1816,62 +1901,82 @@ async function normalizeReleasedWalletTopups(executor = null) {
 
 async function syncExpiredWalletTopups(executor = null) {
   const db = executor || getPool();
-  await ensureUserWalletSchema(db);
-  await normalizeReleasedWalletTopups(db);
-  const expiredRes = await db.query(
-    `SELECT wt.*, u.telegram_id, u.telegram_username
-     FROM wallet_topups wt
-     JOIN users u ON u.id = wt.user_id
-     WHERE wt.status IN ('CREATED')
-       AND wt.expires_at <= now()
-     FOR UPDATE`
-  );
-  const expiredItems = [];
-  for (const row of expiredRes.rows || []) {
-    const topup = withWalletTopupDisplayNumber(row);
-    await releaseWalletTopupNumber(db, topup);
-    const updateRes = await db.query(
-      `UPDATE wallet_topups
-       SET status = 'EXPIRED',
-           released_topup_number = COALESCE(released_topup_number, topup_number),
-           topup_number = NULL
-       WHERE id = $1
-       RETURNING *`,
-      [row.id]
+  if (shouldThrottleWalletSync(executor, walletTopupSyncLastAt)) {
+    return [];
+  }
+  if (executor && typeof executor.connect === "function" && walletTopupSyncPromise) {
+    return walletTopupSyncPromise;
+  }
+  const runSync = async () => {
+    const batchLimit = getWalletSyncBatchLimit();
+    await ensureUserWalletSchema(db);
+    await normalizeReleasedWalletTopups(db);
+    const expiredRes = await db.query(
+      `SELECT wt.*, u.telegram_id, u.telegram_username
+       FROM wallet_topups wt
+       JOIN users u ON u.id = wt.user_id
+       WHERE wt.status IN ('CREATED')
+         AND wt.expires_at <= now()
+       ORDER BY wt.expires_at ASC
+       LIMIT $1
+       FOR UPDATE SKIP LOCKED`,
+      [batchLimit]
     );
-    expiredItems.push(withWalletTopupDisplayNumber({
-      ...row,
-      ...(updateRes.rows[0] || {}),
-    }));
-  }
-  for (const topup of expiredItems) {
-    if (!topup?.telegram_id) {
-      continue;
-    }
-    try {
-      await sendMessage(
-        topup.telegram_id,
-        `⌛ Tu recarga ${formatWalletTopupNumber(getWalletTopupDisplayNumber(topup))} expiró.\n\n`
-          + `💰 Monto: $${Number(topup.amount_usd || 0).toFixed(0)} USD\n`
-          + `❌ Ya no puedes enviar comprobante para esa referencia.\n\n`
-          + `🔁 Si aún quieres recargar, crea una nueva recarga desde "Mi saldo".`,
-        {
-          reply_markup: {
-            inline_keyboard: [
-              [{ text: "💰 Mi saldo", callback_data: "home:wallet" }],
-            ],
-          },
-        }
+    const expiredItems = [];
+    for (const row of expiredRes.rows || []) {
+      const topup = withWalletTopupDisplayNumber(row);
+      await releaseWalletTopupNumber(db, topup);
+      const updateRes = await db.query(
+        `UPDATE wallet_topups
+         SET status = 'EXPIRED',
+             released_topup_number = COALESCE(released_topup_number, topup_number),
+             topup_number = NULL
+         WHERE id = $1
+         RETURNING *`,
+        [row.id]
       );
-    } catch (error) {
-      console.error("wallet_topup_expiry_notify_failed", {
-        topupId: topup.id,
-        telegramId: topup.telegram_id,
-        error: error?.message || String(error),
-      });
+      expiredItems.push(withWalletTopupDisplayNumber({
+        ...row,
+        ...(updateRes.rows[0] || {}),
+      }));
     }
+    for (const topup of expiredItems) {
+      if (!topup?.telegram_id) {
+        continue;
+      }
+      try {
+        await sendMessage(
+          topup.telegram_id,
+          `⌛ Tu recarga ${formatWalletTopupNumber(getWalletTopupDisplayNumber(topup))} expiró.\n\n`
+            + `💰 Monto: $${Number(topup.amount_usd || 0).toFixed(0)} USD\n`
+            + `❌ Ya no puedes enviar comprobante para esa referencia.\n\n`
+            + `🔁 Si aún quieres recargar, crea una nueva recarga desde "Mi saldo".`,
+          {
+            reply_markup: {
+              inline_keyboard: [
+                [{ text: "💰 Mi saldo", callback_data: "home:wallet" }],
+              ],
+            },
+          }
+        );
+      } catch (error) {
+        console.error("wallet_topup_expiry_notify_failed", {
+          topupId: topup.id,
+          telegramId: topup.telegram_id,
+          error: error?.message || String(error),
+        });
+      }
+    }
+    walletTopupSyncLastAt = Date.now();
+    return expiredItems;
+  };
+  if (executor && typeof executor.connect === "function") {
+    walletTopupSyncPromise = runSync().finally(() => {
+      walletTopupSyncPromise = null;
+    });
+    return walletTopupSyncPromise;
   }
-  return expiredItems;
+  return runSync();
 }
 
 module.exports = {

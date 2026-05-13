@@ -6,8 +6,21 @@ from typing import Any
 
 from aiogram import Bot, Dispatcher
 from aiogram.fsm.storage.memory import MemoryStorage
+from aiogram.webhook.aiohttp_server import SimpleRequestHandler, setup_application
+from aiohttp import web
 
-from .config import API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET, TELEGRAM_BOT_TOKEN
+from .config import (
+    API_BASE_URL,
+    API_TOKEN,
+    BOT_TO_API_SECRET,
+    BOT_UPDATE_MODE,
+    TELEGRAM_BOT_TOKEN,
+    WEBHOOK_HOST,
+    WEBHOOK_PATH,
+    WEBHOOK_PORT,
+    WEBHOOK_SECRET,
+    WEBHOOK_URL,
+)
 from .services.api_client import ApiClient
 from .handlers import (
     admin_actions,
@@ -158,12 +171,42 @@ async def main() -> None:
     loop.set_exception_handler(_loop_exception_handler)
 
     try:
-        await dp.start_polling(bot)
+        if BOT_UPDATE_MODE == "webhook":
+            if not WEBHOOK_URL:
+                raise RuntimeError("WEBHOOK_URL is required when BOT_UPDATE_MODE=webhook")
+            app = web.Application()
+            request_handler = SimpleRequestHandler(
+                dispatcher=dp,
+                bot=bot,
+                secret_token=WEBHOOK_SECRET or None,
+            )
+            request_handler.register(app, path=WEBHOOK_PATH)
+            setup_application(app, dp, bot=bot)
+            await bot.set_webhook(
+                WEBHOOK_URL,
+                secret_token=WEBHOOK_SECRET or None,
+                drop_pending_updates=True,
+            )
+            logging.info(
+                "Starting Telegram webhook on %s:%s%s -> %s",
+                WEBHOOK_HOST,
+                WEBHOOK_PORT,
+                WEBHOOK_PATH,
+                WEBHOOK_URL,
+            )
+            runner = web.AppRunner(app)
+            await runner.setup()
+            site = web.TCPSite(runner, WEBHOOK_HOST, WEBHOOK_PORT)
+            await site.start()
+            await asyncio.Event().wait()
+        else:
+            await bot.delete_webhook(drop_pending_updates=True)
+            await dp.start_polling(bot)
     except Exception as exc:
         await _report_bot_error(
             str(exc),
             code=exc.__class__.__name__,
-            route="start_polling",
+            route="start_webhook" if BOT_UPDATE_MODE == "webhook" else "start_polling",
             stack="".join(
                 traceback.format_exception(
                     type(exc),
@@ -174,6 +217,7 @@ async def main() -> None:
         )
         raise
     finally:
+        await bot.session.close()
         await ApiClient.aclose_all()
 
 

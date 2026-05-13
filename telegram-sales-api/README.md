@@ -20,6 +20,9 @@ npx playwright install chromium --with-deps
 ## Variables de entorno
 Configura estas variables en `.env`:
 - `DATABASE_URL`
+- `DB_POOL_MAX` (opcional, default 5; usa la URL pooled de Neon cuando haya muchas conexiones)
+- `DB_IDLE_TIMEOUT_MS` (opcional, default 10000)
+- `DB_CONNECTION_TIMEOUT_MS` (opcional, default 5000)
 - `TELEGRAM_BOT_TOKEN`
 - `ADMIN_USERNAME`
 - `ADMIN_PASSWORD`
@@ -28,6 +31,8 @@ Configura estas variables en `.env`:
 - `ADMIN_TOKEN_SECRET` (opcional, si no se usa se reutiliza `ADMIN_PASSWORD`)
 - `DELIVERY_INITIAL_DELAY_MS` (opcional, default 10000)
 - `DELIVERY_MESSAGE_INTERVAL_MS` (opcional, default 1000)
+- `WALLET_SYNC_THROTTLE_MS` (opcional, default 30000)
+- `WALLET_SYNC_BATCH_LIMIT` (opcional, default 50)
 
 ## Desarrollo
 ```bash

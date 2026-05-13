@@ -38,6 +38,12 @@ def _parse_id_list(value: str) -> Set[int]:
     return set(items)
 
 
+BOT_UPDATE_MODE = os.getenv("BOT_UPDATE_MODE", "polling").strip().lower()
+WEBHOOK_URL = os.getenv("WEBHOOK_URL", "").strip()
+WEBHOOK_PATH = os.getenv("WEBHOOK_PATH", "/telegram/webhook").strip() or "/telegram/webhook"
+WEBHOOK_HOST = os.getenv("WEBHOOK_HOST", "0.0.0.0").strip() or "0.0.0.0"
+WEBHOOK_PORT = _parse_int(os.getenv("WEBHOOK_PORT"), 8080)
+WEBHOOK_SECRET = os.getenv("WEBHOOK_SECRET", "").strip()
 BOT_RATE_LIMIT_ENABLED = _parse_bool(os.getenv("BOT_RATE_LIMIT_ENABLED"), True)
 BOT_RATE_LIMIT_SECONDS = _parse_int(os.getenv("BOT_RATE_LIMIT_SECONDS"), 1)
 BOT_RATE_LIMIT_SHOP_SECONDS = _parse_int(os.getenv("BOT_RATE_LIMIT_SHOP_SECONDS"), 1)

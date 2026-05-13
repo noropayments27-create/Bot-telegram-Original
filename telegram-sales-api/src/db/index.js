@@ -6,12 +6,15 @@ function getPool() {
   if (!pool) {
     const connectionString = process.env.DATABASE_URL;
     if (!connectionString) throw new Error("DATABASE_URL is required");
+    const maxConnections = Number.parseInt(process.env.DB_POOL_MAX || "", 10) || 5;
+    const idleTimeoutMillis = Number.parseInt(process.env.DB_IDLE_TIMEOUT_MS || "", 10) || 10_000;
+    const connectionTimeoutMillis = Number.parseInt(process.env.DB_CONNECTION_TIMEOUT_MS || "", 10) || 5_000;
 
     pool = new Pool({
       connectionString,
-      max: 5,
-      idleTimeoutMillis: 10_000,
-      connectionTimeoutMillis: 5_000,
+      max: Math.max(1, maxConnections),
+      idleTimeoutMillis: Math.max(1000, idleTimeoutMillis),
+      connectionTimeoutMillis: Math.max(1000, connectionTimeoutMillis),
     });
   }
   return pool;
