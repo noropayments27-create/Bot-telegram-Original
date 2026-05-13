@@ -1241,6 +1241,28 @@ def _buttons_have_wallet_gift(buttons: Any) -> bool:
     return any(str(item.get("action") or "").strip().lower() == "gift" for item in normalized)
 
 
+def _saved_item_kind(item: Dict[str, Any] | None) -> str:
+    if not isinstance(item, dict):
+        return ""
+    raw = str(item.get("saved_kind") or "").strip().lower()
+    if raw in {"gift", "wallet_gift"}:
+        return "gift"
+    if raw in {"message", "broadcast", "publication"}:
+        return "message"
+    return "gift" if _buttons_have_wallet_gift(item.get("buttons")) else "message"
+
+
+def _saved_kind_payload(kind: str) -> str:
+    return "GIFT" if str(kind or "").strip().lower() == "gift" else "MESSAGE"
+
+
+def _draft_saved_kind(data: Dict[str, Any], flow_key: str, buttons: list[Dict[str, Any]]) -> str:
+    flow_kind = str(data.get(flow_key) or "").strip().lower()
+    if flow_kind == "gift" or _buttons_have_wallet_gift(buttons):
+        return "gift"
+    return "message"
+
+
 def _enforce_wallet_gift_flow_buttons(
     buttons: list[Dict[str, Any]],
     *,
@@ -2069,7 +2091,7 @@ async def _build_saved_publications_view(
     items_all = await _collect_all_paginated_items(api_client.admin_list_publications)
     items = [
         item for item in items_all
-        if _buttons_have_wallet_gift(item.get("buttons")) == gift_only
+        if (_saved_item_kind(item) == "gift") == gift_only
     ]
     total_items = len(items)
     total_pages = max((total_items + 4) // 5, 1)
@@ -2227,7 +2249,7 @@ def _build_saved_publication_detail_text(
     publication: Dict[str, Any],
     locale: str | None = "es",
 ) -> str:
-    gift_only = _buttons_have_wallet_gift(publication.get("buttons"))
+    gift_only = _saved_item_kind(publication) == "gift"
     publication_id = _escape_html(publication.get("id") or "-")
     snippet = _escape_html(_broadcast_preview_snippet(publication.get("message_text") or "", 80))
     buttons_count = len(publication.get("buttons") or [])
@@ -2261,6 +2283,11 @@ async def _save_current_publication_draft(
     media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
     media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
     selected_publication_id = str(data.get("admin_ui_selected_saved_publication_id") or "").strip()
+    draft_kind = _draft_saved_kind(data, "admin_ui_publication_flow_kind", buttons)
+    selected_publication = data.get("admin_ui_saved_publication")
+    selected_kind = _saved_item_kind(selected_publication) if selected_publication_id else ""
+    if selected_publication_id and selected_kind and selected_kind != draft_kind:
+        selected_publication_id = ""
     current_signature = _build_broadcast_state_signature(
         message_text,
         message_entities,
@@ -2288,6 +2315,7 @@ async def _save_current_publication_draft(
         "message": message_text,
         "message_entities": message_entities,
         "buttons": buttons,
+        "saved_kind": _saved_kind_payload(draft_kind),
         "clear_image": not bool(media_file_id),
     }
     if media_file_id:
@@ -2306,6 +2334,7 @@ async def _save_current_publication_draft(
             media_file_id=media_file_id or None,
             media_kind=media_kind or None,
             message_entities=message_entities,
+            saved_kind=_saved_kind_payload(draft_kind),
         )
         publication = create_res.get("publication", {})
         publication_id = str(publication.get("id") or "").strip()
@@ -2324,6 +2353,8 @@ async def _save_current_publication_draft(
     await state.update_data(
         admin_ui_selected_saved_publication_id=publication_id,
         admin_ui_saved_publication_signature=current_signature,
+        admin_ui_saved_publication=publication,
+        admin_ui_saved_publication_gift_only=draft_kind == "gift",
     )
     return _tr(
         locale,
@@ -2352,7 +2383,7 @@ async def _load_saved_publication_for_state(
         admin_ui_broadcast_media_file_id=media_file_id or "",
         admin_ui_broadcast_media_kind=media_kind or "",
         admin_ui_selected_saved_publication_id=publication_id,
-        admin_ui_publication_flow_kind="gift" if _buttons_have_wallet_gift(buttons) else "message",
+        admin_ui_publication_flow_kind=_saved_item_kind(publication),
         admin_ui_saved_publication_signature=_build_broadcast_state_signature(
             message_text,
             message_entities,
@@ -2361,6 +2392,7 @@ async def _load_saved_publication_for_state(
             media_kind or "",
         ),
         admin_ui_saved_publication=publication,
+        admin_ui_saved_publication_gift_only=_saved_item_kind(publication) == "gift",
     )
     return publication
 
@@ -2582,7 +2614,7 @@ async def _build_saved_broadcasts_view(
     items = await _collect_all_paginated_items(api_client.admin_list_broadcasts)
     saved_items_all = [
         item for item in items
-        if bool(item.get("saved")) and _buttons_have_wallet_gift(item.get("buttons")) == gift_only
+        if bool(item.get("saved")) and (_saved_item_kind(item) == "gift") == gift_only
     ]
     total_items = len(saved_items_all)
     total_pages = max((total_items + 4) // 5, 1)
@@ -2728,7 +2760,7 @@ def _build_saved_broadcast_detail_text(
     broadcast: Dict[str, Any],
     locale: str | None = "es",
 ) -> str:
-    gift_only = _buttons_have_wallet_gift(broadcast.get("buttons"))
+    gift_only = _saved_item_kind(broadcast) == "gift"
     broadcast_id = _escape_html(broadcast.get("id") or "-")
     snippet = _escape_html(_broadcast_preview_snippet(broadcast.get("message_text") or "", 80))
     buttons_count = len(broadcast.get("buttons") or [])
@@ -2881,6 +2913,11 @@ async def _save_current_broadcast_draft(
     media_file_id = str(data.get("admin_ui_broadcast_media_file_id") or "").strip()
     media_kind = str(data.get("admin_ui_broadcast_media_kind") or "").strip().lower()
     selected_broadcast_id = str(data.get("admin_ui_selected_saved_broadcast_id") or "").strip()
+    draft_kind = _draft_saved_kind(data, "admin_ui_broadcast_flow_kind", buttons)
+    selected_broadcast = data.get("admin_ui_saved_broadcast")
+    selected_kind = _saved_item_kind(selected_broadcast) if selected_broadcast_id else ""
+    if selected_broadcast_id and selected_kind and selected_kind != draft_kind:
+        selected_broadcast_id = ""
     current_signature = _build_broadcast_state_signature(
         message_text,
         message_entities,
@@ -2909,6 +2946,7 @@ async def _save_current_broadcast_draft(
         "message_entities": message_entities,
         "buttons": buttons,
         "saved": True,
+        "saved_kind": _saved_kind_payload(draft_kind),
         "clear_image": not bool(media_file_id),
     }
     if media_file_id:
@@ -2928,6 +2966,7 @@ async def _save_current_broadcast_draft(
             media_file_id=media_file_id or None,
             media_kind=media_kind or None,
             message_entities=message_entities,
+            saved_kind=_saved_kind_payload(draft_kind),
         )
         broadcast = create_res.get("broadcast", {})
         broadcast_id = str(broadcast.get("id") or "").strip()
@@ -2946,6 +2985,8 @@ async def _save_current_broadcast_draft(
     await state.update_data(
         admin_ui_selected_saved_broadcast_id=broadcast_id,
         admin_ui_saved_broadcast_signature=current_signature,
+        admin_ui_saved_broadcast=broadcast,
+        admin_ui_saved_broadcast_gift_only=draft_kind == "gift",
     )
     return _tr(
         locale,
@@ -2974,7 +3015,7 @@ async def _load_saved_broadcast_for_state(
         admin_ui_broadcast_media_file_id=media_file_id or "",
         admin_ui_broadcast_media_kind=media_kind or "",
         admin_ui_selected_saved_broadcast_id=broadcast_id,
-        admin_ui_broadcast_flow_kind="gift" if _buttons_have_wallet_gift(buttons) else "message",
+        admin_ui_broadcast_flow_kind=_saved_item_kind(broadcast),
         admin_ui_saved_broadcast_signature=_build_broadcast_state_signature(
             message_text,
             message_entities,
@@ -2983,6 +3024,7 @@ async def _load_saved_broadcast_for_state(
             media_kind or "",
         ),
         admin_ui_saved_broadcast=broadcast,
+        admin_ui_saved_broadcast_gift_only=_saved_item_kind(broadcast) == "gift",
     )
     return broadcast
 
@@ -5830,7 +5872,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     publication_id = str(saved_ids[index - 1] or "").strip()
                     publication = await _load_saved_publication_for_state(state, publication_id)
                     await state.update_data(
-                        admin_ui_saved_publication_gift_only=_buttons_have_wallet_gift(publication.get("buttons")),
+                        admin_ui_saved_publication_gift_only=_saved_item_kind(publication) == "gift",
                         **panel_anchor,
                     )
                     await _edit_panel_message(
@@ -5838,7 +5880,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         _build_saved_publication_detail_text(publication, locale),
                         reply_markup=_build_saved_publication_actions_keyboard(
                             locale,
-                            gift_only=_buttons_have_wallet_gift(publication.get("buttons")),
+                            gift_only=_saved_item_kind(publication) == "gift",
                         ),
                     )
                     return
@@ -6029,13 +6071,17 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     return
 
                 page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
-                gift_only = bool((await state.get_data()).get("admin_ui_saved_publication_gift_only"))
+                gift_only = (
+                    sub_action == "savedgift"
+                    or bool((await state.get_data()).get("admin_ui_saved_publication_gift_only"))
+                )
                 text, keyboard, saved_ids = await _build_saved_publications_view(locale, page=page, gift_only=gift_only)
                 await state.update_data(
                     admin_ui_saved_publication_ids=saved_ids,
                     admin_ui_saved_publication_page=page,
                     admin_ui_selected_saved_publication_id="",
                     admin_ui_saved_publication_signature="",
+                    admin_ui_saved_publication_gift_only=gift_only,
                     **panel_anchor,
                 )
                 await _edit_panel_message(callback.message, text, reply_markup=keyboard)
@@ -6439,7 +6485,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     broadcast_id = str(saved_ids[index - 1] or "").strip()
                     broadcast = await _load_saved_broadcast_for_state(state, broadcast_id)
                     await state.update_data(
-                        admin_ui_saved_broadcast_gift_only=_buttons_have_wallet_gift(broadcast.get("buttons")),
+                        admin_ui_saved_broadcast_gift_only=_saved_item_kind(broadcast) == "gift",
                         **panel_anchor,
                     )
                     await _edit_panel_message(
@@ -6447,7 +6493,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         _build_saved_broadcast_detail_text(broadcast, locale),
                         reply_markup=_build_saved_broadcast_actions_keyboard(
                             locale,
-                            gift_only=_buttons_have_wallet_gift(broadcast.get("buttons")),
+                            gift_only=_saved_item_kind(broadcast) == "gift",
                         ),
                     )
                     return
@@ -6622,12 +6668,16 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     return
 
                 page = _safe_int(parts[4] if len(parts) > 4 else "1", 1, 1, 999)
-                gift_only = bool((await state.get_data()).get("admin_ui_saved_broadcast_gift_only"))
+                gift_only = (
+                    sub_action == "savedgift"
+                    or bool((await state.get_data()).get("admin_ui_saved_broadcast_gift_only"))
+                )
                 text, keyboard, saved_ids = await _build_saved_broadcasts_view(locale, page=page, gift_only=gift_only)
                 await state.update_data(
                     admin_ui_saved_broadcast_ids=saved_ids,
                     admin_ui_saved_broadcast_page=page,
                     admin_ui_selected_saved_broadcast_id="",
+                    admin_ui_saved_broadcast_gift_only=gift_only,
                     **panel_anchor,
                 )
                 await _edit_panel_message(callback.message, text, reply_markup=keyboard)

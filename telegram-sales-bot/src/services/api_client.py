@@ -352,6 +352,7 @@ class ApiClient:
         media_file_id: Optional[str] = None,
         media_kind: Optional[str] = None,
         message_entities: Optional[list[Dict[str, Any]]] = None,
+        saved_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/broadcasts"
         payload: Dict[str, Any] = {"message": message, "segment": segment}
@@ -363,6 +364,8 @@ class ApiClient:
             payload["media_kind"] = media_kind
         if message_entities is not None:
             payload["message_entities"] = message_entities
+        if saved_kind:
+            payload["saved_kind"] = saved_kind
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url, json=payload, headers=self._headers(), timeout=30
@@ -529,6 +532,7 @@ class ApiClient:
         media_file_id: Optional[str] = None,
         media_kind: Optional[str] = None,
         message_entities: Optional[list[Dict[str, Any]]] = None,
+        saved_kind: Optional[str] = None,
     ) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/publications"
         payload: Dict[str, Any] = {"message": message}
@@ -540,6 +544,8 @@ class ApiClient:
             payload["media_kind"] = media_kind
         if message_entities is not None:
             payload["message_entities"] = message_entities
+        if saved_kind:
+            payload["saved_kind"] = saved_kind
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url,

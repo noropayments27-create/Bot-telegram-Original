@@ -637,6 +637,7 @@ async function ensureBroadcastSchema(pool) {
      ADD COLUMN IF NOT EXISTS buttons jsonb,
      ADD COLUMN IF NOT EXISTS message_entities jsonb,
      ADD COLUMN IF NOT EXISTS saved boolean NOT NULL DEFAULT false,
+     ADD COLUMN IF NOT EXISTS saved_kind text NOT NULL DEFAULT 'MESSAGE',
      ADD COLUMN IF NOT EXISTS progress_status text NOT NULL DEFAULT 'IDLE',
      ADD COLUMN IF NOT EXISTS progress_target_count integer NOT NULL DEFAULT 0,
      ADD COLUMN IF NOT EXISTS progress_sent_count integer NOT NULL DEFAULT 0,
@@ -648,6 +649,30 @@ async function ensureBroadcastSchema(pool) {
      ADD COLUMN IF NOT EXISTS progress_lease_expires_at timestamptz,
      ADD COLUMN IF NOT EXISTS progress_started_at timestamptz,
      ADD COLUMN IF NOT EXISTS progress_updated_at timestamptz`
+  );
+  await pool.query(
+    `UPDATE broadcasts
+     SET saved_kind = 'MESSAGE'
+     WHERE saved_kind IS NULL
+        OR saved_kind NOT IN ('MESSAGE', 'GIFT')`
+  );
+  await pool.query(
+    `UPDATE broadcasts
+     SET saved_kind = 'GIFT'
+     WHERE saved_kind <> 'GIFT'
+       AND (
+         COALESCE(buttons, '[]'::jsonb) @> '[{"action":"gift"}]'::jsonb
+         OR COALESCE(buttons, '[]'::jsonb) @> '[{"type":"gift"}]'::jsonb
+       )`
+  );
+  await pool.query(
+    `ALTER TABLE broadcasts
+     DROP CONSTRAINT IF EXISTS broadcasts_saved_kind_check`
+  );
+  await pool.query(
+    `ALTER TABLE broadcasts
+     ADD CONSTRAINT broadcasts_saved_kind_check
+     CHECK (saved_kind IN ('MESSAGE', 'GIFT'))`
   );
   broadcastSchemaReady = true;
 }
@@ -946,8 +971,12 @@ async function sendPublicationToTargets(pool, payload) {
 }
 
 let ensurePublicationSchemaPromise = null;
+let publicationSchemaReady = false;
 
 async function ensurePublicationSchema(pool) {
+  if (publicationSchemaReady) {
+    return;
+  }
   if (ensurePublicationSchemaPromise) {
     await ensurePublicationSchemaPromise;
     return;
@@ -962,13 +991,43 @@ async function ensurePublicationSchema(pool) {
         image_path TEXT,
         image_filename TEXT,
         image_mime TEXT,
+        saved_kind TEXT NOT NULL DEFAULT 'MESSAGE',
         created_at TIMESTAMPTZ NOT NULL DEFAULT now(),
         updated_at TIMESTAMPTZ NOT NULL DEFAULT now()
       )
     `);
+    await pool.query(
+      `ALTER TABLE publications
+       ADD COLUMN IF NOT EXISTS saved_kind text NOT NULL DEFAULT 'MESSAGE'`
+    );
+    await pool.query(
+      `UPDATE publications
+       SET saved_kind = 'MESSAGE'
+       WHERE saved_kind IS NULL
+          OR saved_kind NOT IN ('MESSAGE', 'GIFT')`
+    );
+    await pool.query(
+      `UPDATE publications
+       SET saved_kind = 'GIFT'
+       WHERE saved_kind <> 'GIFT'
+         AND (
+           COALESCE(buttons, '[]'::jsonb) @> '[{"action":"gift"}]'::jsonb
+           OR COALESCE(buttons, '[]'::jsonb) @> '[{"type":"gift"}]'::jsonb
+         )`
+    );
+    await pool.query(
+      `ALTER TABLE publications
+       DROP CONSTRAINT IF EXISTS publications_saved_kind_check`
+    );
+    await pool.query(
+      `ALTER TABLE publications
+       ADD CONSTRAINT publications_saved_kind_check
+       CHECK (saved_kind IN ('MESSAGE', 'GIFT'))`
+    );
   })();
   try {
     await ensurePublicationSchemaPromise;
+    publicationSchemaReady = true;
   } finally {
     ensurePublicationSchemaPromise = null;
   }
@@ -2689,6 +2748,29 @@ function normalizeBroadcastButtons(value) {
     .filter(Boolean);
 }
 
+function buttonsHaveWalletGift(buttons) {
+  if (!Array.isArray(buttons)) {
+    return false;
+  }
+  return buttons.some((button) => {
+    if (!button || typeof button !== "object") {
+      return false;
+    }
+    return String(button.action || button.type || "").trim().toLowerCase() === "gift";
+  });
+}
+
+function normalizeSavedKind(value, buttons = []) {
+  const raw = String(value || "").trim().toUpperCase();
+  if (raw === "GIFT" || raw === "WALLET_GIFT") {
+    return "GIFT";
+  }
+  if (raw === "MESSAGE" || raw === "BROADCAST" || raw === "PUBLICATION") {
+    return "MESSAGE";
+  }
+  return buttonsHaveWalletGift(buttons) ? "GIFT" : "MESSAGE";
+}
+
 function parseImageDataUrl(value) {
   if (!value) {
     return null;
@@ -3996,6 +4078,7 @@ router.post("/publications", async (req, res, next) => {
     ? String(req.body.media_file_id).trim()
     : "";
   const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
+  const savedKind = normalizeSavedKind(req.body && req.body.saved_kind, buttons);
 
   if (!messageText && !mediaFileId) {
     return res.status(400).json({ error: "MESSAGE_REQUIRED" });
@@ -4015,9 +4098,10 @@ router.post("/publications", async (req, res, next) => {
          buttons,
          image_path,
          image_filename,
-         image_mime
+         image_mime,
+         saved_kind
        )
-       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, NULL, $6)
+       VALUES ($1, $2, $3::jsonb, $4::jsonb, $5, NULL, $6, $7)
        RETURNING *`,
       [
         publicationId,
@@ -4026,6 +4110,7 @@ router.post("/publications", async (req, res, next) => {
         JSON.stringify(buttons),
         mediaFileId ? `tgfile:${mediaFileId}` : null,
         mediaFileId ? `tg:${mediaKind}` : null,
+        savedKind,
       ]
     );
     return res.status(201).json({ publication: insertRes.rows[0] });
@@ -4054,6 +4139,9 @@ router.patch("/publications/:id", async (req, res, next) => {
     : "";
   const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
   const clearImage = Boolean(req.body && req.body.clear_image);
+  const hasSavedKindInput = Boolean(
+    req.body && Object.prototype.hasOwnProperty.call(req.body, "saved_kind")
+  );
 
   if (mediaFileId && !mediaKind) {
     return res.status(400).json({ error: "MEDIA_KIND_INVALID" });
@@ -4072,6 +4160,11 @@ router.patch("/publications/:id", async (req, res, next) => {
     const nextMessage = messageText !== null ? messageText : String(current.message_text || "").trim();
     const nextButtons = buttons !== null ? buttons : (current.buttons || []);
     const nextEntities = hasMessageEntitiesInput ? messageEntities : (current.message_entities || []);
+    const nextSavedKind = hasSavedKindInput
+      ? normalizeSavedKind(req.body.saved_kind, nextButtons)
+      : buttons !== null
+      ? normalizeSavedKind(null, nextButtons)
+      : normalizeSavedKind(current.saved_kind, nextButtons);
     const nextImagePath = mediaFileId
       ? `tgfile:${mediaFileId}`
       : clearImage
@@ -4095,6 +4188,7 @@ router.patch("/publications/:id", async (req, res, next) => {
            image_path = $5,
            image_filename = NULL,
            image_mime = $6,
+           saved_kind = $7,
            updated_at = now()
        WHERE id = $1
        RETURNING *`,
@@ -4105,6 +4199,7 @@ router.patch("/publications/:id", async (req, res, next) => {
         JSON.stringify(nextButtons),
         nextImagePath,
         nextImageMime,
+        nextSavedKind,
       ]
     );
     return res.json({ publication: updateRes.rows[0] });
@@ -11644,6 +11739,7 @@ router.get("/broadcasts", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    await ensureBroadcastSchema(pool);
     const countRes = await pool.query("SELECT COUNT(*)::int AS total FROM broadcasts");
     const total = countRes.rows[0].total;
 
@@ -11709,6 +11805,7 @@ router.get("/broadcasts/:id", async (req, res, next) => {
   const pool = getPool();
 
   try {
+    await ensureBroadcastSchema(pool);
     const broadcastRes = await pool.query("SELECT * FROM broadcasts WHERE id = $1", [
       broadcastId,
     ]);
@@ -12022,8 +12119,14 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
     : "";
   const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
   const clearImage = Boolean(req.body && req.body.clear_image);
-  const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
+  const hasButtonsInput = Boolean(
+    req.body && Object.prototype.hasOwnProperty.call(req.body, "buttons")
+  );
+  const buttons = hasButtonsInput ? normalizeBroadcastButtons(req.body.buttons) : [];
   const savedFlag = typeof req.body?.saved === "boolean" ? req.body.saved : null;
+  const hasSavedKindInput = Boolean(
+    req.body && Object.prototype.hasOwnProperty.call(req.body, "saved_kind")
+  );
   const hasExceptIdsInput = Boolean(req.body && Object.prototype.hasOwnProperty.call(req.body, "except_ids"));
   const exceptIds = hasExceptIdsInput ? normalizeChatIds(req.body.except_ids) : [];
 
@@ -12056,6 +12159,12 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
     const nextMessage = messageText !== null ? messageText : broadcast.message_text;
     const normalizedSegment = rawSegment ? normalizeBroadcastSegmentInput(rawSegment) : "";
     const nextSegment = normalizedSegment || broadcast.segment;
+    const nextButtons = hasButtonsInput ? buttons : (Array.isArray(broadcast.buttons) ? broadcast.buttons : []);
+    const nextSavedKind = hasSavedKindInput
+      ? normalizeSavedKind(req.body.saved_kind, nextButtons)
+      : hasButtonsInput
+      ? normalizeSavedKind(null, nextButtons)
+      : normalizeSavedKind(broadcast.saved_kind, nextButtons);
     const hasImage = Boolean(broadcast.image_path) && !clearImage;
     if (!nextMessage && !hasImage && !imagePayload && !mediaFileId) {
       return res.status(400).json({ error: "MESSAGE_REQUIRED" });
@@ -12073,6 +12182,7 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
            destination = $3,
            buttons = $4::jsonb,
            saved = COALESCE($5, saved),
+           saved_kind = $9,
            image_path = CASE WHEN $6 THEN NULL ELSE image_path END,
            image_filename = CASE WHEN $6 THEN NULL ELSE image_filename END,
            image_mime = CASE WHEN $6 THEN NULL ELSE image_mime END
@@ -12082,11 +12192,12 @@ router.patch("/broadcasts/:id", async (req, res, next) => {
         nextMessage,
         nextSegment,
         destination,
-        JSON.stringify(buttons),
+        JSON.stringify(nextButtons),
         savedFlag,
         clearImage,
         broadcastId,
         hasMessageEntitiesInput ? JSON.stringify(messageEntities) : null,
+        nextSavedKind,
       ]
     );
 
@@ -12180,6 +12291,7 @@ router.post("/broadcasts", async (req, res, next) => {
   const mediaKind = normalizeBroadcastMediaKind(req.body && req.body.media_kind);
   const imagePayload = imageDataUrl ? parseImageDataUrl(imageDataUrl) : null;
   const buttons = normalizeBroadcastButtons(req.body && req.body.buttons);
+  const savedKind = normalizeSavedKind(req.body && req.body.saved_kind, buttons);
 
   if (!messageText && !imagePayload && !mediaFileId) {
     return res.status(400).json({ error: "MESSAGE_REQUIRED" });
@@ -12229,8 +12341,8 @@ router.post("/broadcasts", async (req, res, next) => {
   try {
     await ensureBroadcastSchema(pool);
     const broadcastRes = await pool.query(
-      `INSERT INTO broadcasts (segment, destination, message_text, buttons, message_entities)
-       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb)
+      `INSERT INTO broadcasts (segment, destination, message_text, buttons, message_entities, saved_kind)
+       VALUES ($1, $2, $3, $4::jsonb, $5::jsonb, $6)
        RETURNING *`,
       [
         isBuyers
@@ -12248,6 +12360,7 @@ router.post("/broadcasts", async (req, res, next) => {
         messageText,
         JSON.stringify(buttons),
         JSON.stringify(messageEntities),
+        savedKind,
       ]
     );
 
