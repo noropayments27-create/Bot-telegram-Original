@@ -23,6 +23,7 @@ from .config import (
     WEBHOOK_URL,
 )
 from .services.api_client import ApiClient
+from .services.button_styles import install_button_style_patch
 from .handlers import (
     admin_actions,
     admin_auth,
@@ -107,6 +108,7 @@ async def _report_bot_error(
 
 async def main() -> None:
     logging.basicConfig(level=logging.INFO)
+    install_button_style_patch()
 
     if not TELEGRAM_BOT_TOKEN:
         raise RuntimeError("TELEGRAM_BOT_TOKEN is required")

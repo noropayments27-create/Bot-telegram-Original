@@ -19,6 +19,7 @@ const {
   finalizeWalletGiftStatus,
   formatGiftUsd,
 } = require("../../services/userWallets");
+const { getReferralGateStatus } = require("../../services/maintenance");
 const AFFILIATE_MESSAGES = {
   es: {
     approved: "✅ Tu solicitud para ser afiliado fue aprobada por el admin.",
@@ -84,9 +85,22 @@ function parseScammerTelegramIds() {
 
 const UUID_REGEX =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i;
+let usersProfileSchemaReady = false;
 
 function isUuid(value) {
   return typeof value === "string" && UUID_REGEX.test(value);
+}
+
+async function ensureUsersProfileSchema(client) {
+  if (usersProfileSchemaReady) {
+    return;
+  }
+  await client.query(
+    `ALTER TABLE users
+     ADD COLUMN IF NOT EXISTS first_name text,
+     ADD COLUMN IF NOT EXISTS last_name text`
+  );
+  usersProfileSchemaReady = true;
 }
 
 function normalizeLocale(input, languageCode) {
@@ -194,6 +208,34 @@ async function resolveAffiliateId(client, startAffiliateCode, telegramId) {
   return affiliateId;
 }
 
+async function ensureAdminAffiliate(client) {
+  const adminIds = parseAdminTelegramIds();
+  const adminTelegramId = adminIds.length > 0 ? adminIds[0] : 90000000000;
+  const adminUsername = process.env.ADMIN_TELEGRAM_USERNAME || "admin_affiliate";
+  const userRes = await client.query(
+    `INSERT INTO users (telegram_id, telegram_username)
+     VALUES ($1, $2)
+     ON CONFLICT (telegram_id)
+     DO UPDATE SET telegram_username = COALESCE(NULLIF(EXCLUDED.telegram_username, ''), users.telegram_username)
+     RETURNING id`,
+    [adminTelegramId, adminUsername]
+  );
+  const userId = userRes.rows[0]?.id;
+  if (!userId) {
+    return null;
+  }
+  const affiliateRes = await client.query(
+    `INSERT INTO affiliates (user_id, status, approved_at)
+     VALUES ($1, 'APPROVED', now())
+     ON CONFLICT (user_id)
+     DO UPDATE SET status = 'APPROVED',
+                   approved_at = COALESCE(affiliates.approved_at, now())
+     RETURNING id`,
+    [userId]
+  );
+  return affiliateRes.rows[0]?.id || null;
+}
+
 async function validateAffiliateCode(client, code, telegramId) {
   if (!code) {
     return { error: "INVALID_CODE" };
@@ -251,6 +293,8 @@ async function isUserBanned(client, telegramId) {
 async function upsertTelegramUser(req, res, next) {
   const telegramId = Number(req.body.telegram_id);
   const username = req.body.username || null;
+  const firstName = req.body.first_name || null;
+  const lastName = req.body.last_name || null;
   const languageCode = req.body.language_code || null;
   const photoFileId = req.body.telegram_photo_file_id || null;
   const userLocale = normalizeLocale(req.body.locale, languageCode);
@@ -266,25 +310,35 @@ async function upsertTelegramUser(req, res, next) {
 
   try {
     await client.query("BEGIN");
+    await ensureUsersProfileSchema(client);
 
     if (await isUserBanned(client, telegramId)) {
       await client.query("ROLLBACK");
       return res.status(403).json({ status: "banned" });
     }
 
-    const affiliateId = await resolveAffiliateId(
+    let affiliateId = await resolveAffiliateId(
       client,
       startAffiliateCode,
       telegramId
     );
+    if (!affiliateId) {
+      const referralGateActive = await getReferralGateStatus(client);
+      const adminIds = parseAdminTelegramIds();
+      if (!referralGateActive && !adminIds.includes(Number(telegramId))) {
+        affiliateId = await ensureAdminAffiliate(client);
+      }
+    }
     const referredAt = affiliateId ? new Date() : null;
 
     const upserted = await client.query(
       `INSERT INTO users
-        (telegram_id, telegram_username, telegram_photo_file_id, referred_by_affiliate_id, referred_at, locale)
-       VALUES ($1, $2, $3, $4, $5, $6)
+        (telegram_id, telegram_username, first_name, last_name, telegram_photo_file_id, referred_by_affiliate_id, referred_at, locale)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
        ON CONFLICT (telegram_id)
        DO UPDATE SET telegram_username = EXCLUDED.telegram_username,
+                     first_name = COALESCE(EXCLUDED.first_name, users.first_name),
+                     last_name = COALESCE(EXCLUDED.last_name, users.last_name),
                      telegram_photo_file_id = COALESCE(EXCLUDED.telegram_photo_file_id, users.telegram_photo_file_id),
                      locale = COALESCE(EXCLUDED.locale, users.locale),
                      referred_by_affiliate_id = COALESCE(users.referred_by_affiliate_id, EXCLUDED.referred_by_affiliate_id),
@@ -295,7 +349,7 @@ async function upsertTelegramUser(req, res, next) {
                        ELSE users.referred_at
                      END
        RETURNING *, (xmax = 0) AS is_new`,
-      [telegramId, username, photoFileId, affiliateId, referredAt, userLocale]
+      [telegramId, username, firstName, lastName, photoFileId, affiliateId, referredAt, userLocale]
     );
 
     await client.query("COMMIT");

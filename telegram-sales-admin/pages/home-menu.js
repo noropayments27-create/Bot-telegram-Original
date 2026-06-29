@@ -11,6 +11,12 @@ const SECTION_OPTIONS = [
 ];
 const LOCALES = ["es", "en"];
 const MAX_BUTTONS = 24;
+const BUTTON_STYLE_OPTIONS = [
+  { value: "", label: "Normal" },
+  { value: "primary", label: "Primario" },
+  { value: "success", label: "Verde" },
+  { value: "danger", label: "Rojo" },
+];
 const SECTION_DEFAULT_LAYOUTS = {
   home: {
     es: {
@@ -248,26 +254,35 @@ function normalizeButton(raw) {
   const label = String(raw.label || raw.text || "").trim().slice(0, 64);
   const action = String(raw.action || raw.callback_data || "").trim().slice(0, 64);
   const url = String(raw.url || "").trim();
+  const style = String(raw.style || "").trim().toLowerCase();
+  const iconCustomEmojiId = String(raw.icon_custom_emoji_id || "").trim();
+  const extra = {};
+  if (["danger", "success", "primary"].includes(style)) {
+    extra.style = style;
+  }
+  if (/^[0-9]+$/.test(iconCustomEmojiId)) {
+    extra.icon_custom_emoji_id = iconCustomEmojiId;
+  }
   const hasUrl = Object.prototype.hasOwnProperty.call(raw, "url");
   const hasAction = Object.prototype.hasOwnProperty.call(raw, "action")
     || Object.prototype.hasOwnProperty.call(raw, "callback_data");
 
   if (hasUrl) {
-    return { label, url };
+    return { label, url, ...extra };
   }
   if (hasAction) {
-    return { label, action };
+    return { label, action, ...extra };
   }
   if (!label) {
     return null;
   }
   if (url) {
-    return { label, url };
+    return { label, url, ...extra };
   }
   if (action) {
-    return { label, action };
+    return { label, action, ...extra };
   }
-  return { label, action: "" };
+  return { label, action: "", ...extra };
 }
 
 function normalizeRows(rawButtons) {
@@ -391,7 +406,7 @@ function markdownToEditorHtml(raw) {
     return "";
   }
   const value = String(raw);
-  if (/<\/?(b|strong|i|em|u|s|strike|del|a|blockquote|code|pre|br|div|p)/i.test(value)) {
+  if (/<\/?(b|strong|i|em|u|s|strike|del|a|blockquote|code|pre|br|div|p|tg-emoji)/i.test(value)) {
     return value;
   }
   let text = escapeHtml(value);
@@ -483,6 +498,13 @@ function normalizeMessageForSave(html) {
         return inner;
       }
       return `<a href="${escapeHtml(href)}">${inner || escapeHtml(href)}</a>`;
+    }
+    if (tag === "tg-emoji") {
+      const emojiId = String(node.getAttribute("emoji-id") || "").trim();
+      if (!/^[0-9]+$/.test(emojiId)) {
+        return inner;
+      }
+      return `<tg-emoji emoji-id="${emojiId}">${inner}</tg-emoji>`;
     }
     if (tag === "div" || tag === "p" || tag === "li") {
       return `${inner}\n`;
@@ -818,11 +840,15 @@ export default function HomeMenuPage() {
             return {
               label: translatedLabel,
               url: String(sourceButton?.url || ""),
+              style: sourceButton?.style || undefined,
+              icon_custom_emoji_id: sourceButton?.icon_custom_emoji_id || undefined,
             };
           }
           return {
             label: translatedLabel,
             action: String(sourceButton?.action || ""),
+            style: sourceButton?.style || undefined,
+            icon_custom_emoji_id: sourceButton?.icon_custom_emoji_id || undefined,
           };
         })
       );
@@ -963,8 +989,18 @@ export default function HomeMenuPage() {
       if (field === "type") {
         const previous = row[colIndex];
         row[colIndex] = value === "url"
-          ? { label: previous.label || "", url: previous.url || "" }
-          : { label: previous.label || "", action: previous.action || "" };
+          ? {
+              label: previous.label || "",
+              url: previous.url || "",
+              style: previous.style || undefined,
+              icon_custom_emoji_id: previous.icon_custom_emoji_id || undefined,
+            }
+          : {
+              label: previous.label || "",
+              action: previous.action || "",
+              style: previous.style || undefined,
+              icon_custom_emoji_id: previous.icon_custom_emoji_id || undefined,
+            };
         return mirrorButtonsFromLocale(next, locale);
       }
       if (field === "label") {
@@ -976,12 +1012,34 @@ export default function HomeMenuPage() {
           row[colIndex] = {
             label: row[colIndex].label || "",
             url: String(value || "").trim(),
+            style: row[colIndex].style || undefined,
+            icon_custom_emoji_id: row[colIndex].icon_custom_emoji_id || undefined,
           };
         } else {
           row[colIndex] = {
             label: row[colIndex].label || "",
             action: String(value || "").slice(0, 64),
+            style: row[colIndex].style || undefined,
+            icon_custom_emoji_id: row[colIndex].icon_custom_emoji_id || undefined,
           };
+        }
+        return mirrorButtonsFromLocale(next, locale);
+      }
+      if (field === "style") {
+        const nextStyle = String(value || "").trim().toLowerCase();
+        if (nextStyle) {
+          row[colIndex].style = nextStyle;
+        } else {
+          delete row[colIndex].style;
+        }
+        return mirrorButtonsFromLocale(next, locale);
+      }
+      if (field === "icon_custom_emoji_id") {
+        const nextId = String(value || "").trim();
+        if (nextId) {
+          row[colIndex].icon_custom_emoji_id = nextId.replace(/\D/g, "");
+        } else {
+          delete row[colIndex].icon_custom_emoji_id;
         }
         return mirrorButtonsFromLocale(next, locale);
       }
@@ -1296,6 +1354,33 @@ export default function HomeMenuPage() {
                                   updateButtonField(activeLocale, rowIndex, colIndex, "target", event.target.value)
                                 }
                                 placeholder={getButtonType(button) === "url" ? "https://..." : "category:page:metodos"}
+                              />
+                            </label>
+                            <label className="home-menu-button-field">
+                              Color
+                              <select
+                                value={button.style || ""}
+                                onChange={(event) =>
+                                  updateButtonField(activeLocale, rowIndex, colIndex, "style", event.target.value)
+                                }
+                              >
+                                {BUTTON_STYLE_OPTIONS.map((option) => (
+                                  <option key={option.value || "normal"} value={option.value}>
+                                    {option.label}
+                                  </option>
+                                ))}
+                              </select>
+                            </label>
+                            <label className="home-menu-button-field">
+                              Custom emoji ID
+                              <input
+                                type="text"
+                                inputMode="numeric"
+                                value={button.icon_custom_emoji_id || ""}
+                                onChange={(event) =>
+                                  updateButtonField(activeLocale, rowIndex, colIndex, "icon_custom_emoji_id", event.target.value)
+                                }
+                                placeholder="5368324170671202286"
                               />
                             </label>
                             <div className="actions home-menu-button-actions">

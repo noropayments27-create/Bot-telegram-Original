@@ -12,6 +12,7 @@ ADMIN_API_KEY = os.getenv("ADMIN_API_KEY")
 BOT_TO_API_SECRET = os.getenv("BOT_TO_API_SECRET")
 BOT_USERNAME = os.getenv("BOT_USERNAME")
 ADMIN_PANEL_LOCAL_URL = os.getenv("ADMIN_PANEL_LOCAL_URL", "http://localhost:3000")
+BOT_BUTTON_STYLE_RULES = os.getenv("BOT_BUTTON_STYLE_RULES", "").strip()
 
 
 def _parse_bool(value: str, default: bool = False) -> bool:

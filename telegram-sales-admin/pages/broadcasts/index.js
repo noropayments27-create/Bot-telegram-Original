@@ -13,6 +13,12 @@ const SEGMENT_OPTIONS = [
   { value: "GROUPS", label: "Grupos" },
   { value: "CHANNELS", label: "Canales" },
 ];
+const BUTTON_STYLE_OPTIONS = [
+  { value: "", label: "Normal" },
+  { value: "primary", label: "Primario" },
+  { value: "success", label: "Verde" },
+  { value: "danger", label: "Rojo" },
+];
 
 function parseTelegramIds(value) {
   return value
@@ -79,7 +85,7 @@ const markdownToEditorHtml = (raw) => {
     return "";
   }
   const value = String(raw);
-  if (/<\/?(b|strong|i|em|u|s|strike|del|a|blockquote|code|pre|br|div|p)/i.test(value)) {
+  if (/<\/?(b|strong|i|em|u|s|strike|del|a|blockquote|code|pre|br|div|p|tg-emoji)/i.test(value)) {
     return value;
   }
   let text = escapeHtml(value);
@@ -171,6 +177,13 @@ const normalizeMessageForSave = (html) => {
         return inner;
       }
       return `<a href="${escapeHtml(href)}">${inner || escapeHtml(href)}</a>`;
+    }
+    if (tag === "tg-emoji") {
+      const emojiId = String(node.getAttribute("emoji-id") || "").trim();
+      if (!/^[0-9]+$/.test(emojiId)) {
+        return inner;
+      }
+      return `<tg-emoji emoji-id="${emojiId}">${inner}</tg-emoji>`;
     }
     if (tag === "div" || tag === "p" || tag === "li") {
       return `${inner}\n`;
@@ -724,7 +737,7 @@ export default function BroadcastsPage() {
   };
 
   const addButton = () => {
-    setButtons((prev) => [...prev, { text: "", url: "" }]);
+    setButtons((prev) => [...prev, { text: "", url: "", style: "" }]);
   };
 
   const updateButton = (index, key, value) => {
@@ -937,8 +950,23 @@ export default function BroadcastsPage() {
         .map((button) => ({
           text: String(button.text || "").trim(),
           url: String(button.url || "").trim(),
+          style: String(button.style || "").trim().toLowerCase(),
+          icon_custom_emoji_id: String(button.icon_custom_emoji_id || "").trim().replace(/\D/g, ""),
         }))
         .filter((button) => button.text || button.url);
+      const normalizedButtons = cleanedButtons.map((button) => {
+        const normalized = {
+          text: button.text,
+          url: button.url,
+        };
+        if (["danger", "success", "primary"].includes(button.style)) {
+          normalized.style = button.style;
+        }
+        if (button.icon_custom_emoji_id) {
+          normalized.icon_custom_emoji_id = button.icon_custom_emoji_id;
+        }
+        return normalized;
+      });
       const invalidButton = cleanedButtons.find(
         (button) => !button.text || !button.url || !isValidUrl(button.url)
       );
@@ -960,7 +988,7 @@ export default function BroadcastsPage() {
         if (segments[0] === "ALL_USERS") {
           payload.except_ids = exceptIds;
         }
-        payload.buttons = cleanedButtons;
+        payload.buttons = normalizedButtons;
         try {
           const data = await apiFetch(`/admin/broadcasts/${editingId}`, {
             method: "PATCH",
@@ -1003,7 +1031,7 @@ export default function BroadcastsPage() {
           payload.image_data_url = imageDataUrl;
         }
         if (cleanedButtons.length > 0) {
-          payload.buttons = cleanedButtons;
+          payload.buttons = normalizedButtons;
         }
         if (segment === "CUSTOM") {
           payload.telegram_ids = telegramIds;
@@ -1323,6 +1351,30 @@ export default function BroadcastsPage() {
                       placeholder="https://..."
                       value={button.url}
                       onChange={(event) => updateButton(index, "url", event.target.value)}
+                    />
+                    <select
+                      value={button.style || ""}
+                      onChange={(event) => updateButton(index, "style", event.target.value)}
+                      title="Color del botón"
+                    >
+                      {BUTTON_STYLE_OPTIONS.map((option) => (
+                        <option key={option.value || "normal"} value={option.value}>
+                          {option.label}
+                        </option>
+                      ))}
+                    </select>
+                    <input
+                      type="text"
+                      inputMode="numeric"
+                      placeholder="Custom emoji ID"
+                      value={button.icon_custom_emoji_id || ""}
+                      onChange={(event) =>
+                        updateButton(
+                          index,
+                          "icon_custom_emoji_id",
+                          event.target.value.replace(/\D/g, "")
+                        )
+                      }
                     />
                     <button
                       type="button"

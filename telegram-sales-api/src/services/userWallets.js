@@ -502,16 +502,25 @@ function normalizeWalletGiftButton(button) {
   );
   const rowRaw = Number(button.row);
   const row = Number.isInteger(rowRaw) && rowRaw >= 0 ? rowRaw : 0;
+  const style = String(button.style || "").trim().toLowerCase();
+  const iconCustomEmojiId = String(button.icon_custom_emoji_id || "").trim();
   if (!text || !Number.isFinite(amountUsd) || amountUsd <= 0 || !Number.isFinite(maxClaims) || maxClaims <= 0) {
     return null;
   }
-  return {
+  const normalized = {
     text,
     row,
     action: "gift",
     gift_amount_usd: Number(amountUsd.toFixed(2)),
     gift_max_claims: maxClaims,
   };
+  if (["danger", "success", "primary"].includes(style)) {
+    normalized.style = style;
+  }
+  if (/^[0-9]+$/.test(iconCustomEmojiId)) {
+    normalized.icon_custom_emoji_id = iconCustomEmojiId;
+  }
+  return normalized;
 }
 
 async function createWalletGift(
@@ -639,6 +648,8 @@ async function prepareWalletGiftButtonsForSend(
       gift_id: createdGift.id,
       gift_amount_usd: giftButton.gift_amount_usd,
       gift_max_claims: giftButton.gift_max_claims,
+      style: giftButton.style || undefined,
+      icon_custom_emoji_id: giftButton.icon_custom_emoji_id || undefined,
     });
   }
   return {

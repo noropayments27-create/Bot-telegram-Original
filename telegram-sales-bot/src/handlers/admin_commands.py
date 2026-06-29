@@ -1121,6 +1121,7 @@ def _build_broadcast_buttons_prompt_text(
             + "Paso 2/3 · Configura el botón del regalo.\n\n"
             + "Formato:\n"
             + "<code>Reclama $1 USD | regalo:1:5</code>\n"
+            + "<code>Reclama $1 USD | regalo:1:5 | success | 5368324170671202286</code>\n"
             + "Eso significa: <b>$1 USD</b> por persona y <b>5 cupos</b>.\n\n"
             + "Solo se permite <b>un botón de regalo</b> por mensaje.\n"
             + "Si no quieres botones, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
@@ -1129,6 +1130,7 @@ def _build_broadcast_buttons_prompt_text(
             + "Step 2/3 · Configure the gift button.\n\n"
             + "Format:\n"
             + "<code>Claim $1 USD | gift:1:5</code>\n"
+            + "<code>Claim $1 USD | gift:1:5 | success | 5368324170671202286</code>\n"
             + "This means: <b>$1 USD</b> per person and <b>5 claims</b>.\n\n"
             + "Only <b>one gift button</b> is allowed per message.\n"
             + "If you don't want buttons, type <code>none</code> or use <b>⏭ Skip</b>.",
@@ -1140,6 +1142,8 @@ def _build_broadcast_buttons_prompt_text(
         + "Paso 2/3 · Botones con link (opcional).\n\n"
         + "Formato por línea:\n"
         + "<code>Texto botón | https://enlace</code>\n"
+        + "<code>Texto botón | https://enlace | success | 5368324170671202286</code>\n"
+        + "Colores: <code>primary</code>, <code>success</code>, <code>danger</code>.\n"
         + "Misma línea: <code>Botón 1 | https://a.com ; Botón 2 | https://b.com</code>\n\n"
         + "Si no quieres botones, escribe <code>sin</code> o usa <b>⏭ Saltar</b>.",
         ("📢" if channels_mode else "📣")
@@ -1147,6 +1151,8 @@ def _build_broadcast_buttons_prompt_text(
         + "Step 2/3 · Link buttons (optional).\n\n"
         + "One line format:\n"
         + "<code>Button text | https://link</code>\n"
+        + "<code>Button text | https://link | success | 5368324170671202286</code>\n"
+        + "Colors: <code>primary</code>, <code>success</code>, <code>danger</code>.\n"
         + "Same row: <code>Button 1 | https://a.com ; Button 2 | https://b.com</code>\n\n"
         + "If you don't want buttons, type <code>none</code> or use <b>⏭ Skip</b>.",
     )
@@ -3734,6 +3740,146 @@ async def _fetch_status_text(locale: str | None = "es") -> str:
     return _build_status_text(health, maintenance, counts, summary, locale)
 
 
+def _build_status_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👥 Usuarios", "👥 Users"),
+                    callback_data="adminui:statususers:1",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🚫 Bloqueados", "🚫 Blocked"),
+                    callback_data="adminui:statusblocks:1",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔄 Actualizar", "🔄 Refresh"),
+                    callback_data="adminui:status",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+def _format_user_display(row: Dict[str, Any]) -> str:
+    username = str(row.get("telegram_username") or "").strip()
+    if username:
+        return f"@{username}"
+    first_name = str(row.get("first_name") or "").strip()
+    last_name = str(row.get("last_name") or "").strip()
+    full_name = " ".join(part for part in [first_name, last_name] if part).strip()
+    return full_name or "Usuario"
+
+
+def _build_users_page_text(
+    data: Dict[str, Any],
+    *,
+    list_kind: str,
+    locale: str | None = "es",
+) -> str:
+    page = _safe_int(data.get("page"), 1, 1, 10**6)
+    page_size = _safe_int(data.get("page_size"), 30, 1, 30)
+    total = _safe_int(data.get("total"), 0, 0, 10**9)
+    total_pages = _safe_int(data.get("total_pages"), 1, 1, 10**6)
+    items = data.get("items") if isinstance(data.get("items"), list) else []
+    title = (
+        _tr(locale, "👥 <b>Usuarios del bot</b>", "👥 <b>Bot users</b>")
+        if list_kind == "users"
+        else _tr(locale, "🚫 <b>Bloqueados de notificaciones</b>", "🚫 <b>Notification blocked</b>")
+    )
+    lines = [
+        title,
+        "",
+        _tr(
+            locale,
+            f"Página <b>{page}</b>/<b>{total_pages}</b> · Total: <b>{total}</b>",
+            f"Page <b>{page}</b>/<b>{total_pages}</b> · Total: <b>{total}</b>",
+        ),
+        "",
+    ]
+    if not items:
+        lines.append(_tr(locale, "Sin registros.", "No records."))
+        return "\n".join(lines)
+    start = (page - 1) * page_size
+    for index, row in enumerate(items, start=start + 1):
+        display = _escape_html(_format_user_display(row))
+        telegram_id = _escape_html(row.get("telegram_id"))
+        lines.append(f"{index}. {display} = <code>{telegram_id}</code>")
+    return "\n".join(lines)
+
+
+def _build_users_page_keyboard(
+    list_kind: str,
+    page: int,
+    total_pages: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    base = "statususers" if list_kind == "users" else "statusblocks"
+    previous_page = max(page - 1, 1)
+    next_page = min(page + 1, max(total_pages, 1))
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⬅️",
+                    callback_data=f"adminui:{base}:{previous_page}" if page > 1 else "adminui:noop",
+                ),
+                InlineKeyboardButton(
+                    text=f"{page}/{max(total_pages, 1)}",
+                    callback_data="adminui:noop",
+                ),
+                InlineKeyboardButton(
+                    text="➡️",
+                    callback_data=f"adminui:{base}:{next_page}" if page < total_pages else "adminui:noop",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔄 Actualizar", "🔄 Refresh"),
+                    callback_data=f"adminui:{base}:{page}:refresh",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "📊 Estado", "📊 Status"),
+                    callback_data="adminui:status",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Panel", "⬅️ Panel"),
+                    callback_data="adminui:home",
+                ),
+            ],
+        ]
+    )
+
+
+async def _build_users_page_view(
+    list_kind: str,
+    page: int,
+    locale: str | None = "es",
+    *,
+    refresh: bool = False,
+) -> tuple[str, InlineKeyboardMarkup]:
+    safe_page = max(int(page or 1), 1)
+    if list_kind == "blocked":
+        data = await api_client.admin_list_notification_blocks(page=safe_page, page_size=30, refresh=refresh)
+    else:
+        data = await api_client.admin_list_users(page=safe_page, page_size=30, refresh=refresh)
+        list_kind = "users"
+    current_page = _safe_int(data.get("page"), safe_page, 1, 10**6)
+    total_pages = _safe_int(data.get("total_pages"), 1, 1, 10**6)
+    return (
+        _build_users_page_text(data, list_kind=list_kind, locale=locale),
+        _build_users_page_keyboard(list_kind, current_page, total_pages, locale),
+    )
+
+
 async def _build_orders_pending_text(limit: int, locale: str | None = "es") -> str:
     response = await api_client.admin_list_orders(
         status="WAITING_PAYMENT", page=1, page_size=limit
@@ -4934,16 +5080,22 @@ def _parse_broadcast_buttons_input(raw_text: str, locale: str | None = "es") -> 
         if not specs:
             continue
         for spec in specs:
-            parts = [part.strip() for part in spec.split("|", 1)]
-            if len(parts) != 2:
+            parts = [part.strip() for part in spec.split("|")]
+            if len(parts) < 2:
                 raise ValueError(
                     _tr(
                         locale,
-                        "Formato inválido. Usa: texto | https://enlace",
-                        "Invalid format. Use: text | https://link",
+                        "Formato inválido. Usa: texto | https://enlace | color opcional | custom_emoji_id opcional",
+                        "Invalid format. Use: text | https://link | optional color | optional custom_emoji_id",
                     )
                 )
-            label, url = parts
+            label, url = parts[0], parts[1]
+            style = str(parts[2] if len(parts) > 2 else "").strip().lower()
+            icon_custom_emoji_id = str(parts[3] if len(parts) > 3 else "").strip()
+            if style not in {"primary", "success", "danger"}:
+                style = ""
+            if icon_custom_emoji_id and not icon_custom_emoji_id.isdigit():
+                icon_custom_emoji_id = ""
             label = _sanitize_broadcast_button_text(label)
             if not label:
                 raise ValueError(_tr(locale, "Falta el texto del botón.", "Button text is required."))
@@ -4974,15 +5126,18 @@ def _parse_broadcast_buttons_input(raw_text: str, locale: str | None = "es") -> 
                             "Gift amount and claims must be greater than 0.",
                         )
                     )
-                parsed.append(
-                    {
-                        "text": label[:64],
-                        "action": "gift",
-                        "gift_amount_usd": gift_amount,
-                        "gift_max_claims": gift_claims,
-                        "row": row_index,
-                    }
-                )
+                button = {
+                    "text": label[:64],
+                    "action": "gift",
+                    "gift_amount_usd": gift_amount,
+                    "gift_max_claims": gift_claims,
+                    "row": row_index,
+                }
+                if style:
+                    button["style"] = style
+                if icon_custom_emoji_id:
+                    button["icon_custom_emoji_id"] = icon_custom_emoji_id
+                parsed.append(button)
                 if len(parsed) >= 12:
                     return parsed
                 continue
@@ -4994,7 +5149,12 @@ def _parse_broadcast_buttons_input(raw_text: str, locale: str | None = "es") -> 
                         "Link must start with http:// or https://",
                     )
                 )
-            parsed.append({"text": label[:64], "url": url, "row": row_index})
+            button = {"text": label[:64], "url": url, "row": row_index}
+            if style:
+                button["style"] = style
+            if icon_custom_emoji_id:
+                button["icon_custom_emoji_id"] = icon_custom_emoji_id
+            parsed.append(button)
             if len(parsed) >= 12:
                 return parsed
     return parsed
@@ -5326,8 +5486,38 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
             await _edit_panel_message(
                 callback.message,
                 await _fetch_status_text(locale),
-                reply_markup=_build_back_to_panel_keyboard(locale),
+                reply_markup=_build_status_keyboard(locale),
             )
+            return
+
+        if action == "statususers":
+            await state.clear()
+            requested_page = _safe_int(parts[2] if len(parts) > 2 else 1, 1, 1, 10**6)
+            refresh = len(parts) > 3 and str(parts[3]).lower() == "refresh"
+            text, keyboard = await _build_users_page_view(
+                "users",
+                requested_page,
+                locale,
+                refresh=refresh,
+            )
+            await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+            return
+
+        if action == "statusblocks":
+            await state.clear()
+            requested_page = _safe_int(parts[2] if len(parts) > 2 else 1, 1, 1, 10**6)
+            refresh = len(parts) > 3 and str(parts[3]).lower() == "refresh"
+            text, keyboard = await _build_users_page_view(
+                "blocked",
+                requested_page,
+                locale,
+                refresh=refresh,
+            )
+            await _edit_panel_message(callback.message, text, reply_markup=keyboard)
+            return
+
+        if action == "noop":
+            await callback.answer()
             return
 
         if action == "earnings":
@@ -9368,6 +9558,7 @@ async def _send_admin_status_message(message: Message, locale: str | None) -> No
         await message.answer(
             _build_status_text(health, maintenance, counts, summary, locale),
             parse_mode="HTML",
+            reply_markup=_build_status_keyboard(locale),
         )
     except Exception as exc:
         await message.answer(f"❌ No pude obtener estado admin: {exc}")

@@ -19,6 +19,7 @@ const {
 } = require("../services/adminAuth");
 const {
   getFilePath,
+  getChat,
   downloadFile,
   deleteMessage,
   sendMessage,
@@ -46,6 +47,8 @@ const {
 const {
   getMaintenanceStatus,
   setMaintenanceStatus,
+  getReferralGateStatus,
+  setReferralGateStatus,
 } = require("../services/maintenance");
 const {
   getBotAssets,
@@ -122,6 +125,8 @@ const execFileAsync = promisify(execFile);
 
 const ADMIN_PASSWORD_RESET_PURPOSE = "RESET_PASSWORD";
 const ADMIN_PASSWORD_RESET_CHANNEL_TELEGRAM = "TELEGRAM";
+let notificationBlocksSchemaReady = false;
+let userListingSchemaReady = false;
 
 function getOrderExpirySeconds() {
   return Math.max(
@@ -130,6 +135,72 @@ function getOrderExpirySeconds() {
       || 900,
     1
   );
+}
+
+async function ensureNotificationBlocksSchema(pool) {
+  if (notificationBlocksSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `CREATE TABLE IF NOT EXISTS bot_notification_blocks (
+       telegram_id bigint PRIMARY KEY,
+       reason text,
+       last_error text,
+       first_detected_at timestamptz NOT NULL DEFAULT now(),
+       last_detected_at timestamptz NOT NULL DEFAULT now()
+     )`
+  );
+  notificationBlocksSchemaReady = true;
+}
+
+async function ensureUserListingSchema(pool) {
+  if (userListingSchemaReady) {
+    return;
+  }
+  await pool.query(
+    `ALTER TABLE users
+     ADD COLUMN IF NOT EXISTS first_name text,
+     ADD COLUMN IF NOT EXISTS last_name text`
+  );
+  userListingSchemaReady = true;
+}
+
+function isTelegramBlockedError(error) {
+  const text = String(error?.description || error?.message || error || "").toLowerCase();
+  return (
+    text.includes("bot was blocked")
+    || text.includes("bot can't initiate conversation")
+    || text.includes("user is deactivated")
+    || text.includes("forbidden")
+    || Number(error?.status || 0) === 403
+  );
+}
+
+async function recordNotificationBlock(pool, telegramId, error) {
+  const numericTelegramId = Number(telegramId);
+  if (!Number.isFinite(numericTelegramId)) {
+    return;
+  }
+  await ensureNotificationBlocksSchema(pool);
+  const message = String(error?.description || error?.message || error || "TELEGRAM_SEND_FAILED").slice(0, 300);
+  await pool.query(
+    `INSERT INTO bot_notification_blocks (telegram_id, reason, last_error)
+     VALUES ($1, $2, $3)
+     ON CONFLICT (telegram_id)
+     DO UPDATE SET reason = EXCLUDED.reason,
+                   last_error = EXCLUDED.last_error,
+                   last_detected_at = now()`,
+    [numericTelegramId, "NOTIFICATION_DELIVERY_FAILED", message]
+  );
+}
+
+async function clearNotificationBlock(pool, telegramId) {
+  const numericTelegramId = Number(telegramId);
+  if (!Number.isFinite(numericTelegramId)) {
+    return;
+  }
+  await ensureNotificationBlocksSchema(pool);
+  await pool.query("DELETE FROM bot_notification_blocks WHERE telegram_id = $1", [numericTelegramId]);
 }
 
 async function syncExpiredWaitingPaymentOrders(pool) {
@@ -1323,9 +1394,13 @@ async function runBroadcastSendJob(pool, broadcastId) {
       const telegramId = recipientIds[cursor];
       try {
         await sendBroadcastToRecipient(context, broadcast, telegramId);
+        await clearNotificationBlock(pool, telegramId);
         sentCount += 1;
       } catch (err) {
         failedCount += 1;
+        if (isTelegramBlockedError(err)) {
+          await recordNotificationBlock(pool, telegramId, err);
+        }
         console.error("Broadcast send failed", {
           broadcastId,
           telegramId,
@@ -1761,6 +1836,7 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
     for (const telegramId of batch) {
       try {
         const sendResult = await sendBroadcastToRecipient(context, deliveryBroadcast, telegramId);
+        await clearNotificationBlock(pool, telegramId);
         if (prepared.gift && sendResult?.messageId) {
           await recordWalletGiftMessage(pool, {
             giftId: prepared.gift.id,
@@ -1773,6 +1849,9 @@ async function performBroadcastSend(pool, broadcast, recipientIds, options = {})
         sentCount += 1;
       } catch (err) {
         failedCount += 1;
+        if (isTelegramBlockedError(err)) {
+          await recordNotificationBlock(pool, telegramId, err);
+        }
         console.error("Broadcast send failed", {
           broadcastId,
           telegramId,
@@ -2716,6 +2795,8 @@ function normalizeBroadcastButtons(value) {
       const text = String(button.text || "").trim();
       const url = String(button.url || "").trim();
       const action = String(button.action || button.type || "").trim().toLowerCase();
+      const style = normalizeTelegramButtonStyle(button.style);
+      const iconCustomEmojiId = normalizeCustomEmojiId(button.icon_custom_emoji_id);
       const rawRow = Number(button.row);
       const row =
         Number.isInteger(rawRow) && rawRow >= 0 ? rawRow : fallbackRow;
@@ -2732,20 +2813,44 @@ function normalizeBroadcastButtons(value) {
         if (!Number.isFinite(amountUsd) || amountUsd <= 0 || !Number.isFinite(maxClaims) || maxClaims <= 0) {
           return null;
         }
-        return {
+        const normalized = {
           text,
           row,
           action: "gift",
           gift_amount_usd: Number(amountUsd.toFixed(2)),
           gift_max_claims: maxClaims,
         };
+        if (style) {
+          normalized.style = style;
+        }
+        if (iconCustomEmojiId) {
+          normalized.icon_custom_emoji_id = iconCustomEmojiId;
+        }
+        return normalized;
       }
       if (!url || !/^https?:\/\//i.test(url)) {
         return null;
       }
-      return { text, url, row };
+      const normalized = { text, url, row };
+      if (style) {
+        normalized.style = style;
+      }
+      if (iconCustomEmojiId) {
+        normalized.icon_custom_emoji_id = iconCustomEmojiId;
+      }
+      return normalized;
     })
     .filter(Boolean);
+}
+
+function normalizeTelegramButtonStyle(value) {
+  const style = String(value || "").trim().toLowerCase();
+  return ["danger", "success", "primary"].includes(style) ? style : "";
+}
+
+function normalizeCustomEmojiId(value) {
+  const id = String(value || "").trim();
+  return /^[0-9]+$/.test(id) ? id : "";
 }
 
 function buttonsHaveWalletGift(buttons) {
@@ -2844,6 +2949,8 @@ function buildInlineKeyboard(buttons) {
     if (!text || !/^https?:\/\//i.test(url)) {
       continue;
     }
+    const style = normalizeTelegramButtonStyle(button.style);
+    const iconCustomEmojiId = normalizeCustomEmojiId(button.icon_custom_emoji_id);
     const rawRow = Number(button.row);
     const rowKey =
       Number.isInteger(rawRow) && rawRow >= 0 ? rawRow : fallbackRow;
@@ -2853,7 +2960,14 @@ function buildInlineKeyboard(buttons) {
     }
     const row = grouped.get(rowKey);
     if (Array.isArray(row) && row.length < 4) {
-      row.push({ text, url });
+      const normalized = { text, url };
+      if (style) {
+        normalized.style = style;
+      }
+      if (iconCustomEmojiId) {
+        normalized.icon_custom_emoji_id = iconCustomEmojiId;
+      }
+      row.push(normalized);
     }
   }
   const inlineKeyboard = Array.from(grouped.entries())
@@ -4826,6 +4940,108 @@ router.get("/users/total", async (req, res, next) => {
   }
 });
 
+async function refreshUsernamesForRows(pool, rows) {
+  await ensureUserListingSchema(pool);
+  const refreshed = [];
+  for (const row of rows) {
+    const telegramId = Number(row.telegram_id);
+    if (!Number.isFinite(telegramId)) {
+      refreshed.push(row);
+      continue;
+    }
+    try {
+      const chat = await getChat(telegramId);
+      const username = String(chat?.username || "").trim() || null;
+      const firstName = String(chat?.first_name || "").trim() || null;
+      const lastName = String(chat?.last_name || "").trim() || null;
+      await pool.query(
+        `UPDATE users
+         SET telegram_username = $2,
+             first_name = COALESCE($3, first_name),
+             last_name = COALESCE($4, last_name)
+         WHERE telegram_id = $1`,
+        [telegramId, username, firstName, lastName]
+      );
+      refreshed.push({
+        ...row,
+        telegram_username: username,
+        first_name: firstName || row.first_name,
+        last_name: lastName || row.last_name,
+      });
+      await clearNotificationBlock(pool, telegramId);
+    } catch (error) {
+      if (isTelegramBlockedError(error)) {
+        await recordNotificationBlock(pool, telegramId, error);
+      }
+      refreshed.push(row);
+    }
+  }
+  return refreshed;
+}
+
+function normalizeUsersPage(query) {
+  const page = Math.max(parseInt(query.page || "1", 10) || 1, 1);
+  const pageSize = Math.min(Math.max(parseInt(query.page_size || "30", 10) || 30, 1), 30);
+  return { page, pageSize, offset: (page - 1) * pageSize };
+}
+
+router.get("/users", async (req, res, next) => {
+  const pool = getPool();
+  const { page, pageSize, offset } = normalizeUsersPage(req.query);
+  const refresh = String(req.query.refresh || "").trim() === "1";
+  try {
+    await ensureUserListingSchema(pool);
+    const countRes = await pool.query("SELECT COUNT(*)::int AS total FROM users");
+    const usersRes = await pool.query(
+      `SELECT telegram_id, telegram_username, first_name, last_name, created_at
+       FROM users
+       ORDER BY created_at DESC, telegram_id DESC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, offset]
+    );
+    const rows = refresh ? await refreshUsernamesForRows(pool, usersRes.rows) : usersRes.rows;
+    return res.json({
+      items: rows,
+      page,
+      page_size: pageSize,
+      total: countRes.rows[0]?.total || 0,
+      total_pages: Math.ceil((countRes.rows[0]?.total || 0) / pageSize) || 1,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/users/notification-blocks", async (req, res, next) => {
+  const pool = getPool();
+  const { page, pageSize, offset } = normalizeUsersPage(req.query);
+  const refresh = String(req.query.refresh || "").trim() === "1";
+  try {
+    await ensureUserListingSchema(pool);
+    await ensureNotificationBlocksSchema(pool);
+    const countRes = await pool.query("SELECT COUNT(*)::int AS total FROM bot_notification_blocks");
+    const blockedRes = await pool.query(
+      `SELECT b.telegram_id, b.reason, b.last_error, b.first_detected_at, b.last_detected_at,
+              u.telegram_username, u.first_name, u.last_name, u.created_at
+       FROM bot_notification_blocks b
+       LEFT JOIN users u ON u.telegram_id = b.telegram_id
+       ORDER BY b.last_detected_at DESC, b.telegram_id DESC
+       LIMIT $1 OFFSET $2`,
+      [pageSize, offset]
+    );
+    const rows = refresh ? await refreshUsernamesForRows(pool, blockedRes.rows) : blockedRes.rows;
+    return res.json({
+      items: rows,
+      page,
+      page_size: pageSize,
+      total: countRes.rows[0]?.total || 0,
+      total_pages: Math.ceil((countRes.rows[0]?.total || 0) / pageSize) || 1,
+    });
+  } catch (error) {
+    return next(error);
+  }
+});
+
 router.get("/maintenance", async (req, res, next) => {
   const pool = getPool();
   try {
@@ -4846,6 +5062,32 @@ router.post("/maintenance", async (req, res, next) => {
       nextActive = !current;
     }
     const active = await setMaintenanceStatus(pool, nextActive);
+    return res.json({ active });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/referral-gate", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const active = await getReferralGateStatus(pool);
+    return res.json({ active });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.post("/referral-gate", async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const requested = req.body?.active;
+    let nextActive = requested;
+    if (typeof nextActive !== "boolean") {
+      const current = await getReferralGateStatus(pool);
+      nextActive = !current;
+    }
+    const active = await setReferralGateStatus(pool, nextActive);
     return res.json({ active });
   } catch (error) {
     return next(error);

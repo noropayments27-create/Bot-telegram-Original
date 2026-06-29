@@ -187,6 +187,9 @@ export default function Dashboard() {
   const [maintenanceActive, setMaintenanceActive] = useState(false);
   const [maintenanceStatus, setMaintenanceStatus] = useState("");
   const [maintenanceError, setMaintenanceError] = useState("");
+  const [referralGateActive, setReferralGateActive] = useState(true);
+  const [referralGateStatus, setReferralGateStatus] = useState("");
+  const [referralGateError, setReferralGateError] = useState("");
   const customersCounter = useCountUp(stats.customers);
   const salesCounter = useCountUp(stats.totalSales);
   const revenueCounter = useCountUp(stats.totalRevenueUsd);
@@ -256,6 +259,16 @@ export default function Dashboard() {
     }
   }, []);
 
+  const loadReferralGateStatus = useCallback(async () => {
+    try {
+      const data = await apiFetch("/admin/referral-gate");
+      setReferralGateActive(Boolean(data?.active));
+      setReferralGateError("");
+    } catch (error) {
+      setReferralGateError("No se pudo cargar el modo referidos.");
+    }
+  }, []);
+
   const handleTogglePaymentMethod = async (methodKey) => {
     try {
       const data = await apiFetch(`/admin/payment-methods/${methodKey}/toggle`, {
@@ -276,11 +289,12 @@ export default function Dashboard() {
     loadSummary();
     loadPaymentMethods();
     loadMaintenanceStatus();
+    loadReferralGateStatus();
     const interval = setInterval(() => {
       loadSummary();
     }, 20000);
     return () => clearInterval(interval);
-  }, [loadMaintenanceStatus, loadPaymentMethods, loadSummary]);
+  }, [loadMaintenanceStatus, loadPaymentMethods, loadReferralGateStatus, loadSummary]);
 
   useEffect(() => {
     if (typeof window === "undefined") {
@@ -350,6 +364,23 @@ export default function Dashboard() {
     }
   };
 
+  const handleToggleReferralGate = async () => {
+    const nextActive = !referralGateActive;
+    setReferralGateStatus("processing");
+    setReferralGateError("");
+    try {
+      const data = await apiFetch("/admin/referral-gate", {
+        method: "POST",
+        body: JSON.stringify({ active: nextActive }),
+      });
+      setReferralGateActive(Boolean(data?.active));
+      setReferralGateStatus("done");
+    } catch (error) {
+      setReferralGateStatus("error");
+      setReferralGateError("No se pudo actualizar el modo referidos.");
+    }
+  };
+
   return (
     <main className="page dashboard-page">
       <section className="card dashboard-main-card">
@@ -384,6 +415,22 @@ export default function Dashboard() {
             >
               Mantenimiento
             </button>
+            <button
+              type="button"
+              onClick={handleToggleReferralGate}
+              className={`dashboard-maintenance-button${
+                referralGateActive ? " is-active" : ""
+              }`}
+              aria-pressed={referralGateActive}
+              disabled={referralGateStatus === "processing"}
+              title={
+                referralGateActive
+                  ? "Desactivar modo referidos: cualquiera podrá entrar y quedará referido al admin"
+                  : "Activar modo referidos: exigirá código o enlace de referido"
+              }
+            >
+              {referralGateActive ? "Referidos ON" : "Referidos OFF"}
+            </button>
             {canReset && (
               <button
                 type="button"
@@ -401,6 +448,7 @@ export default function Dashboard() {
               <span className="muted">Estadisticas reiniciadas.</span>
             )}
             {maintenanceError && <span className="error">{maintenanceError}</span>}
+            {referralGateError && <span className="error">{referralGateError}</span>}
           </div>
         </div>
         <div className="dashboard-grid">

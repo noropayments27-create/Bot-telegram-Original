@@ -1,6 +1,9 @@
 const express = require("express");
 const { getPool } = require("../db");
-const { getMaintenanceStatus } = require("../services/maintenance");
+const {
+  getMaintenanceStatus,
+  getReferralGateStatus,
+} = require("../services/maintenance");
 const { getBotAssets } = require("../services/botAssets");
 const { getAdminLayout } = require("../services/adminLayouts");
 const { ensurePublishTargetsSchema, upsertPublishTarget } = require("../services/publishTargets");
@@ -21,6 +24,16 @@ router.get("/maintenance", requireBotSecret, async (req, res, next) => {
   try {
     const active = await getMaintenanceStatus(pool);
     return res.json({ active });
+  } catch (error) {
+    return next(error);
+  }
+});
+
+router.get("/access", requireBotSecret, async (req, res, next) => {
+  const pool = getPool();
+  try {
+    const referralGateActive = await getReferralGateStatus(pool);
+    return res.json({ referral_gate_active: referralGateActive });
   } catch (error) {
     return next(error);
   }

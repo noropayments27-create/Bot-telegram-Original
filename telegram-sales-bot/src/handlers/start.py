@@ -36,7 +36,15 @@ router = Router()
 api_client = ApiClient(API_BASE_URL, API_TOKEN, BOT_TO_API_SECRET)
 logger = logging.getLogger(__name__)
 _COMMUNITY_LAYOUT_KEY = "community_menu_v1"
- 
+
+
+async def _is_referral_gate_active() -> bool:
+    try:
+        data = await api_client.get_access_status()
+        return bool(data.get("referral_gate_active", True))
+    except Exception:
+        return True
+
 
 
 async def _assign_access_code(
@@ -179,7 +187,7 @@ async def handle_start(message: Message, state: FSMContext) -> None:
             )
             return
 
-    if message.from_user.id not in ADMIN_TELEGRAM_IDS:
+    if message.from_user.id not in ADMIN_TELEGRAM_IDS and await _is_referral_gate_active():
         try:
             user_data = await api_client.get_user(message.from_user.id)
             referred = (user_data.get("user") or {}).get("referred_by_affiliate_id")

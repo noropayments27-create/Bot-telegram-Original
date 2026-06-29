@@ -51,6 +51,17 @@ def _pair_buttons(buttons: list[dict[str, str]]) -> list[list[dict[str, str]]]:
     return rows
 
 
+def _button_extra_fields(button: dict[str, str]) -> dict[str, str]:
+    extra: dict[str, str] = {}
+    style = str(button.get("style") or "").strip().lower()
+    if style in {"danger", "success", "primary"}:
+        extra["style"] = style
+    icon_custom_emoji_id = str(button.get("icon_custom_emoji_id") or "").strip()
+    if icon_custom_emoji_id.isdigit():
+        extra["icon_custom_emoji_id"] = icon_custom_emoji_id
+    return extra
+
+
 def _normalize_layout_button(
     item: object,
 ) -> dict[str, str] | None:
@@ -59,13 +70,20 @@ def _normalize_layout_button(
     label = str(item.get("label") or item.get("text") or "").strip()
     action = str(item.get("action") or item.get("callback_data") or "").strip()
     url = str(item.get("url") or "").strip()
+    style = str(item.get("style") or "").strip().lower()
+    icon_custom_emoji_id = str(item.get("icon_custom_emoji_id") or "").strip()
     if not label:
         return None
+    extra: dict[str, str] = {}
+    if style in {"danger", "success", "primary"}:
+        extra["style"] = style
+    if icon_custom_emoji_id.isdigit():
+        extra["icon_custom_emoji_id"] = icon_custom_emoji_id
     if url:
-        return {"label": label[:64], "url": url}
+        return {"label": label[:64], "url": url, **extra}
     if not action:
         return None
-    return {"label": label[:64], "action": action[:64]}
+    return {"label": label[:64], "action": action[:64], **extra}
 
 
 def _normalize_layout_buttons(
@@ -143,10 +161,11 @@ def _build_keyboard_from_rows(
             text = button.get("label") or "Button"
             action = button.get("action")
             url = button.get("url")
+            extra = _button_extra_fields(button)
             if url:
-                keyboard_row.append(InlineKeyboardButton(text=text, url=url))
+                keyboard_row.append(InlineKeyboardButton(text=text, url=url, **extra))
             elif action:
-                keyboard_row.append(InlineKeyboardButton(text=text, callback_data=action))
+                keyboard_row.append(InlineKeyboardButton(text=text, callback_data=action, **extra))
         if keyboard_row:
             inline_rows.append(keyboard_row)
     return InlineKeyboardMarkup(inline_keyboard=inline_rows)

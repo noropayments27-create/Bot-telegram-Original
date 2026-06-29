@@ -38,6 +38,13 @@ class AccessCodeMiddleware(BaseMiddleware):
     def _cache_access(self, user_id: int) -> None:
         self._access_cache[user_id] = time.monotonic() + self._access_cache_ttl
 
+    async def _is_referral_gate_active(self) -> bool:
+        try:
+            data = await self._api_client.get_access_status()
+            return bool(data.get("referral_gate_active", True))
+        except Exception:
+            return True
+
     async def __call__(
         self,
         handler: Callable[[Any, Dict[str, Any]], Awaitable[Any]],
@@ -62,6 +69,10 @@ class AccessCodeMiddleware(BaseMiddleware):
                 return await handler(event, data)
 
         if self._has_cached_access(user.id):
+            return await handler(event, data)
+
+        if not await self._is_referral_gate_active():
+            self._cache_access(user.id)
             return await handler(event, data)
 
         try:

@@ -256,6 +256,48 @@ class ApiClient:
             response.raise_for_status()
             return response.json()
 
+    async def admin_list_users(
+        self,
+        page: int = 1,
+        page_size: int = 30,
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/users"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={
+                    "page": page,
+                    "page_size": page_size,
+                    "refresh": "1" if refresh else "0",
+                },
+                headers=self._headers(),
+                timeout=30 if refresh else 10,
+            )
+            response.raise_for_status()
+            return response.json()
+
+    async def admin_list_notification_blocks(
+        self,
+        page: int = 1,
+        page_size: int = 30,
+        refresh: bool = False,
+    ) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/users/notification-blocks"
+        async with httpx.AsyncClient() as client:
+            response = await client.get(
+                url,
+                params={
+                    "page": page,
+                    "page_size": page_size,
+                    "refresh": "1" if refresh else "0",
+                },
+                headers=self._headers(),
+                timeout=30 if refresh else 10,
+            )
+            response.raise_for_status()
+            return response.json()
+
     async def admin_get_order(self, order_id: str) -> Dict[str, Any]:
         url = f"{self.base_url}/admin/orders/{order_id}"
         async with httpx.AsyncClient() as client:
@@ -1142,6 +1184,27 @@ class ApiClient:
                 url,
                 headers=self._headers(),
                 timeout=10,
+            )
+            response.raise_for_status()
+            return response.json()
+
+        result = await _request_with_retry(_do)
+        return self._cache_set(cache_key, result, 5)
+
+    async def get_access_status(self) -> Dict[str, Any]:
+        cache_key = self._cache_key("access")
+        cached = self._cache_get(cache_key)
+        if cached is not None:
+            return cached
+        url = f"{self.base_url}/bot/access"
+
+        async def _do() -> Dict[str, Any]:
+            response = await self._request(
+                "GET",
+                url,
+                headers=self._headers(),
+                timeout=5,
+                retry=True,
             )
             response.raise_for_status()
             return response.json()

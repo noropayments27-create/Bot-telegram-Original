@@ -49,6 +49,34 @@ async function getFilePath(fileId) {
   return data.result.file_path;
 }
 
+async function getChat(chatId) {
+  const token = getToken();
+  const url = `${TELEGRAM_API_BASE}/bot${token}/getChat`;
+  const response = await fetch(url, {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify({ chat_id: chatId }),
+  });
+
+  if (!response.ok) {
+    await throwTelegramApiError(response, "TELEGRAM_GET_CHAT_FAILED");
+  }
+
+  const data = await response.json();
+  if (!data.ok) {
+    const error = new Error(
+      `TELEGRAM_GET_CHAT_FAILED: ${String(data?.description || "UNKNOWN").trim()}`
+    );
+    error.code = "TELEGRAM_GET_CHAT_FAILED";
+    error.description = String(data?.description || "").trim();
+    throw error;
+  }
+
+  return data.result;
+}
+
 async function downloadFile(filePath) {
   const token = getToken();
   const url = `${TELEGRAM_API_BASE}/file/bot${token}/${filePath}`;
@@ -78,12 +106,17 @@ async function sendMessage(telegramId, text, options = {}) {
   });
 
   if (!response.ok) {
-    throw new Error("TELEGRAM_SEND_FAILED");
+    await throwTelegramApiError(response, "TELEGRAM_SEND_FAILED");
   }
 
   const data = await response.json();
   if (!data.ok) {
-    throw new Error("TELEGRAM_SEND_FAILED");
+    const error = new Error(
+      `TELEGRAM_SEND_FAILED: ${String(data?.description || "UNKNOWN").trim()}`
+    );
+    error.code = "TELEGRAM_SEND_FAILED";
+    error.description = String(data?.description || "").trim();
+    throw error;
   }
 
   return data.result;
@@ -338,6 +371,7 @@ async function editMessageText(telegramId, messageId, text, options = {}) {
 
 module.exports = {
   getFilePath,
+  getChat,
   downloadFile,
   deleteMessage,
   sendMessage,
