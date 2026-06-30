@@ -89,6 +89,7 @@ _COMMUNITY_LAYOUT_KEY = "community_menu_v1"
 _HOME_LAYOUT_LOCALES = ("es", "en")
 _HOME_BUTTON_LIMIT = 24
 _COMMUNITY_BUTTON_LIMIT = 12
+_BLANK_BUTTON_TEXT = "\u2060"
 
 _HOME_DEFAULT_BUTTON_KEYS = [
     ("menu_shop", "shop:page:1"),
@@ -896,6 +897,18 @@ def _home_button_style_title(style: str | None, locale: str | None = "es") -> st
     return labels.get(normalized, _tr(locale, "Normal", "Normal"))
 
 
+def _style_choice_button(callback_data: str, style: str | None = None) -> InlineKeyboardButton:
+    normalized = str(style or "").strip().lower()
+    kwargs: Dict[str, Any] = {
+        "text": _BLANK_BUTTON_TEXT,
+        "callback_data": callback_data,
+    }
+    if normalized in {"primary", "success", "danger"}:
+        kwargs["style"] = normalized
+        kwargs["api_kwargs"] = {"style": normalized}
+    return InlineKeyboardButton(**kwargs)
+
+
 def _extract_button_label_and_custom_emoji(raw_label: str) -> tuple[str, str]:
     raw = str(raw_label or "").strip()
     match = re.search(r'<tg-emoji\b[^>]*emoji-id=["\']?(\d+)["\']?[^>]*>', raw, flags=re.IGNORECASE)
@@ -1164,21 +1177,18 @@ def _build_home_button_style_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="⚪",
-                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:none",
+                _style_choice_button(f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:none"),
+                _style_choice_button(
+                    f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:primary",
+                    "primary",
                 ),
-                InlineKeyboardButton(
-                    text="🔵",
-                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:primary",
+                _style_choice_button(
+                    f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:success",
+                    "success",
                 ),
-                InlineKeyboardButton(
-                    text="🟢",
-                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:success",
-                ),
-                InlineKeyboardButton(
-                    text="🔴",
-                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:danger",
+                _style_choice_button(
+                    f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:danger",
+                    "danger",
                 ),
             ],
             [
@@ -1425,21 +1435,18 @@ def _build_community_button_style_keyboard(
     return InlineKeyboardMarkup(
         inline_keyboard=[
             [
-                InlineKeyboardButton(
-                    text="⚪",
-                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:none",
+                _style_choice_button(f"adminui:community:btnsetstyle:{locale_target}:{index}:none"),
+                _style_choice_button(
+                    f"adminui:community:btnsetstyle:{locale_target}:{index}:primary",
+                    "primary",
                 ),
-                InlineKeyboardButton(
-                    text="🔵",
-                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:primary",
+                _style_choice_button(
+                    f"adminui:community:btnsetstyle:{locale_target}:{index}:success",
+                    "success",
                 ),
-                InlineKeyboardButton(
-                    text="🟢",
-                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:success",
-                ),
-                InlineKeyboardButton(
-                    text="🔴",
-                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:danger",
+                _style_choice_button(
+                    f"adminui:community:btnsetstyle:{locale_target}:{index}:danger",
+                    "danger",
                 ),
             ],
             [
@@ -8189,8 +8196,8 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     callback.message,
                     _tr(
                         locale,
-                        "🎨 <b>Color del botón</b>\n\n⚪ normal · 🔵 primario · 🟢 verde · 🔴 rojo",
-                        "🎨 <b>Button color</b>\n\n⚪ normal · 🔵 primary · 🟢 green · 🔴 red",
+                        "🎨 <b>Color del botón</b>\n\nSelecciona el color del botón:",
+                        "🎨 <b>Button color</b>\n\nSelect the button color:",
                     ),
                     reply_markup=_build_community_button_style_keyboard(locale_target, index, locale),
                 )
