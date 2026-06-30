@@ -812,8 +812,8 @@ const BROADCAST_LEASE_SECONDS = Math.max(
   10
 );
 const BROADCAST_RECOVERY_INTERVAL_MS = Math.max(
-  Number(process.env.BROADCAST_RECOVERY_INTERVAL_MS || 15000) || 15000,
-  5000
+  Number(process.env.BROADCAST_RECOVERY_INTERVAL_MS || 600000) || 600000,
+  60000
 );
 const _activeBroadcastJobs = new Set();
 let _broadcastRecoveryStarted = false;
@@ -2083,6 +2083,10 @@ function startGlobalCommissionWatcher() {
     return;
   }
   globalCommissionWatchStarted = true;
+  const intervalMs = Math.max(
+    Number(process.env.GLOBAL_COMMISSION_WATCHER_INTERVAL_MS || 600000) || 600000,
+    60000
+  );
   setInterval(async () => {
     try {
       const pool = getPool();
@@ -2103,10 +2107,8 @@ function startGlobalCommissionWatcher() {
     } catch (err) {
       // ignore watcher errors
     }
-  }, 60000);
+  }, intervalMs);
 }
-
-startGlobalCommissionWatcher();
 
 let ticketSchemaReady = false;
 async function ensureTicketSchema(pool) {
@@ -12770,4 +12772,5 @@ router.post("/broadcasts/:id/send", async (req, res, next) => {
 });
 
 router.startBroadcastRecoveryLoop = startBroadcastRecoveryLoop;
+router.startGlobalCommissionWatcher = startGlobalCommissionWatcher;
 module.exports = router;

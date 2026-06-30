@@ -375,8 +375,8 @@ function startOrderExpiryJob() {
     return timer;
   }
   const intervalMs = Math.max(
-    parseInt(process.env.ORDER_EXPIRY_INTERVAL_MS || "60000", 10) || 60000,
-    1000
+    parseInt(process.env.ORDER_EXPIRY_INTERVAL_MS || "600000", 10) || 600000,
+    60000
   );
   timer = setInterval(expireWaitingPaymentOrders, intervalMs);
   cleanupTimer = setInterval(purgeFinishedTestOrders, intervalMs);

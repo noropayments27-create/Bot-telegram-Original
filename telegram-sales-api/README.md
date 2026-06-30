@@ -33,6 +33,15 @@ Configura estas variables en `.env`:
 - `DELIVERY_MESSAGE_INTERVAL_MS` (opcional, default 1000)
 - `WALLET_SYNC_THROTTLE_MS` (opcional, default 30000)
 - `WALLET_SYNC_BATCH_LIMIT` (opcional, default 50)
+- `BACKGROUND_JOBS_ENABLED` (opcional, default `true`; pon `false` para apagar todos los jobs internos que consultan DB)
+- `ORDER_EXPIRY_JOB_ENABLED` (opcional, default `true`)
+- `ORDER_EXPIRY_INTERVAL_MS` (opcional, default `600000`)
+- `BROADCAST_RECOVERY_ENABLED` (opcional, default `true`)
+- `BROADCAST_RECOVERY_INTERVAL_MS` (opcional, default `600000`)
+- `WALLET_GIFT_SYNC_ENABLED` (opcional, default `true`)
+- `WALLET_GIFT_SYNC_INTERVAL_MS` (opcional, default `600000`)
+- `GLOBAL_COMMISSION_WATCHER_ENABLED` (opcional, default `true`)
+- `GLOBAL_COMMISSION_WATCHER_INTERVAL_MS` (opcional, default `600000`)
 
 ## Desarrollo
 ```bash
@@ -70,3 +79,4 @@ SELECT COUNT(*) FROM products WHERE sku_key LIKE 'shop_%' AND (code IS NULL OR c
 
 ## Endpoint de salud
 - GET `http://localhost:3001/health`
+- Evita usar `GET /health/db` en monitores frecuentes si quieres que Neon pueda dormir; esa ruta consulta PostgreSQL.
