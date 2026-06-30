@@ -85,8 +85,10 @@ _BROADCAST_EDIT_KEEP_WORDS = {
 }
 
 _HOME_LAYOUT_KEY = "home_menu_v1"
+_COMMUNITY_LAYOUT_KEY = "community_menu_v1"
 _HOME_LAYOUT_LOCALES = ("es", "en")
 _HOME_BUTTON_LIMIT = 24
+_COMMUNITY_BUTTON_LIMIT = 12
 
 _HOME_DEFAULT_BUTTON_KEYS = [
     ("menu_shop", "shop:page:1"),
@@ -99,6 +101,11 @@ _HOME_DEFAULT_BUTTON_KEYS = [
     ("menu_support", "home:support"),
     ("menu_wallet", "home:wallet"),
     ("menu_language", "home:soon:idioma"),
+]
+
+_COMMUNITY_DEFAULT_BUTTON_KEYS = [
+    ("btn_back", "nav:back"),
+    ("btn_home", "home:show"),
 ]
 
 
@@ -462,6 +469,14 @@ def _default_home_buttons(locale: str) -> list[Dict[str, str]]:
     ]
 
 
+def _default_community_buttons(locale: str) -> list[Dict[str, str]]:
+    normalized = _normalize_locale_code(locale)
+    return [
+        {"label": t(normalized, label_key), "action": action}
+        for label_key, action in _COMMUNITY_DEFAULT_BUTTON_KEYS
+    ]
+
+
 def _pair_home_buttons(buttons: list[Dict[str, str]]) -> list[list[Dict[str, str]]]:
     rows: list[list[Dict[str, str]]] = []
     for button in buttons:
@@ -474,6 +489,10 @@ def _pair_home_buttons(buttons: list[Dict[str, str]]) -> list[list[Dict[str, str
 
 def _default_home_button_rows(locale: str) -> list[list[Dict[str, str]]]:
     return _pair_home_buttons(_default_home_buttons(locale))
+
+
+def _default_community_button_rows(locale: str) -> list[list[Dict[str, str]]]:
+    return _pair_home_buttons(_default_community_buttons(locale))
 
 
 def _normalize_home_button(raw: Any) -> Optional[Dict[str, str]]:
@@ -543,6 +562,26 @@ def _trim_home_button_rows(rows: list[list[Dict[str, str]]]) -> list[list[Dict[s
     return trimmed
 
 
+def _trim_button_rows(
+    rows: list[list[Dict[str, str]]],
+    limit: int,
+) -> list[list[Dict[str, str]]]:
+    trimmed: list[list[Dict[str, str]]] = []
+    count = 0
+    for row in rows:
+        if count >= limit:
+            break
+        clean_row: list[Dict[str, str]] = []
+        for button in row[:2]:
+            if count >= limit:
+                break
+            clean_row.append(button)
+            count += 1
+        if clean_row:
+            trimmed.append(clean_row)
+    return trimmed
+
+
 def _default_home_layout() -> Dict[str, Any]:
     return {
         "es": {
@@ -552,6 +591,19 @@ def _default_home_layout() -> Dict[str, Any]:
         "en": {
             "text": t("en", "home_welcome"),
             "buttons": _default_home_button_rows("en"),
+        },
+    }
+
+
+def _default_community_layout() -> Dict[str, Any]:
+    return {
+        "es": {
+            "text": t("es", "community_text"),
+            "buttons": _default_community_button_rows("es"),
+        },
+        "en": {
+            "text": t("en", "community_text"),
+            "buttons": _default_community_button_rows("en"),
         },
     }
 
@@ -610,6 +662,45 @@ def _normalize_home_buttons(raw_buttons: Any, locale: str) -> list[list[Dict[str
 
     normalized_rows = _trim_home_button_rows(_pair_home_buttons(flat_mode))
     return _ensure_wallet_home_button(normalized_rows or fallback, locale)
+
+
+def _normalize_section_buttons(
+    raw_buttons: Any,
+    locale: str,
+    fallback_rows: list[list[Dict[str, str]]],
+    limit: int,
+) -> list[list[Dict[str, str]]]:
+    if not isinstance(raw_buttons, list):
+        return _trim_button_rows(fallback_rows, limit)
+
+    row_mode: list[list[Dict[str, str]]] = []
+    flat_mode: list[Dict[str, str]] = []
+    for raw in raw_buttons:
+        if isinstance(raw, list):
+            row: list[Dict[str, str]] = []
+            for nested in raw:
+                parsed = _normalize_home_button(nested)
+                if parsed:
+                    row.append(parsed)
+                if len(row) == 2:
+                    break
+            if row:
+                row_mode.append(row)
+            continue
+        parsed = _normalize_home_button(raw)
+        if parsed:
+            flat_mode.append(parsed)
+
+    if row_mode:
+        for button in flat_mode:
+            if row_mode and len(row_mode[-1]) < 2:
+                row_mode[-1].append(button)
+            else:
+                row_mode.append([button])
+        return _trim_button_rows(row_mode or fallback_rows, limit)
+
+    normalized_rows = _trim_button_rows(_pair_home_buttons(flat_mode), limit)
+    return normalized_rows or _trim_button_rows(fallback_rows, limit)
 
 
 def _flatten_home_buttons(rows: list[list[Dict[str, str]]]) -> list[Dict[str, str]]:
@@ -741,6 +832,28 @@ def _normalize_home_layout(layout: Any) -> Dict[str, Any]:
     return normalized
 
 
+def _normalize_community_layout(layout: Any) -> Dict[str, Any]:
+    defaults = _default_community_layout()
+    normalized: Dict[str, Any] = {}
+    source = layout if isinstance(layout, dict) else {}
+    for locale_code in _HOME_LAYOUT_LOCALES:
+        fallback = defaults[locale_code]
+        locale_payload = source.get(locale_code)
+        if not isinstance(locale_payload, dict):
+            locale_payload = {}
+        text_value = str(locale_payload.get("text") or "").strip()
+        normalized[locale_code] = {
+            "text": text_value or fallback["text"],
+            "buttons": _normalize_section_buttons(
+                locale_payload.get("buttons"),
+                locale_code,
+                fallback["buttons"],
+                _COMMUNITY_BUTTON_LIMIT,
+            ),
+        }
+    return normalized
+
+
 def _home_locale_title(locale_target: str, locale_admin: str | None) -> str:
     return _tr(
         locale_admin,
@@ -783,6 +896,15 @@ def _home_button_style_title(style: str | None, locale: str | None = "es") -> st
     return labels.get(normalized, _tr(locale, "Normal", "Normal"))
 
 
+def _extract_button_label_and_custom_emoji(raw_label: str) -> tuple[str, str]:
+    raw = str(raw_label or "").strip()
+    match = re.search(r'<tg-emoji\b[^>]*emoji-id=["\']?(\d+)["\']?[^>]*>', raw, flags=re.IGNORECASE)
+    icon_custom_emoji_id = match.group(1) if match else ""
+    label = re.sub(r"<tg-emoji\b[^>]*>(.*?)</tg-emoji>", r"\1", raw, flags=re.IGNORECASE | re.DOTALL)
+    label = re.sub(r"</?tg-emoji\b[^>]*>", "", label, flags=re.IGNORECASE)
+    return label.strip()[:64], icon_custom_emoji_id
+
+
 async def _load_home_layout() -> Dict[str, Any]:
     try:
         response = await api_client.admin_get_layout(_HOME_LAYOUT_KEY)
@@ -795,6 +917,51 @@ async def _save_home_layout(layout: Dict[str, Any]) -> Dict[str, Any]:
     response = await api_client.admin_set_layout(_HOME_LAYOUT_KEY, layout)
     clear_home_layout_cache(_HOME_LAYOUT_KEY)
     return _normalize_home_layout(response.get("layout") if isinstance(response, dict) else None)
+
+
+async def _load_community_layout() -> Dict[str, Any]:
+    try:
+        response = await api_client.admin_get_layout(_COMMUNITY_LAYOUT_KEY)
+    except Exception:
+        return _default_community_layout()
+    return _normalize_community_layout(response.get("layout") if isinstance(response, dict) else None)
+
+
+async def _save_community_layout(layout: Dict[str, Any]) -> Dict[str, Any]:
+    response = await api_client.admin_set_layout(_COMMUNITY_LAYOUT_KEY, layout)
+    clear_home_layout_cache(_COMMUNITY_LAYOUT_KEY)
+    return _normalize_community_layout(response.get("layout") if isinstance(response, dict) else None)
+
+
+async def _load_community_image_value() -> str:
+    try:
+        response = await api_client.admin_get_bot_assets()
+    except Exception:
+        return ""
+    assets = response.get("assets") if isinstance(response, dict) else {}
+    if not isinstance(assets, dict):
+        return ""
+    return str(
+        assets.get("community_image_file_id")
+        or assets.get("community_image_url")
+        or ""
+    ).strip()
+
+
+async def _save_community_image_value(value: str) -> None:
+    normalized = str(value or "").strip()
+    payload: Dict[str, Any]
+    if normalized.startswith("http://") or normalized.startswith("https://"):
+        payload = {
+            "community_image_url": normalized,
+            "community_image_file_id": "",
+        }
+    else:
+        payload = {
+            "community_image_url": "",
+            "community_image_file_id": normalized,
+        }
+    await api_client.admin_set_bot_assets(payload)
 
 
 def _build_home_locale_keyboard(mode: str, locale: str | None = "es") -> InlineKeyboardMarkup:
@@ -998,21 +1165,19 @@ def _build_home_button_style_keyboard(
         inline_keyboard=[
             [
                 InlineKeyboardButton(
-                    text=_tr(locale, "Normal", "Normal"),
+                    text="⚪",
                     callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:none",
                 ),
                 InlineKeyboardButton(
-                    text=_tr(locale, "Azul", "Blue"),
+                    text="🔵",
                     callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:primary",
                 ),
-            ],
-            [
                 InlineKeyboardButton(
-                    text=_tr(locale, "Verde", "Green"),
+                    text="🟢",
                     callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:success",
                 ),
                 InlineKeyboardButton(
-                    text=_tr(locale, "Rojo", "Red"),
+                    text="🔴",
                     callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:danger",
                 ),
             ],
@@ -1084,6 +1249,265 @@ def _build_home_buttons_panel_text(
         f"{_format_home_buttons_list(buttons)}\n\n"
         "Tap the number of the button you want to edit.\n"
         "Then you can change text, target or color separately.",
+    )
+
+
+def _build_community_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Editar", "✏️ Edit"),
+                    callback_data="adminui:community:edit",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Panel", "⬅️ Panel"), callback_data="adminui:home")],
+        ]
+    )
+
+
+def _build_community_edit_keyboard(locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📝 Mensaje", "📝 Message"),
+                    callback_data="adminui:community:text",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🖼 Imagen", "🖼 Image"),
+                    callback_data="adminui:community:image",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎛 Botones", "🎛 Buttons"),
+                    callback_data="adminui:community:buttons",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Comunidad", "⬅️ Community"), callback_data="adminui:community")],
+        ]
+    )
+
+
+def _build_community_locale_keyboard(mode: str, locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🇪🇸 Español", "🇪🇸 Spanish"),
+                    callback_data=f"adminui:community:{mode}:es",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🇺🇸 Inglés", "🇺🇸 English"),
+                    callback_data=f"adminui:community:{mode}:en",
+                ),
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Editar", "⬅️ Edit"), callback_data="adminui:community:edit")],
+        ]
+    )
+
+
+def _build_community_panel_text(
+    layout: Dict[str, Any],
+    image_value: str,
+    locale_admin: str | None = "es",
+) -> str:
+    es_text = str((layout.get("es") or {}).get("text") or "").strip()
+    en_text = str((layout.get("en") or {}).get("text") or "").strip()
+    image_label = _escape_html(image_value or _tr(locale_admin, "Sin imagen", "No image"))
+    return _tr(
+        locale_admin,
+        "👥 <b>Comunidad</b>\n\n"
+        f"Imagen actual: <code>{image_label}</code>\n\n"
+        "Texto actual ES:\n"
+        f"{es_text or 'Sin texto'}\n\n"
+        "Texto actual EN:\n"
+        f"{en_text or 'Sin texto'}\n\n"
+        "Pulsa <b>Editar</b> para cambiar mensaje, imagen o botones.",
+        "👥 <b>Community</b>\n\n"
+        f"Current image: <code>{image_label}</code>\n\n"
+        "Current text ES:\n"
+        f"{es_text or 'No text'}\n\n"
+        "Current text EN:\n"
+        f"{en_text or 'No text'}\n\n"
+        "Tap <b>Edit</b> to change message, image or buttons.",
+    )
+
+
+def _build_community_buttons_select_keyboard(
+    layout: Dict[str, Any],
+    locale_target: str,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    rows = _clone_home_button_rows((layout.get(locale_target) or {}).get("buttons"))
+    total = len(_flatten_home_buttons(rows))
+    keyboard: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    for index in range(1, total + 1):
+        current_row.append(
+            InlineKeyboardButton(
+                text=str(index),
+                callback_data=f"adminui:community:btnpick:{locale_target}:{index}",
+            )
+        )
+        if len(current_row) == 6:
+            keyboard.append(current_row)
+            current_row = []
+    if current_row:
+        keyboard.append(current_row)
+    keyboard.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Agregar", "➕ Add"),
+                    callback_data=f"adminui:community:btnadd:{locale_target}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "♻️ Restaurar", "♻️ Reset"),
+                    callback_data=f"adminui:community:btnreset:{locale_target}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔁 Cambiar idioma", "🔁 Change language"),
+                    callback_data="adminui:community:buttons",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Editar", "⬅️ Edit"), callback_data="adminui:community:edit")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def _build_community_button_detail_keyboard(
+    locale_target: str,
+    index: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Texto", "✏️ Text"),
+                    callback_data=f"adminui:community:btnedit:{locale_target}:{index}:label",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔗 Destino", "🔗 Target"),
+                    callback_data=f"adminui:community:btnedit:{locale_target}:{index}:target",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎨 Color", "🎨 Color"),
+                    callback_data=f"adminui:community:btnstyle:{locale_target}:{index}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🗑 Eliminar", "🗑 Delete"),
+                    callback_data=f"adminui:community:btndelete:{locale_target}:{index}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Botones", "⬅️ Buttons"),
+                    callback_data=f"adminui:community:btnloc:{locale_target}",
+                )
+            ],
+        ]
+    )
+
+
+def _build_community_button_style_keyboard(
+    locale_target: str,
+    index: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text="⚪",
+                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:none",
+                ),
+                InlineKeyboardButton(
+                    text="🔵",
+                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:primary",
+                ),
+                InlineKeyboardButton(
+                    text="🟢",
+                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:success",
+                ),
+                InlineKeyboardButton(
+                    text="🔴",
+                    callback_data=f"adminui:community:btnsetstyle:{locale_target}:{index}:danger",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Volver", "⬅️ Back"),
+                    callback_data=f"adminui:community:btnpick:{locale_target}:{index}",
+                )
+            ],
+        ]
+    )
+
+
+def _build_community_buttons_panel_text(
+    layout: Dict[str, Any],
+    locale_target: str,
+    locale_admin: str | None = "es",
+) -> str:
+    locale_data = layout.get(locale_target) or {}
+    buttons = locale_data.get("buttons") if isinstance(locale_data, dict) else []
+    if not isinstance(buttons, list):
+        buttons = []
+    total_buttons = len(_flatten_home_buttons(_clone_home_button_rows(buttons)))
+    title = _home_locale_title(locale_target, locale_admin)
+    return _tr(
+        locale_admin,
+        f"👥 <b>Botones Comunidad ({title})</b>\n\n"
+        f"Total: <b>{total_buttons}</b> / {_COMMUNITY_BUTTON_LIMIT}\n\n"
+        "Botones actuales:\n"
+        f"{_format_home_buttons_list(buttons)}\n\n"
+        "Pulsa el número del botón que quieres editar.",
+        f"👥 <b>Community Buttons ({title})</b>\n\n"
+        f"Total: <b>{total_buttons}</b> / {_COMMUNITY_BUTTON_LIMIT}\n\n"
+        "Current buttons:\n"
+        f"{_format_home_buttons_list(buttons)}\n\n"
+        "Tap the number of the button you want to edit.",
+    )
+
+
+def _build_community_button_detail_text(
+    layout: Dict[str, Any],
+    locale_target: str,
+    index: int,
+    locale_admin: str | None = "es",
+) -> str:
+    rows = _clone_home_button_rows((layout.get(locale_target) or {}).get("buttons"))
+    slot = _find_home_button_slot(rows, index)
+    title = _home_locale_title(locale_target, locale_admin)
+    if not slot:
+        return _tr(locale_admin, "⚠️ Botón no encontrado.", "⚠️ Button not found.")
+    row_index, col_index = slot
+    button = rows[row_index][col_index]
+    label = _escape_html(button.get("label") or "-")
+    target = _escape_html(_home_button_target(button) or "-")
+    style = _home_button_style_title(button.get("style"), locale_admin)
+    return _tr(
+        locale_admin,
+        f"🎛 <b>Editar botón Comunidad ({title})</b>\n\n"
+        f"Botón <b>{index}</b> en fila {row_index + 1}, posición {col_index + 1}.\n\n"
+        f"Texto: <b>{label}</b>\n"
+        f"Destino: <code>{target}</code>\n"
+        f"Color: <b>{style}</b>\n\n"
+        "Elige qué quieres cambiar.",
+        f"🎛 <b>Edit Community button ({title})</b>\n\n"
+        f"Button <b>{index}</b> in row {row_index + 1}, position {col_index + 1}.\n\n"
+        f"Text: <b>{label}</b>\n"
+        f"Target: <code>{target}</code>\n"
+        f"Color: <b>{style}</b>\n\n"
+        "Choose what to change.",
     )
 
 
@@ -1177,6 +1601,12 @@ def _build_admin_panel_keyboard(locale: str | None = "es") -> InlineKeyboardMark
                 InlineKeyboardButton(
                     text=_tr(locale, "🎛 Home botones", "🎛 Home buttons"),
                     callback_data="adminui:homecfg:buttons",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "👥 Comunidad", "👥 Community"),
+                    callback_data="adminui:community",
                 ),
             ],
             [
@@ -7511,6 +7941,352 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 )
             return
 
+        if action == "community":
+            mode = parts[2] if len(parts) > 2 else ""
+            if not mode:
+                layout = await _load_community_layout()
+                image_value = await _load_community_image_value()
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _build_community_panel_text(layout, image_value, locale),
+                    reply_markup=_build_community_panel_keyboard(locale),
+                )
+                return
+
+            if mode == "edit":
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "👥 <b>Editar Comunidad</b>\n\nElige qué parte quieres cambiar.",
+                        "👥 <b>Edit Community</b>\n\nChoose what you want to change.",
+                    ),
+                    reply_markup=_build_community_edit_keyboard(locale),
+                )
+                return
+
+            if mode == "text":
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "📝 <b>Mensaje Comunidad</b>\n\nSelecciona el idioma a editar:",
+                        "📝 <b>Community message</b>\n\nSelect the language to edit:",
+                    ),
+                    reply_markup=_build_community_locale_keyboard("textloc", locale),
+                )
+                return
+
+            if mode == "textloc":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_community_locale_keyboard("textloc", locale),
+                    )
+                    return
+                layout = await _load_community_layout()
+                current_text = str((layout.get(locale_target) or {}).get("text") or "").strip()
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="community_text_value",
+                    admin_ui_community_locale=locale_target,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        f"📝 <b>Mensaje Comunidad ({_home_locale_title(locale_target, locale)})</b>\n\n"
+                        "Texto actual:\n\n"
+                        f"{current_text or 'Sin texto'}\n\n"
+                        "Envía el nuevo mensaje completo. Se guardará con HTML y custom emojis.",
+                        f"📝 <b>Community message ({_home_locale_title(locale_target, locale)})</b>\n\n"
+                        "Current text:\n\n"
+                        f"{current_text or 'No text'}\n\n"
+                        "Send the full new message. It will keep HTML and custom emojis.",
+                    ),
+                    reply_markup=_build_community_edit_keyboard(locale),
+                )
+                return
+
+            if mode == "image":
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(admin_ui_action="community_image_value", **panel_anchor)
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🖼 <b>Imagen Comunidad</b>\n\n"
+                        "Envía una imagen, un file_id o una URL directa.\n"
+                        "Para quitarla, envía <code>sin imagen</code>.",
+                        "🖼 <b>Community image</b>\n\n"
+                        "Send an image, a file_id or a direct URL.\n"
+                        "To remove it, send <code>no image</code>.",
+                    ),
+                    reply_markup=_build_community_edit_keyboard(locale),
+                )
+                return
+
+            if mode == "buttons":
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🎛 <b>Botones Comunidad</b>\n\nSelecciona el idioma a editar:",
+                        "🎛 <b>Community buttons</b>\n\nSelect the language to edit:",
+                    ),
+                    reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                )
+                return
+
+            if mode == "btnloc":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_community_layout()
+                await state.clear()
+                await state.update_data(
+                    admin_ui_community_locale=locale_target,
+                    admin_ui_community_layout=layout,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _build_community_buttons_panel_text(layout, locale_target, locale),
+                    reply_markup=_build_community_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                return
+
+            if mode == "btnpick":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Botón inválido.</b>", "❌ <b>Invalid button.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_community_layout()
+                rows = _clone_home_button_rows((layout.get(locale_target) or {}).get("buttons"))
+                if not _find_home_button_slot(rows, index):
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                        reply_markup=_build_community_buttons_select_keyboard(layout, locale_target, locale),
+                    )
+                    return
+                await state.clear()
+                await state.update_data(
+                    admin_ui_community_locale=locale_target,
+                    admin_ui_community_layout=layout,
+                    admin_ui_community_button_index=index,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _build_community_button_detail_text(layout, locale_target, index, locale),
+                    reply_markup=_build_community_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btnadd":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action="community_btn_add_value",
+                    admin_ui_community_locale=locale_target,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "➕ <b>Agregar botón Comunidad</b>\n\n"
+                        "Envía: <code>texto | destino</code>\n\n"
+                        "Destino puede ser una URL o callback como <code>home:show</code>.\n"
+                        "El texto conserva custom emojis.",
+                        "➕ <b>Add Community button</b>\n\n"
+                        "Send: <code>text | target</code>\n\n"
+                        "Target can be a URL or callback like <code>home:show</code>.\n"
+                        "Text keeps custom emojis.",
+                    ),
+                    reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                )
+                return
+
+            if mode == "btnedit":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                field = str(parts[5] if len(parts) > 5 else "").lower()
+                action_map = {
+                    "label": "community_btn_label_value",
+                    "target": "community_btn_target_value",
+                }
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None or field not in action_map:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Edición inválida.</b>", "❌ <b>Invalid edit.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action=action_map[field],
+                    admin_ui_community_locale=locale_target,
+                    admin_ui_community_button_index=index,
+                    **panel_anchor,
+                )
+                prompt = (
+                    _tr(
+                        locale,
+                        "✏️ <b>Texto del botón</b>\n\nEnvía solo el nuevo texto. Conserva custom emojis.",
+                        "✏️ <b>Button text</b>\n\nSend only the new text. Custom emojis are kept.",
+                    )
+                    if field == "label"
+                    else _tr(
+                        locale,
+                        "🔗 <b>Destino del botón</b>\n\nEnvía una URL o callback como <code>home:show</code>.",
+                        "🔗 <b>Button target</b>\n\nSend a URL or callback like <code>home:show</code>.",
+                    )
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    prompt,
+                    reply_markup=_build_community_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btnstyle":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Botón inválido.</b>", "❌ <b>Invalid button.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🎨 <b>Color del botón</b>\n\n⚪ normal · 🔵 primario · 🟢 verde · 🔴 rojo",
+                        "🎨 <b>Button color</b>\n\n⚪ normal · 🔵 primary · 🟢 green · 🔴 red",
+                    ),
+                    reply_markup=_build_community_button_style_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btnsetstyle":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                style = str(parts[5] if len(parts) > 5 else "").lower()
+                if style == "none":
+                    style = ""
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None or style not in {"", "primary", "success", "danger"}:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Color inválido.</b>", "❌ <b>Invalid color.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_community_layout()
+                rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+                slot = _find_home_button_slot(rows, index)
+                if not slot:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                        reply_markup=_build_community_buttons_select_keyboard(layout, locale_target, locale),
+                    )
+                    return
+                row_index, col_index = slot
+                if style:
+                    rows[row_index][col_index]["style"] = style
+                else:
+                    rows[row_index][col_index].pop("style", None)
+                layout[locale_target]["buttons"] = _trim_button_rows(rows, _COMMUNITY_BUTTON_LIMIT)
+                saved = await _save_community_layout(layout)
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(locale, "✅ <b>Color actualizado.</b>\n\n", "✅ <b>Color updated.</b>\n\n")
+                    + _build_community_button_detail_text(saved, locale_target, index, locale),
+                    reply_markup=_build_community_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btndelete":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Botón inválido.</b>", "❌ <b>Invalid button.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_community_layout()
+                rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+                remaining_rows, removed = _remove_home_button_by_index(rows, index)
+                if not removed:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                        reply_markup=_build_community_buttons_select_keyboard(layout, locale_target, locale),
+                    )
+                    return
+                layout[locale_target]["buttons"] = remaining_rows or _default_community_button_rows(locale_target)
+                saved = await _save_community_layout(layout)
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(locale, "✅ <b>Botón eliminado.</b>\n\n", "✅ <b>Button removed.</b>\n\n")
+                    + _build_community_buttons_panel_text(saved, locale_target, locale),
+                    reply_markup=_build_community_buttons_select_keyboard(saved, locale_target, locale),
+                )
+                return
+
+            if mode == "btnreset":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_community_layout()
+                layout[locale_target]["buttons"] = _default_community_button_rows(locale_target)
+                saved = await _save_community_layout(layout)
+                await state.clear()
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(locale, "♻️ <b>Botones restaurados.</b>\n\n", "♻️ <b>Buttons restored.</b>\n\n")
+                    + _build_community_buttons_panel_text(saved, locale_target, locale),
+                    reply_markup=_build_community_buttons_select_keyboard(saved, locale_target, locale),
+                )
+                return
+
         if action == "homecfg":
             mode = parts[2] if len(parts) > 2 else ""
             if mode == "text":
@@ -8260,6 +9036,192 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
             )
             return
 
+        if action == "community_text_value":
+            locale_target = str(data.get("admin_ui_community_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Idioma inválido.", "⚠️ Invalid language."),
+                    reply_markup=_build_community_locale_keyboard("textloc", locale),
+                )
+                await state.clear()
+                return
+            layout = await _load_community_layout()
+            layout[locale_target]["text"] = raw_text
+            saved = await _save_community_layout(layout)
+            image_value = await _load_community_image_value()
+            await state.clear()
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Mensaje Comunidad actualizado.</b>\n\n", "✅ <b>Community message updated.</b>\n\n")
+                + _build_community_panel_text(saved, image_value, locale),
+                reply_markup=_build_community_panel_keyboard(locale),
+            )
+            return
+
+        if action == "community_image_value":
+            media_file_id = photo_file_id or document_file_id
+            value = (media_file_id or plain_text or raw_text).strip()
+            if plain_text.lower() in {"sin", "sin imagen", "no", "no image", "none", "quitar", "remove"}:
+                await api_client.admin_set_bot_assets(
+                    {
+                        "community_image_url": "",
+                        "community_image_file_id": "",
+                    }
+                )
+            elif value:
+                await _save_community_image_value(value)
+            else:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Envía una imagen, file_id o URL.", "⚠️ Send an image, file_id or URL."),
+                    reply_markup=_build_community_edit_keyboard(locale),
+                )
+                return
+            layout = await _load_community_layout()
+            image_value = await _load_community_image_value()
+            await state.clear()
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Imagen Comunidad actualizada.</b>\n\n", "✅ <b>Community image updated.</b>\n\n")
+                + _build_community_panel_text(layout, image_value, locale),
+                reply_markup=_build_community_panel_keyboard(locale),
+            )
+            return
+
+        if action == "community_btn_add_value":
+            locale_target = str(data.get("admin_ui_community_locale") or "").lower()
+            if locale_target not in _HOME_LAYOUT_LOCALES:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta idioma objetivo.", "⚠️ Target language missing."),
+                    reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            parts = [part.strip() for part in raw_text.split("|", maxsplit=1)]
+            if len(parts) != 2:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Usa: <code>texto | destino</code>", "⚠️ Use: <code>text | target</code>"),
+                    reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                )
+                return
+            label, icon_custom_emoji_id = _extract_button_label_and_custom_emoji(parts[0])
+            target = parts[1].strip()
+            if not label or not target:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Texto y destino son obligatorios.", "⚠️ Text and target are required."),
+                    reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                )
+                return
+            layout = await _load_community_layout()
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            if len(_flatten_home_buttons(rows)) >= _COMMUNITY_BUTTON_LIMIT:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        f"⚠️ Límite alcanzado ({_COMMUNITY_BUTTON_LIMIT} botones).",
+                        f"⚠️ Limit reached ({_COMMUNITY_BUTTON_LIMIT} buttons).",
+                    ),
+                    reply_markup=_build_community_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                return
+            if target.startswith("url:http://") or target.startswith("url:https://"):
+                new_button = {"label": label, "url": target[4:]}
+            elif target.startswith("http://") or target.startswith("https://"):
+                new_button = {"label": label, "url": target}
+            else:
+                new_button = {"label": label, "action": target[:64]}
+            if icon_custom_emoji_id:
+                new_button["icon_custom_emoji_id"] = icon_custom_emoji_id
+            rows = _trim_button_rows(_insert_home_button(rows, new_button)[0], _COMMUNITY_BUTTON_LIMIT)
+            layout[locale_target]["buttons"] = rows
+            saved = await _save_community_layout(layout)
+            await state.clear()
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón agregado.</b>\n\n", "✅ <b>Button added.</b>\n\n")
+                + _build_community_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_community_buttons_select_keyboard(saved, locale_target, locale),
+            )
+            return
+
+        if action in {"community_btn_label_value", "community_btn_target_value"}:
+            locale_target = str(data.get("admin_ui_community_locale") or "").lower()
+            index = _parse_positive_int_or_none(str(data.get("admin_ui_community_button_index") or ""))
+            if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta el botón objetivo.", "⚠️ Target button missing."),
+                    reply_markup=_build_community_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            value = raw_text.strip()
+            if not value:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ El valor no puede ir vacío.", "⚠️ Value cannot be empty."),
+                    reply_markup=_build_community_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+            layout = await _load_community_layout()
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            slot = _find_home_button_slot(rows, index)
+            if not slot:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_community_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                await state.clear()
+                return
+            row_index, col_index = slot
+            button = rows[row_index][col_index]
+            if action == "community_btn_label_value":
+                label, icon_custom_emoji_id = _extract_button_label_and_custom_emoji(value)
+                button["label"] = label
+                if icon_custom_emoji_id:
+                    button["icon_custom_emoji_id"] = icon_custom_emoji_id
+                else:
+                    button.pop("icon_custom_emoji_id", None)
+                success_text = _tr(locale, "✅ <b>Texto actualizado.</b>\n\n", "✅ <b>Text updated.</b>\n\n")
+            else:
+                button.pop("url", None)
+                button.pop("action", None)
+                if value.startswith("url:http://") or value.startswith("url:https://"):
+                    button["url"] = value[4:]
+                elif value.startswith("http://") or value.startswith("https://"):
+                    button["url"] = value
+                else:
+                    button["action"] = value[:64]
+                success_text = _tr(locale, "✅ <b>Destino actualizado.</b>\n\n", "✅ <b>Target updated.</b>\n\n")
+            layout[locale_target]["buttons"] = _trim_button_rows(rows, _COMMUNITY_BUTTON_LIMIT)
+            saved = await _save_community_layout(layout)
+            await state.clear()
+            await _edit_state_panel_message(
+                message,
+                state,
+                success_text + _build_community_button_detail_text(saved, locale_target, index, locale),
+                reply_markup=_build_community_button_detail_keyboard(locale_target, index, locale),
+            )
+            return
+
         if action == "homecfg_text_value":
             locale_target = str(data.get("admin_ui_home_locale") or "").lower()
             if locale_target not in _HOME_LAYOUT_LOCALES:
@@ -8310,7 +9272,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 )
                 await state.clear()
                 return
-            new_label = raw_text.strip()[:64]
+            new_label, icon_custom_emoji_id = _extract_button_label_and_custom_emoji(raw_text)
             if not new_label:
                 await _edit_state_panel_message(
                     message,
@@ -8333,6 +9295,10 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 return
             row_index, col_index = slot
             rows[row_index][col_index]["label"] = new_label
+            if icon_custom_emoji_id:
+                rows[row_index][col_index]["icon_custom_emoji_id"] = icon_custom_emoji_id
+            else:
+                rows[row_index][col_index].pop("icon_custom_emoji_id", None)
             layout[locale_target]["buttons"] = _trim_home_button_rows(rows)
             saved = await _save_home_layout(layout)
             await state.clear()
@@ -8546,7 +9512,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     reply_markup=_build_admin_panel_keyboard(locale),
                 )
                 return
-            new_label = parts[1].strip()[:64]
+            new_label, icon_custom_emoji_id = _extract_button_label_and_custom_emoji(parts[1])
             if not new_label:
                 await _edit_state_panel_message(
                     message,
@@ -8568,6 +9534,10 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 return
             row_index, col_index = slot
             rows[row_index][col_index]["label"] = new_label
+            if icon_custom_emoji_id:
+                rows[row_index][col_index]["icon_custom_emoji_id"] = icon_custom_emoji_id
+            else:
+                rows[row_index][col_index].pop("icon_custom_emoji_id", None)
             layout[locale_target]["buttons"] = _trim_home_button_rows(rows)
             saved = await _save_home_layout(layout)
             await state.clear()
@@ -8615,7 +9585,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     reply_markup=_build_admin_panel_keyboard(locale),
                 )
                 return
-            label = parts[0][:64]
+            label, icon_custom_emoji_id = _extract_button_label_and_custom_emoji(parts[0])
             target = parts[1].strip()
             if not label or not target:
                 await _edit_state_panel_message(
@@ -8698,6 +9668,8 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 new_button = {"label": label, "url": target}
             else:
                 new_button = {"label": label, "action": target[:64]}
+            if icon_custom_emoji_id:
+                new_button["icon_custom_emoji_id"] = icon_custom_emoji_id
             inserted_rows, insert_error = _insert_home_button(
                 rows,
                 new_button,

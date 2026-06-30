@@ -1151,6 +1151,38 @@ class ApiClient:
 
         return await _request_with_retry(_do)
 
+    async def admin_get_bot_assets(self) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/bot-assets"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.get(
+                    url,
+                    headers=self._headers(),
+                    timeout=15,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        return await _request_with_retry(_do)
+
+    async def admin_set_bot_assets(self, payload: Dict[str, Any]) -> Dict[str, Any]:
+        url = f"{self.base_url}/admin/bot-assets"
+
+        async def _do() -> Dict[str, Any]:
+            async with httpx.AsyncClient() as client:
+                response = await client.post(
+                    url,
+                    json=payload,
+                    headers=self._headers(),
+                    timeout=20,
+                )
+                response.raise_for_status()
+                return response.json()
+
+        self._cache_pop(self._cache_key("bot_assets"))
+        return await _request_with_retry(_do)
+
     async def get_ban_status(self, telegram_id: int) -> Dict[str, Any]:
         cache_key = self._cache_key("ban", telegram_id)
         cached = self._cache_get(cache_key)
