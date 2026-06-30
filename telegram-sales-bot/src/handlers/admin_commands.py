@@ -482,14 +482,21 @@ def _normalize_home_button(raw: Any) -> Optional[Dict[str, str]]:
     label = str(raw.get("label") or raw.get("text") or "").strip()
     action = str(raw.get("action") or raw.get("callback_data") or "").strip()
     url = str(raw.get("url") or "").strip()
+    style = str(raw.get("style") or "").strip().lower()
+    icon_custom_emoji_id = str(raw.get("icon_custom_emoji_id") or "").strip()
     if not label:
         return None
+    extra: Dict[str, str] = {}
+    if style in {"primary", "success", "danger"}:
+        extra["style"] = style
+    if icon_custom_emoji_id.isdigit():
+        extra["icon_custom_emoji_id"] = icon_custom_emoji_id
     label = label[:64]
     if url:
-        return {"label": label, "url": url}
+        return {"label": label, "url": url, **extra}
     if not action:
         return None
-    return {"label": label, "action": action[:64]}
+    return {"label": label, "action": action[:64], **extra}
 
 
 def _clone_home_button_rows(rows: Any) -> list[list[Dict[str, str]]]:
@@ -751,10 +758,29 @@ def _format_home_buttons_list(buttons: list[Dict[str, str]]) -> str:
             index += 1
             label = _escape_html(button.get("label") or "-")
             action = _escape_html(button.get("action") or f"url:{button.get('url') or ''}")
+            style = str(button.get("style") or "").strip().lower()
+            style_label = f" · {_escape_html(style)}" if style else ""
             lines.append(
-                f"{index}. [F{row_number}-P{col_number}] {label} → <code>{action}</code>"
+                f"{index}. [F{row_number}-P{col_number}] {label} → <code>{action}</code>{style_label}"
             )
     return "\n".join(lines) if lines else "-"
+
+
+def _home_button_target(button: Dict[str, str]) -> str:
+    url = str(button.get("url") or "").strip()
+    if url:
+        return f"url:{url}"
+    return str(button.get("action") or "").strip()
+
+
+def _home_button_style_title(style: str | None, locale: str | None = "es") -> str:
+    normalized = str(style or "").strip().lower()
+    labels = {
+        "primary": _tr(locale, "Azul / primario", "Blue / primary"),
+        "success": _tr(locale, "Verde / éxito", "Green / success"),
+        "danger": _tr(locale, "Rojo / peligro", "Red / danger"),
+    }
+    return labels.get(normalized, _tr(locale, "Normal", "Normal"))
 
 
 async def _load_home_layout() -> Dict[str, Any]:
@@ -786,6 +812,46 @@ def _build_home_locale_keyboard(mode: str, locale: str | None = "es") -> InlineK
             ],
             [InlineKeyboardButton(text=_tr(locale, "⬅️ Panel", "⬅️ Panel"), callback_data="adminui:home")],
         ]
+    )
+
+
+def _build_home_text_view_keyboard(locale_target: str, locale: str | None = "es") -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Editar", "✏️ Edit"),
+                    callback_data=f"adminui:homecfg:textedit:{locale_target}",
+                )
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔁 Cambiar idioma", "🔁 Change language"),
+                    callback_data="adminui:homecfg:text",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Panel", "⬅️ Panel"), callback_data="adminui:home")],
+        ]
+    )
+
+
+def _build_home_text_view_text(
+    layout: Dict[str, Any],
+    locale_target: str,
+    locale_admin: str | None = "es",
+) -> str:
+    current_text = str((layout.get(locale_target) or {}).get("text") or "").strip()
+    title = _home_locale_title(locale_target, locale_admin)
+    return _tr(
+        locale_admin,
+        f"📝 <b>Home texto ({title})</b>\n\n"
+        "Texto actual:\n\n"
+        f"{current_text or 'Sin texto'}\n\n"
+        "Pulsa <b>Editar</b> para reemplazar este mismo texto.",
+        f"📝 <b>Home text ({title})</b>\n\n"
+        "Current text:\n\n"
+        f"{current_text or 'No text'}\n\n"
+        "Tap <b>Edit</b> to replace this same text.",
     )
 
 
@@ -831,6 +897,168 @@ def _build_home_buttons_ops_keyboard(locale_target: str, locale: str | None = "e
     )
 
 
+def _build_home_buttons_select_keyboard(
+    layout: Dict[str, Any],
+    locale_target: str,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    rows = _clone_home_button_rows((layout.get(locale_target) or {}).get("buttons"))
+    total = len(_flatten_home_buttons(rows))
+    keyboard: list[list[InlineKeyboardButton]] = []
+    current_row: list[InlineKeyboardButton] = []
+    for index in range(1, total + 1):
+        current_row.append(
+            InlineKeyboardButton(
+                text=str(index),
+                callback_data=f"adminui:homecfg:btnpick:{locale_target}:{index}",
+            )
+        )
+        if len(current_row) == 6:
+            keyboard.append(current_row)
+            current_row = []
+    if current_row:
+        keyboard.append(current_row)
+    keyboard.extend(
+        [
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "➕ Agregar", "➕ Add"),
+                    callback_data="adminui:homecfg:btnop:add",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "♻️ Restaurar", "♻️ Reset"),
+                    callback_data=f"adminui:homecfg:btnreset:{locale_target}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔁 Cambiar idioma", "🔁 Change language"),
+                    callback_data="adminui:homecfg:buttons",
+                )
+            ],
+            [InlineKeyboardButton(text=_tr(locale, "⬅️ Panel", "⬅️ Panel"), callback_data="adminui:home")],
+        ]
+    )
+    return InlineKeyboardMarkup(inline_keyboard=keyboard)
+
+
+def _build_home_button_detail_keyboard(
+    locale_target: str,
+    index: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "✏️ Texto", "✏️ Text"),
+                    callback_data=f"adminui:homecfg:btnedit:{locale_target}:{index}:label",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🔗 Destino", "🔗 Target"),
+                    callback_data=f"adminui:homecfg:btnedit:{locale_target}:{index}:target",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "🎨 Color", "🎨 Color"),
+                    callback_data=f"adminui:homecfg:btnstyle:{locale_target}:{index}",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🗑 Eliminar", "🗑 Delete"),
+                    callback_data=f"adminui:homecfg:btndelete:{locale_target}:{index}",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "📍 Mover", "📍 Move"),
+                    callback_data=f"adminui:homecfg:btnedit:{locale_target}:{index}:move",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "🧱 Fila sola", "🧱 Solo row"),
+                    callback_data=f"adminui:homecfg:btnedit:{locale_target}:{index}:solo",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Botones", "⬅️ Buttons"),
+                    callback_data=f"adminui:homecfg:btnloc:{locale_target}",
+                )
+            ],
+        ]
+    )
+
+
+def _build_home_button_style_keyboard(
+    locale_target: str,
+    index: int,
+    locale: str | None = "es",
+) -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup(
+        inline_keyboard=[
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "Normal", "Normal"),
+                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:none",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "Azul", "Blue"),
+                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:primary",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "Verde", "Green"),
+                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:success",
+                ),
+                InlineKeyboardButton(
+                    text=_tr(locale, "Rojo", "Red"),
+                    callback_data=f"adminui:homecfg:btnsetstyle:{locale_target}:{index}:danger",
+                ),
+            ],
+            [
+                InlineKeyboardButton(
+                    text=_tr(locale, "⬅️ Volver", "⬅️ Back"),
+                    callback_data=f"adminui:homecfg:btnpick:{locale_target}:{index}",
+                )
+            ],
+        ]
+    )
+
+
+def _build_home_button_detail_text(
+    layout: Dict[str, Any],
+    locale_target: str,
+    index: int,
+    locale_admin: str | None = "es",
+) -> str:
+    rows = _clone_home_button_rows((layout.get(locale_target) or {}).get("buttons"))
+    slot = _find_home_button_slot(rows, index)
+    title = _home_locale_title(locale_target, locale_admin)
+    if not slot:
+        return _tr(locale_admin, "⚠️ Botón no encontrado.", "⚠️ Button not found.")
+    row_index, col_index = slot
+    button = rows[row_index][col_index]
+    label = _escape_html(button.get("label") or "-")
+    target = _escape_html(_home_button_target(button) or "-")
+    style = _home_button_style_title(button.get("style"), locale_admin)
+    return _tr(
+        locale_admin,
+        f"🎛 <b>Editar botón Home ({title})</b>\n\n"
+        f"Botón <b>{index}</b> en fila {row_index + 1}, posición {col_index + 1}.\n\n"
+        f"Texto: <b>{label}</b>\n"
+        f"Destino: <code>{target}</code>\n"
+        f"Color: <b>{style}</b>\n\n"
+        "Elige qué quieres cambiar. Cada cambio se hace por separado.",
+        f"🎛 <b>Edit Home button ({title})</b>\n\n"
+        f"Button <b>{index}</b> in row {row_index + 1}, position {col_index + 1}.\n\n"
+        f"Text: <b>{label}</b>\n"
+        f"Target: <code>{target}</code>\n"
+        f"Color: <b>{style}</b>\n\n"
+        "Choose what to change. Each change is done separately.",
+    )
+
+
 def _build_home_buttons_panel_text(
     layout: Dict[str, Any],
     locale_target: str,
@@ -848,24 +1076,14 @@ def _build_home_buttons_panel_text(
         f"Total: <b>{total_buttons}</b> / {_HOME_BUTTON_LIMIT}\n\n"
         "Botones actuales:\n"
         f"{_format_home_buttons_list(buttons)}\n\n"
-        "Opciones rápidas:\n"
-        "• Renombrar: <code>numero | nuevo texto</code>\n"
-        "• Agregar: <code>texto | callback_data</code>\n"
-        "• Agregar con posición: <code>texto | callback_data | fila | posicion(1-2) | modo(correr|estricto)</code>\n"
-        "• Mover: <code>numero | fila | posicion(1-2) | modo(correr|estricto)</code>\n"
-        "• Fila sola: <code>numero | fila</code>\n"
-        "• Eliminar: <code>numero</code>",
+        "Pulsa el número del botón que quieres editar.\n"
+        "Luego podrás cambiar texto, destino o color por separado.",
         f"🏠 <b>Home Buttons ({title})</b>\n\n"
         f"Total: <b>{total_buttons}</b> / {_HOME_BUTTON_LIMIT}\n\n"
         "Current buttons:\n"
         f"{_format_home_buttons_list(buttons)}\n\n"
-        "Quick formats:\n"
-        "• Rename: <code>number | new label</code>\n"
-        "• Add: <code>label | callback_data</code>\n"
-        "• Add with position: <code>label | callback_data | row | position(1-2) | mode(shift|strict)</code>\n"
-        "• Move: <code>number | row | position(1-2) | mode(shift|strict)</code>\n"
-        "• Solo row: <code>number | row</code>\n"
-        "• Delete: <code>number</code>",
+        "Tap the number of the button you want to edit.\n"
+        "Then you can change text, target or color separately.",
     )
 
 
@@ -7317,6 +7535,29 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         reply_markup=_build_home_locale_keyboard("textloc", locale),
                     )
                     return
+                layout = await _load_home_layout()
+                await state.clear()
+                await state.update_data(
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_layout=layout,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _build_home_text_view_text(layout, locale_target, locale),
+                    reply_markup=_build_home_text_view_keyboard(locale_target, locale),
+                )
+                return
+
+            if mode == "textedit":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                if locale_target not in _HOME_LAYOUT_LOCALES:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Idioma inválido.</b>", "❌ <b>Invalid language.</b>"),
+                        reply_markup=_build_home_locale_keyboard("textloc", locale),
+                    )
+                    return
                 await state.set_state(AdminUiStates.awaiting_value)
                 await state.update_data(
                     admin_ui_action="homecfg_text_value",
@@ -7328,13 +7569,13 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     _tr(
                         locale,
                         f"📝 <b>Texto Home ({_home_locale_title(locale_target, locale)})</b>\n\n"
-                        "Envía el nuevo texto completo del home.\n"
-                        "Puedes usar formato HTML básico.",
+                        "Envía el nuevo texto completo del Home.\n"
+                        "Se guardará tal como lo envíes, incluyendo custom emojis y HTML válido.",
                         f"📝 <b>Home text ({_home_locale_title(locale_target, locale)})</b>\n\n"
-                        "Send the new full home text.\n"
-                        "You can use basic HTML format.",
+                        "Send the full new Home text.\n"
+                        "It will be saved as sent, including custom emojis and valid HTML.",
                     ),
-                    reply_markup=_build_back_to_panel_keyboard(locale),
+                    reply_markup=_build_home_text_view_keyboard(locale_target, locale),
                 )
                 return
 
@@ -7370,7 +7611,219 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                 await _edit_panel_message(
                     callback.message,
                     _build_home_buttons_panel_text(layout, locale_target, locale),
-                    reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                    reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                return
+
+            if mode == "btnpick":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Botón inválido.</b>", "❌ <b>Invalid button.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_home_layout()
+                rows = _clone_home_button_rows((layout.get(locale_target) or {}).get("buttons"))
+                if not _find_home_button_slot(rows, index):
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                        reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                    )
+                    return
+                await state.clear()
+                await state.update_data(
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_layout=layout,
+                    admin_ui_home_button_index=index,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _build_home_button_detail_text(layout, locale_target, index, locale),
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btnedit":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                field = str(parts[5] if len(parts) > 5 else "").lower()
+                action_map = {
+                    "label": "homecfg_btn_label_value",
+                    "target": "homecfg_btn_target_value",
+                    "move": "homecfg_btn_move_value",
+                    "solo": "homecfg_btn_solo_value",
+                }
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None or field not in action_map:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Edición inválida.</b>", "❌ <b>Invalid edit.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                await state.set_state(AdminUiStates.awaiting_value)
+                await state.update_data(
+                    admin_ui_action=action_map[field],
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_button_index=index,
+                    **panel_anchor,
+                )
+                if field == "label":
+                    prompt = _tr(
+                        locale,
+                        "✏️ <b>Texto del botón</b>\n\n"
+                        "Envía solo el nuevo texto del botón.\n"
+                        "Se guardará tal como lo envíes, incluyendo custom emojis.",
+                        "✏️ <b>Button text</b>\n\n"
+                        "Send only the new button text.\n"
+                        "It will be saved as sent, including custom emojis.",
+                    )
+                elif field == "target":
+                    prompt = _tr(
+                        locale,
+                        "🔗 <b>Destino del botón</b>\n\n"
+                        "Envía el destino completo.\n"
+                        "Ejemplos:\n"
+                        "• <code>home:cart</code>\n"
+                        "• <code>category:page:metodos</code>\n"
+                        "• <code>https://tusitio.com</code>",
+                        "🔗 <b>Button target</b>\n\n"
+                        "Send the full target.\n"
+                        "Examples:\n"
+                        "• <code>home:cart</code>\n"
+                        "• <code>category:page:metodos</code>\n"
+                        "• <code>https://yoursite.com</code>",
+                    )
+                elif field == "move":
+                    prompt = _tr(
+                        locale,
+                        "📍 <b>Mover botón</b>\n\n"
+                        "Envía la nueva posición así:\n"
+                        "<code>fila | posicion</code>\n\n"
+                        "La posición solo puede ser <code>1</code> o <code>2</code>.",
+                        "📍 <b>Move button</b>\n\n"
+                        "Send the new position like this:\n"
+                        "<code>row | position</code>\n\n"
+                        "Position can only be <code>1</code> or <code>2</code>.",
+                    )
+                else:
+                    prompt = _tr(
+                        locale,
+                        "🧱 <b>Fila sola</b>\n\n"
+                        "Envía el número de fila donde quieres colocar este botón solo.",
+                        "🧱 <b>Solo row</b>\n\n"
+                        "Send the row number where this button should be placed alone.",
+                    )
+                await _edit_panel_message(
+                    callback.message,
+                    prompt,
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btnstyle":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Botón inválido.</b>", "❌ <b>Invalid button.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(
+                        locale,
+                        "🎨 <b>Color del botón</b>\n\nElige el estilo visual para este botón.",
+                        "🎨 <b>Button color</b>\n\nChoose the visual style for this button.",
+                    ),
+                    reply_markup=_build_home_button_style_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btnsetstyle":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                style = str(parts[5] if len(parts) > 5 else "").lower()
+                if style == "none":
+                    style = ""
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None or style not in {"", "primary", "success", "danger"}:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Color inválido.</b>", "❌ <b>Invalid color.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_home_layout()
+                rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+                slot = _find_home_button_slot(rows, index)
+                if not slot:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                        reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                    )
+                    return
+                row_index, col_index = slot
+                if style:
+                    rows[row_index][col_index]["style"] = style
+                else:
+                    rows[row_index][col_index].pop("style", None)
+                layout[locale_target]["buttons"] = _trim_home_button_rows(rows)
+                saved = await _save_home_layout(layout)
+                await state.clear()
+                await state.update_data(
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_layout=saved,
+                    admin_ui_home_button_index=index,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(locale, "✅ <b>Color actualizado.</b>\n\n", "✅ <b>Color updated.</b>\n\n")
+                    + _build_home_button_detail_text(saved, locale_target, index, locale),
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+
+            if mode == "btndelete":
+                locale_target = str(parts[3] if len(parts) > 3 else "").lower()
+                index = _parse_positive_int_or_none(parts[4] if len(parts) > 4 else "")
+                if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "❌ <b>Botón inválido.</b>", "❌ <b>Invalid button.</b>"),
+                        reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                    )
+                    return
+                layout = await _load_home_layout()
+                rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+                remaining_rows, removed = _remove_home_button_by_index(rows, index)
+                if not removed:
+                    await _edit_panel_message(
+                        callback.message,
+                        _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                        reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                    )
+                    return
+                layout[locale_target]["buttons"] = remaining_rows or _default_home_button_rows(locale_target)
+                saved = await _save_home_layout(layout)
+                await state.clear()
+                await state.update_data(
+                    admin_ui_home_locale=locale_target,
+                    admin_ui_home_layout=saved,
+                    **panel_anchor,
+                )
+                await _edit_panel_message(
+                    callback.message,
+                    _tr(locale, "✅ <b>Botón eliminado.</b>\n\n", "✅ <b>Button removed.</b>\n\n")
+                    + _build_home_buttons_panel_text(saved, locale_target, locale),
+                    reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
                 )
                 return
 
@@ -7390,10 +7843,11 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                     )
                     return
                 if operation not in {"rename", "add", "delete", "move", "solo"}:
+                    layout = await _load_home_layout()
                     await _edit_panel_message(
                         callback.message,
                         _tr(locale, "❌ <b>Operación inválida.</b>", "❌ <b>Invalid operation.</b>"),
-                        reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                        reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
                     )
                     return
                 action_map = {
@@ -7477,7 +7931,7 @@ async def cb_admin_panel_help(callback: CallbackQuery, state: FSMContext) -> Non
                         "♻️ <b>Botones restaurados.</b>\n\n",
                         "♻️ <b>Buttons restored.</b>\n\n",
                     ) + _build_home_buttons_panel_text(saved, locale_target, locale),
-                    reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                    reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
                 )
                 return
 
@@ -7840,7 +8294,222 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                     "✅ <b>Home text updated.</b>\n\n"
                     f"Language: <b>{_home_locale_title(locale_target, locale)}</b>",
                 ),
-                reply_markup=_build_home_locale_keyboard("textloc", locale),
+                reply_markup=_build_home_text_view_keyboard(locale_target, locale),
+            )
+            return
+
+        if action == "homecfg_btn_label_value":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            index = _parse_positive_int_or_none(str(data.get("admin_ui_home_button_index") or ""))
+            if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta el botón objetivo.", "⚠️ Target button missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            new_label = raw_text.strip()[:64]
+            if not new_label:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ El texto no puede ir vacío.", "⚠️ Text cannot be empty."),
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+            layout = await _load_home_layout()
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            slot = _find_home_button_slot(rows, index)
+            if not slot:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                await state.clear()
+                return
+            row_index, col_index = slot
+            rows[row_index][col_index]["label"] = new_label
+            layout[locale_target]["buttons"] = _trim_home_button_rows(rows)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                admin_ui_home_button_index=index,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Texto del botón actualizado.</b>\n\n", "✅ <b>Button text updated.</b>\n\n")
+                + _build_home_button_detail_text(saved, locale_target, index, locale),
+                reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+            )
+            return
+
+        if action == "homecfg_btn_target_value":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            index = _parse_positive_int_or_none(str(data.get("admin_ui_home_button_index") or ""))
+            if locale_target not in _HOME_LAYOUT_LOCALES or index is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Falta el botón objetivo.", "⚠️ Target button missing."),
+                    reply_markup=_build_home_locale_keyboard("btnloc", locale),
+                )
+                await state.clear()
+                return
+            target = raw_text.strip()
+            if not target:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ El destino no puede ir vacío.", "⚠️ Target cannot be empty."),
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+                )
+                return
+            layout = await _load_home_layout()
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            slot = _find_home_button_slot(rows, index)
+            if not slot:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                await state.clear()
+                return
+            row_index, col_index = slot
+            button = rows[row_index][col_index]
+            button.pop("url", None)
+            button.pop("action", None)
+            if target.startswith("url:http://") or target.startswith("url:https://"):
+                button["url"] = target[4:]
+            elif target.startswith("http://") or target.startswith("https://"):
+                button["url"] = target
+            else:
+                button["action"] = target[:64]
+            layout[locale_target]["buttons"] = _trim_home_button_rows(rows)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                admin_ui_home_button_index=index,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Destino actualizado.</b>\n\n", "✅ <b>Target updated.</b>\n\n")
+                + _build_home_button_detail_text(saved, locale_target, index, locale),
+                reply_markup=_build_home_button_detail_keyboard(locale_target, index, locale),
+            )
+            return
+
+        if action == "homecfg_btn_move_value":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            index = _parse_positive_int_or_none(str(data.get("admin_ui_home_button_index") or ""))
+            parts = [part.strip() for part in raw_text.split("|")]
+            row_number = _parse_positive_int_or_none(parts[0] if len(parts) >= 1 else "")
+            position = _parse_positive_int_or_none(parts[1] if len(parts) >= 2 else "")
+            if locale_target not in _HOME_LAYOUT_LOCALES or index is None or len(parts) != 2 or row_number is None or position not in {1, 2}:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(
+                        locale,
+                        "⚠️ Formato inválido. Usa: <code>fila | posicion</code>",
+                        "⚠️ Invalid format. Use: <code>row | position</code>",
+                    ),
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index or 1, locale),
+                )
+                return
+            layout = await _load_home_layout()
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            remaining_rows, button = _remove_home_button_by_index(rows, index)
+            if not button:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                await state.clear()
+                return
+            moved_rows, _ = _insert_home_button(
+                remaining_rows,
+                button,
+                row_number=row_number,
+                position=position,
+                overflow_mode="shift",
+            )
+            layout[locale_target]["buttons"] = moved_rows or _default_home_button_rows(locale_target)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón movido.</b>\n\n", "✅ <b>Button moved.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
+            )
+            return
+
+        if action == "homecfg_btn_solo_value":
+            locale_target = str(data.get("admin_ui_home_locale") or "").lower()
+            index = _parse_positive_int_or_none(str(data.get("admin_ui_home_button_index") or ""))
+            row_number = _parse_positive_int_or_none(raw_text)
+            if locale_target not in _HOME_LAYOUT_LOCALES or index is None or row_number is None:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Envía un número de fila válido.", "⚠️ Send a valid row number."),
+                    reply_markup=_build_home_button_detail_keyboard(locale_target, index or 1, locale),
+                )
+                return
+            layout = await _load_home_layout()
+            rows = _clone_home_button_rows(layout[locale_target]["buttons"])
+            remaining_rows, button = _remove_home_button_by_index(rows, index)
+            if not button:
+                await _edit_state_panel_message(
+                    message,
+                    state,
+                    _tr(locale, "⚠️ Botón no encontrado.", "⚠️ Button not found."),
+                    reply_markup=_build_home_buttons_select_keyboard(layout, locale_target, locale),
+                )
+                await state.clear()
+                return
+            solo_rows, _ = _insert_home_button(
+                remaining_rows,
+                button,
+                row_number=row_number,
+                force_solo_row=True,
+            )
+            layout[locale_target]["buttons"] = solo_rows or _default_home_button_rows(locale_target)
+            saved = await _save_home_layout(layout)
+            await state.clear()
+            await state.update_data(
+                admin_ui_home_locale=locale_target,
+                admin_ui_home_layout=saved,
+                **panel_resume,
+            )
+            await _edit_state_panel_message(
+                message,
+                state,
+                _tr(locale, "✅ <b>Botón colocado en fila sola.</b>\n\n", "✅ <b>Button placed in solo row.</b>\n\n")
+                + _build_home_buttons_panel_text(saved, locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
             )
             return
 
@@ -7912,7 +8581,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(locale, "✅ <b>Botón renombrado.</b>\n\n", "✅ <b>Button renamed.</b>\n\n")
                 + _build_home_buttons_panel_text(saved, locale_target, locale),
-                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
             )
             return
 
@@ -8061,7 +8730,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(locale, "✅ <b>Botón agregado.</b>\n\n", "✅ <b>Button added.</b>\n\n")
                 + _build_home_buttons_panel_text(saved, locale_target, locale),
-                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
             )
             return
 
@@ -8169,7 +8838,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(locale, "✅ <b>Botón movido.</b>\n\n", "✅ <b>Button moved.</b>\n\n")
                 + _build_home_buttons_panel_text(saved, locale_target, locale),
-                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
             )
             return
 
@@ -8246,7 +8915,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(locale, "✅ <b>Botón movido a fila sola.</b>\n\n", "✅ <b>Button moved to solo row.</b>\n\n")
                 + _build_home_buttons_panel_text(saved, locale_target, locale),
-                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
             )
             return
 
@@ -8303,7 +8972,7 @@ async def handle_admin_ui_value(message: Message, state: FSMContext) -> None:
                 state,
                 _tr(locale, "✅ <b>Botón eliminado.</b>\n\n", "✅ <b>Button removed.</b>\n\n")
                 + _build_home_buttons_panel_text(saved, locale_target, locale),
-                reply_markup=_build_home_buttons_ops_keyboard(locale_target, locale),
+                reply_markup=_build_home_buttons_select_keyboard(saved, locale_target, locale),
             )
             return
 
